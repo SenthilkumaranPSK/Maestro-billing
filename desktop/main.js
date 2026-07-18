@@ -13,6 +13,10 @@ const http = require('http');
 const PORT = 3179;
 const APP_URL = `http://127.0.0.1:${PORT}`;
 
+// Data lives under %APPDATA%/Maestro Billing — set before any getPath call,
+// otherwise Electron derives the folder from the package name.
+app.setName('Maestro Billing');
+
 // Packaged: resources/app/{backend,frontend,node_modules,template}
 // Dev (electron . from codes/desktop): the codes/ folder itself.
 const APP_ROOT = app.isPackaged
