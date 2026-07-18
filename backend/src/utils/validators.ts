@@ -62,6 +62,16 @@ export const settingSchema = z.object({
 
 export const bulkSettingsSchema = z.array(settingSchema).min(1).max(200);
 
+export const loginSchema = z.object({
+  username: z.string().min(1, 'Username is required').max(100),
+  password: z.string().min(1, 'Password is required').max(200),
+});
+
+export const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1, 'Current password is required').max(200),
+  newPassword: z.string().min(8, 'New password must be at least 8 characters').max(200),
+});
+
 // ── Request-param helpers ─────────────────────────────────────────────────────
 // Route/query params arrive as raw strings; a bare parseInt() lets NaN or
 // negative values reach Prisma, which then throws an opaque 500. These helpers

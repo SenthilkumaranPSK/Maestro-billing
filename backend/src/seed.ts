@@ -1,13 +1,25 @@
 import 'dotenv/config';
 import { PrismaClient } from '@prisma/client';
+import bcrypt from 'bcryptjs';
 
 const prisma = new PrismaClient();
 
 async function main() {
   console.log('Seeding database...');
 
-  // (User model is retained for the Bill.createdBy FK, but no login is required
-  //  in single-user local mode — leave the users table empty.)
+  // Default operator login — created only when the users table is empty, so
+  // re-seeding never resets a changed password. CHANGE THIS PASSWORD from
+  // Settings after first login on any machine that is reachable from outside.
+  if ((await prisma.user.count()) === 0) {
+    await prisma.user.create({
+      data: {
+        username: 'maestro',
+        passwordHash: await bcrypt.hash('maestro@2026', 10),
+        role: 'admin',
+      },
+    });
+    console.log('✓ Default user created (maestro / maestro@2026 — change it!)');
+  }
 
   // Default settings
   const defaults: Array<{ key: string; value: string; group: string }> = [

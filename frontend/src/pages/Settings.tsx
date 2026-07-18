@@ -1,10 +1,14 @@
-import { HardDrive, Smartphone, RotateCcw, FileBarChart2, Percent, ChevronRight } from 'lucide-react';
+import { useState } from 'react';
+import { HardDrive, Smartphone, RotateCcw, FileBarChart2, Percent, ChevronRight, KeyRound } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { whatsappApi } from '@/api/whatsapp';
 import { backupsApi } from '@/api/backups';
+import { authApi } from '@/api/auth';
 import { useToast } from '@/hooks/use-toast';
 import { formatDateTime } from '@/lib/utils';
 
@@ -12,6 +16,29 @@ export default function SettingsPage() {
   const { toast } = useToast();
   const qc = useQueryClient();
   const navigate = useNavigate();
+
+  const [pw, setPw] = useState({ current: '', next: '', confirm: '' });
+  const changePasswordMutation = useMutation({
+    mutationFn: () => authApi.changePassword(pw.current, pw.next),
+    onSuccess: () => {
+      setPw({ current: '', next: '', confirm: '' });
+      toast({ title: 'Password changed', variant: 'success' });
+    },
+    onError: (err: Error) => {
+      toast({ title: 'Could not change password', description: err.message, variant: 'destructive' });
+    },
+  });
+  const handleChangePassword = () => {
+    if (pw.next.length < 8) {
+      toast({ title: 'Too short', description: 'New password must be at least 8 characters.', variant: 'destructive' });
+      return;
+    }
+    if (pw.next !== pw.confirm) {
+      toast({ title: "Passwords don't match", description: 'Retype the new password in both boxes.', variant: 'destructive' });
+      return;
+    }
+    changePasswordMutation.mutate();
+  };
 
   const { data: whatsappStatus } = useQuery({
     queryKey: ['whatsapp', 'status'],
@@ -171,6 +198,42 @@ export default function SettingsPage() {
               ))}
             </div>
           )}
+        </CardContent>
+      </Card>
+
+      {/* Account security */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <KeyRound className="h-4 w-4 text-brand-700" />
+            Change Password
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="space-y-1.5">
+            <Label className="text-sm">Current password</Label>
+            <Input type="password" autoComplete="current-password" value={pw.current}
+              onChange={(e) => setPw({ ...pw, current: e.target.value })} />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label className="text-sm">New password</Label>
+              <Input type="password" autoComplete="new-password" value={pw.next}
+                onChange={(e) => setPw({ ...pw, next: e.target.value })} />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-sm">Retype new password</Label>
+              <Input type="password" autoComplete="new-password" value={pw.confirm}
+                onChange={(e) => setPw({ ...pw, confirm: e.target.value })} />
+            </div>
+          </div>
+          <Button
+            variant="outline"
+            onClick={handleChangePassword}
+            disabled={changePasswordMutation.isPending || !pw.current || !pw.next}
+          >
+            {changePasswordMutation.isPending ? 'Changing…' : 'Change Password'}
+          </Button>
         </CardContent>
       </Card>
 

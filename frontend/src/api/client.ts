@@ -8,12 +8,30 @@ export const api = axios.create({
   timeout: 60_000,
 });
 
+// Attach the login token to every request. Read lazily (not at module load)
+// so a login in another tab is picked up without a reload.
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem('maestro_token');
+  if (token) config.headers.Authorization = `Bearer ${token}`;
+  return config;
+});
+
 // Surface the backend's error message ("Invalid status", "Only DRAFT bills can
 // be edited", …) instead of axios's generic "Request failed with status code 400",
 // so every toast in the app shows something the operator can act on.
 api.interceptors.response.use(
   (response) => response,
   (error: AxiosError<{ error?: string; details?: Array<{ field?: string; message?: string }> }>) => {
+    // Expired or missing token → back to the login screen (except when the
+    // failed call IS the login attempt — that error belongs on the form).
+    if (
+      error.response?.status === 401 &&
+      !error.config?.url?.includes('/auth/login') &&
+      window.location.pathname !== '/login'
+    ) {
+      localStorage.removeItem('maestro_token');
+      window.location.href = '/login';
+    }
     const serverMessage = error.response?.data?.error;
     const details = error.response?.data?.details;
     if (serverMessage) {
