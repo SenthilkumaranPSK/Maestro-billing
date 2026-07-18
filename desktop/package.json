@@ -8,7 +8,8 @@
   "scripts": {
     "start": "electron .",
     "icon": "node scripts/make-icon.js",
-    "dist": "electron-builder --win"
+    "stage": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/stage.ps1",
+    "dist": "npm run stage && electron-builder --win"
   },
   "devDependencies": {
     "electron": "^33.2.0",
@@ -27,10 +28,10 @@
     ],
     "extraResources": [
       { "from": "../backend/dist", "to": "app/backend/dist" },
-      { "from": "../backend/node_modules", "to": "app/backend/node_modules" },
+      { "from": "staging/backend_node_modules", "to": "app/backend/node_modules" },
       { "from": "../backend/package.json", "to": "app/backend/package.json" },
       { "from": "../backend/prisma", "to": "app/backend/prisma" },
-      { "from": "../node_modules", "to": "app/node_modules" },
+      { "from": "staging/root_node_modules", "to": "app/node_modules" },
       { "from": "../frontend/dist", "to": "app/frontend/dist" },
       { "from": "template", "to": "app/template" }
     ],

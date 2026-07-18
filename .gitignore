@@ -34,3 +34,4 @@ package-lock.json
 desktop/release/
 desktop/build/
 desktop/template/
+desktop/staging/
