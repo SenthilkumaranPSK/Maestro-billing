@@ -1,0 +1,19 @@
+# Environment & secrets
+.env
+
+# Build output
+dist/
+
+# Dependencies
+node_modules/
+
+# Backups (managed separately, never commit DB snapshots)
+backups/
+
+# Logs
+logs/
+*.log
+
+# WhatsApp session data
+.wwebjs_auth/
+.wwebjs_cache/

@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Build output
+dist/
+**/dist/
+
+# Environment & secrets
+.env
+**/.env
+
+# Database files (never commit live data)
+database/*.db
+database/*.db-shm
+database/*.db-wal
+
+# Backups
+**/backups/
+
+# Logs
+logs/
+**/logs/
+*.log
+
+# WhatsApp session
+**/.wwebjs_auth/
+**/.wwebjs_cache/
+
+# npm workspace stub lock file (replaced by workspace install)
+package-lock.json

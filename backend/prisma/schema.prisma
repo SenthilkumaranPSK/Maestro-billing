@@ -1,0 +1,151 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Users ────────────────────────────────────────────────────────────────────
+model User {
+  id           Int       @id @default(autoincrement())
+  username     String    @unique
+  passwordHash String    @map("password_hash")
+  role         String    @default("staff") // admin | staff
+  isActive     Boolean   @default(true) @map("is_active")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  bills        Bill[]
+  logs         Log[]
+
+  @@map("users")
+}
+
+// ─── Customers ────────────────────────────────────────────────────────────────
+model Customer {
+  id        Int       @id @default(autoincrement())
+  name      String
+  phone     String
+  email     String?
+  address   String?
+  gstin     String?
+  notes     String?
+  isActive  Boolean   @default(true) @map("is_active")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  bills     Bill[]
+
+  @@map("customers")
+}
+
+// ─── Products ─────────────────────────────────────────────────────────────────
+model Product {
+  id          Int       @id @default(autoincrement())
+  name        String
+  description String?
+  unit        String    @default("piece") // photo, album, set, piece, frame
+  unitPrice   Int       @map("unit_price")  // in paise (integer cents)
+  gstRate     Float     @default(0) @map("gst_rate") // e.g. 18.00 for 18%
+  isActive    Boolean   @default(true) @map("is_active")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  billItems   BillItem[]
+
+  @@map("products")
+}
+
+// ─── Bills ────────────────────────────────────────────────────────────────────
+model Bill {
+  id             Int       @id @default(autoincrement())
+  billNumber     String    @unique @map("bill_number")  // e.g. PS-2024-0001
+  customerId     Int?      @map("customer_id")
+  billDate       DateTime  @map("bill_date")
+  dueDate        DateTime? @map("due_date")
+  subTotal       Int       @map("sub_total")     // in paise
+  gstAmount      Int       @default(0) @map("gst_amount")  // in paise
+  discountAmount Int       @default(0) @map("discount_amount") // in paise
+  grandTotal     Int       @map("grand_total")   // in paise
+  status         String    @default("PAID")      // DRAFT | PAID | PARTIAL | CANCELLED
+  paymentMode    String?   @map("payment_mode")  // CASH | UPI | CARD | CHEQUE
+  notes          String?
+  createdBy      Int?      @map("created_by")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+  deletedAt      DateTime? @map("deleted_at")
+
+  customer       Customer? @relation(fields: [customerId], references: [id])
+  createdByUser  User?     @relation(fields: [createdBy], references: [id])
+  items          BillItem[]
+  payments       Payment[]
+
+  @@map("bills")
+}
+
+// ─── Bill Items ───────────────────────────────────────────────────────────────
+model BillItem {
+  id          Int      @id @default(autoincrement())
+  billId      Int      @map("bill_id")
+  productId   Int?     @map("product_id")
+  productName String   @map("product_name") // denormalized
+  unit        String   @default("piece")
+  qty         Float
+  unitPrice   Int      @map("unit_price")   // in paise at time of billing
+  gstRate     Float    @default(0) @map("gst_rate")
+  gstAmount   Int      @default(0) @map("gst_amount")  // in paise
+  totalAmount Int      @map("total_amount") // in paise (qty * unitPrice + gstAmount)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  bill        Bill     @relation(fields: [billId], references: [id], onDelete: Cascade)
+  product     Product? @relation(fields: [productId], references: [id])
+
+  @@map("bill_items")
+}
+
+// ─── Payments ─────────────────────────────────────────────────────────────────
+model Payment {
+  id             Int      @id @default(autoincrement())
+  billId         Int      @map("bill_id")
+  amount         Int                       // in paise
+  paymentMode    String   @map("payment_mode") // CASH | UPI | CARD | CHEQUE
+  transactionRef String?  @map("transaction_ref")
+  paidAt         DateTime @default(now()) @map("paid_at")
+  notes          String?
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  bill           Bill     @relation(fields: [billId], references: [id], onDelete: Cascade)
+
+  @@map("payments")
+}
+
+// ─── Settings ─────────────────────────────────────────────────────────────────
+model Setting {
+  id        Int      @id @default(autoincrement())
+  key       String   @unique
+  value     String
+  group     String   @default("general") // studio | invoice | printer | tax
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("settings")
+}
+
+// ─── Logs ─────────────────────────────────────────────────────────────────────
+model Log {
+  id         Int      @id @default(autoincrement())
+  userId     Int?     @map("user_id")
+  action     String                        // CREATE | UPDATE | DELETE | LOGIN
+  entityType String   @map("entity_type") // bill | customer | product
+  entityId   Int?     @map("entity_id")
+  oldValue   String?  @map("old_value")   // JSON string
+  newValue   String?  @map("new_value")   // JSON string
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  user       User?    @relation(fields: [userId], references: [id])
+
+  @@map("logs")
+}

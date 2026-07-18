@@ -1,0 +1,176 @@
+import 'dotenv/config';
+import Fastify, { FastifyRequest, FastifyReply } from 'fastify';
+import cors from '@fastify/cors';
+import helmet from '@fastify/helmet';
+import { PrismaClient } from '@prisma/client';
+
+import { customerRoutes } from './routes/customers';
+import { productRoutes } from './routes/products';
+import { billRoutes } from './routes/bills';
+import { settingsRoutes } from './routes/settings';
+import { whatsappRoutes } from './routes/whatsapp';
+import { backupRoutes } from './routes/backups';
+import { printerRoutes } from './routes/printer';
+import { errorHandler } from './middleware/errorHandler';
+import { WhatsAppService } from './services/WhatsAppService';
+import { BackupService } from './services/BackupService';
+
+// ── Boot guard ────────────────────────────────────────────────────────────────
+// Refuse to start in production with the default placeholder secret.
+if (process.env.NODE_ENV === 'production') {
+  const secret = process.env.JWT_SECRET;
+  if (!secret || secret === '__GENERATE_ON_FIRST_RUN__') {
+    console.error(
+      'ERROR: JWT_SECRET must be set before running in production.\n' +
+        "Generate a secret with: node -e \"console.log(require('crypto').randomBytes(48).toString('hex'))\"",
+    );
+    process.exit(1);
+  }
+}
+
+const prisma = new PrismaClient();
+const whatsapp = new WhatsAppService();
+
+// Safety nets: a stray rejection or exception in a background task (WhatsApp
+// reconnects, auto-backup timer) must never take the billing app down mid-day.
+// Log loudly and keep serving — availability wins for a single-user local app.
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection]', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', err);
+});
+
+async function main() {
+  const isDev = process.env.NODE_ENV !== 'production';
+
+  const app = Fastify({
+    bodyLimit: 10_485_760, // 10 MB
+    logger: {
+      level: process.env.LOG_LEVEL ?? (isDev ? 'debug' : 'info'),
+      ...(isDev
+        ? { transport: { target: 'pino-pretty', options: { colorize: true } } }
+        : {}),
+    },
+  });
+
+  // Decorators
+  app.decorate('prisma', prisma);
+  app.decorate('whatsapp', whatsapp);
+  // Stub — this app is single-user local; replace with real JWT verification
+  // if multi-user support is ever added.
+  app.decorate('authenticate', async (_req: FastifyRequest, _reply: FastifyReply) => {});
+
+  // ── Plugins ──────────────────────────────────────────────────────────────
+  // CORS — support a comma-separated list of origins from the env var so the
+  // app can be moved to a different port or LAN device without a code change.
+  const rawOrigin = process.env.CORS_ORIGIN ?? 'http://localhost:5173';
+  const corsOrigins = rawOrigin.split(',').map((o) => o.trim()).filter(Boolean);
+  // Never fall back to '*' — with credentials:true that would let any web page
+  // the operator visits call this API. An empty/blank env var gets the default.
+  if (corsOrigins.length === 0) corsOrigins.push('http://localhost:5173');
+
+  await app.register(cors, {
+    origin: corsOrigins,
+    credentials: true,
+  });
+  await app.register(helmet, { contentSecurityPolicy: false });
+
+  app.setErrorHandler(errorHandler);
+
+  // ── Routes ───────────────────────────────────────────────────────────────
+  await app.register(customerRoutes, { prefix: '/api/v1/customers' });
+  await app.register(productRoutes,  { prefix: '/api/v1/products'  });
+  await app.register(billRoutes,     { prefix: '/api/v1/bills'     });
+  await app.register(settingsRoutes, { prefix: '/api/v1/settings'  });
+  await app.register(whatsappRoutes, { prefix: '/api/v1/whatsapp'  });
+  await app.register(backupRoutes,   { prefix: '/api/v1/backups'   });
+  await app.register(printerRoutes,  { prefix: '/api/v1/printer'   });
+
+  // ── Health ───────────────────────────────────────────────────────────────
+  // /live  — liveness probe: the process is up (never touches the DB)
+  app.get('/live', async () => ({ status: 'ok' }));
+
+  // /health — readiness probe: pings the database; returns 503 if unreachable
+  app.get('/health', async (_req, reply) => {
+    try {
+      await prisma.$queryRawUnsafe('SELECT 1');
+      return reply.send({ status: 'ok', db: 'ok' });
+    } catch {
+      return reply.status(503).send({ status: 'error', db: 'unreachable' });
+    }
+  });
+
+  // ── SQLite hardening ─────────────────────────────────────────────────────
+  // WAL survives crashes/power cuts far better than the default rollback
+  // journal (and it's persistent — set once, stored in the DB file).
+  // busy_timeout makes SQLite wait instead of throwing "database is locked"
+  // when a backup or second connection briefly holds the file.
+  try {
+    await prisma.$queryRawUnsafe('PRAGMA journal_mode=WAL');
+    await prisma.$queryRawUnsafe('PRAGMA busy_timeout=5000');
+    await prisma.$queryRawUnsafe('PRAGMA foreign_keys=ON');
+  } catch (err) {
+    app.log.warn({ err }, 'Failed to apply SQLite pragmas');
+  }
+
+  // ── Graceful shutdown ────────────────────────────────────────────────────
+  let shuttingDown = false;
+  async function closeHandler(signal: string) {
+    if (shuttingDown) return; // a second Ctrl+C must not re-enter close()
+    shuttingDown = true;
+    app.log.info(`Received ${signal}, shutting down…`);
+    // Failsafe: if close hangs (e.g. WhatsApp's Chrome refusing to die),
+    // force-exit after 10s rather than leaving a zombie process.
+    const failsafe = setTimeout(() => process.exit(1), 10_000);
+    failsafe.unref();
+    await whatsapp.shutdown().catch(() => {});
+    await app.close();
+    await prisma.$disconnect();
+    process.exit(0);
+  }
+  process.on('SIGINT',  () => closeHandler('SIGINT'));
+  process.on('SIGTERM', () => closeHandler('SIGTERM'));
+
+  const port = parseInt(process.env.PORT ?? '3001');
+  const host = process.env.HOST ?? '127.0.0.1';
+  await app.listen({ port, host });
+  app.log.info(`Server running at http://${host}:${port}`);
+
+  // ── Automatic backup ──────────────────────────────────────────────────────
+  // Take a backup on every boot (at most one per calendar day) and then every
+  // 24 hours while the server stays up. The operator never has to remember.
+  const autoBackup = async () => {
+    try {
+      const svc = new BackupService();
+      // Check by filename (it embeds the timestamp) — file mtime is
+      // unreliable on Windows because copies preserve source timestamps.
+      const today = new Date().toISOString().slice(0, 10);
+      const alreadyToday = svc.list().some((b) => b.name.startsWith(`studio_${today}`));
+      if (alreadyToday) {
+        app.log.info('Auto-backup skipped — a backup already exists for today');
+        return;
+      }
+      const file = await svc.backup();
+      app.log.info(`Auto-backup created: ${file}`);
+    } catch (err) {
+      app.log.error({ err }, 'Auto-backup failed');
+    }
+  };
+  void autoBackup();
+  setInterval(autoBackup, 24 * 60 * 60 * 1000).unref();
+}
+
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
+
+// ── Type augmentation ─────────────────────────────────────────────────────────
+declare module 'fastify' {
+  interface FastifyInstance {
+    prisma: PrismaClient;
+    whatsapp: WhatsAppService;
+    authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+  }
+}

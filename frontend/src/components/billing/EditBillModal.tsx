@@ -1,0 +1,280 @@
+import { useState } from 'react';
+import { X, Save, Plus } from 'lucide-react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { CustomerBar, type CustomerInfo } from '@/components/billing/CustomerBar';
+import { LineItemRow } from '@/components/billing/LineItemRow';
+import { billsApi } from '@/api/bills';
+import { customersApi } from '@/api/customers';
+import { useToast } from '@/hooks/use-toast';
+import type { Bill, BillItemForm } from '@/types';
+import { paisaToRupee, rupeeToPaisa } from '@/types';
+
+const newEmptyItem = (): BillItemForm => ({
+  _id: crypto.randomUUID(),
+  productName: '',
+  unit: 'piece',
+  qty: 1,
+  unitPrice: 0,
+  gstRate: 18,
+});
+
+interface EditBillModalProps {
+  bill: Bill;
+  onClose: () => void;
+  onSaved: (updated: Bill) => void;
+}
+
+export function EditBillModal({ bill, onClose, onSaved }: EditBillModalProps) {
+  const { toast } = useToast();
+  const qc = useQueryClient();
+
+  const [customer, setCustomer] = useState<CustomerInfo>({
+    id: bill.customer?.id,
+    name: bill.customer?.name ?? '',
+    phone: bill.customer?.phone ?? '',
+    gstin: bill.customer?.gstin ?? '',
+  });
+  const [items, setItems] = useState<BillItemForm[]>(
+    bill.items.map((i) => ({
+      _id: crypto.randomUUID(),
+      productId: i.productId,
+      productName: i.productName,
+      unit: i.unit,
+      qty: i.qty,
+      unitPrice: paisaToRupee(i.unitPrice),
+      gstRate: i.gstRate,
+    })),
+  );
+
+  // Bill date, discount and notes are not editable — they keep the bill's
+  // original values (same rules as the billing page: no backdating, prices
+  // and discounts fixed). Only customer and items can change.
+  const discountP = bill.discountAmount;
+
+  // Integer-paise totals mirroring the backend's per-item rounding — see
+  // BillingPage for the same math.
+  const countedItems = items.filter((i) => i.productName.trim() && i.qty > 0);
+  const subTotalP = countedItems.reduce(
+    (s, i) => s + Math.round(i.qty * rupeeToPaisa(i.unitPrice)), 0);
+  const gstTotalP = countedItems.reduce(
+    (s, i) => s + Math.round((Math.round(i.qty * rupeeToPaisa(i.unitPrice)) * i.gstRate) / 100), 0);
+  const _activeRates = [...new Set(countedItems.filter(i => i.gstRate > 0).map(i => i.gstRate))];
+  const gstHalfRate  = _activeRates.length === 1 ? _activeRates[0] / 2 : null;
+  const rawTotalP   = subTotalP + gstTotalP - discountP;
+  const roundOffP   = Math.round(rawTotalP / 100) * 100 - rawTotalP;
+  const grandTotalP = rawTotalP + roundOffP;
+
+  const updateMutation = useMutation({
+    mutationFn: (payload: Parameters<typeof billsApi.editBill>[1]) =>
+      billsApi.editBill(bill.id, payload),
+    onSuccess: (updated) => {
+      qc.invalidateQueries({ queryKey: ['bills'] });
+      toast({ title: 'Bill updated!', description: `${updated.billNumber} saved.`, variant: 'success' });
+      onSaved(updated);
+    },
+    onError: (err: Error) => {
+      toast({ title: 'Error updating bill', description: err.message, variant: 'destructive' });
+    },
+  });
+
+  const handleSave = async () => {
+    const validItems = countedItems;
+    if (validItems.length === 0) {
+      toast({ title: 'No items', description: 'Add at least one item.', variant: 'destructive' });
+      return;
+    }
+
+    const unpriced = validItems.find((i) => i.unitPrice <= 0);
+    if (unpriced) {
+      toast({
+        title: 'Item has no price',
+        description: `"${unpriced.productName}" — select it from the product list so its price fills in.`,
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    let customerId: number | undefined = customer.id;
+    if (!customerId && customer.name.trim() && customer.phone.trim()) {
+      try {
+        const created = await customersApi.create({
+          name: customer.name.trim(),
+          phone: customer.phone.trim(),
+          gstin: customer.gstin?.trim() || undefined,
+        });
+        customerId = created.id;
+        qc.invalidateQueries({ queryKey: ['customers'] });
+      } catch {
+        // non-critical — continue without
+      }
+    }
+
+    updateMutation.mutate({
+      customerId,
+      billDate: bill.billDate,
+      items: validItems.map((i) => ({
+        productId: i.productId,
+        productName: i.productName,
+        unit: i.unit,
+        qty: i.qty,
+        unitPrice: rupeeToPaisa(i.unitPrice),
+        gstRate: i.gstRate,
+      })),
+      notes: bill.notes,
+      discountAmount: bill.discountAmount,
+      roundOffAmount: roundOffP,
+    });
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-slate-950/50 backdrop-blur-[2px] flex items-center justify-center p-4 animate-in fade-in-0 duration-150"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="bg-white rounded-xl shadow-soft-lg w-full max-w-5xl max-h-[95vh] flex flex-col animate-in fade-in-0 zoom-in-95 duration-200">
+
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b shrink-0">
+          <div>
+            <h3 className="font-bold text-lg">Edit Bill — {bill.billNumber}</h3>
+            <p className="text-xs text-amber-600 font-medium">Changes replace all items and recalculate totals</p>
+          </div>
+          <Button variant="ghost" size="icon" onClick={onClose}><X className="h-4 w-4" /></Button>
+        </div>
+
+        {/* Scrollable body */}
+        <div className="overflow-auto flex-1 p-6 space-y-4">
+
+          {/* Customer + Date */}
+          <Card className="border-brand-500/30 bg-brand-50/60">
+            <CardContent className="pt-4 pb-4 grid grid-cols-12 gap-4 items-end">
+              <div className="col-span-8">
+                <Label className="text-xs text-muted-foreground mb-1.5 block">Customer</Label>
+                <CustomerBar value={customer} onChange={setCustomer} />
+              </div>
+              <div className="col-span-4">
+                <Label className="text-xs text-muted-foreground mb-1.5 block">Date</Label>
+                <p className="h-10 flex items-center px-3 rounded-lg border border-slate-200 bg-slate-50 text-sm font-medium text-slate-700">
+                  {new Date(bill.billDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Items + Summary */}
+          <div className="grid grid-cols-12 gap-4">
+
+            {/* Items table — 9 cols */}
+            <div className="col-span-9">
+              <Card>
+                <CardHeader className="pb-3 flex flex-row items-center justify-between">
+                  <CardTitle className="text-sm">Bill Items</CardTitle>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setItems((p) => [...p, newEmptyItem()])}
+                  >
+                    <Plus className="w-4 h-4 mr-1" /> Add Item
+                  </Button>
+                </CardHeader>
+                <CardContent className="p-0 overflow-visible">
+                  <div className="overflow-visible">
+                    <table className="w-full">
+                      <thead>
+                        <tr className="border-b bg-slate-50/80">
+                          <th className="text-center py-2 px-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground w-8">#</th>
+                          <th className="text-left py-2 px-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Product / Service</th>
+                          <th className="text-right py-2 px-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground w-16">Qty</th>
+                          <th className="text-right py-2 px-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground w-24">Price (₹)</th>
+                          <th className="text-right py-2 px-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground w-16">GST %</th>
+                          <th className="text-right py-2 px-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground w-24">Amount</th>
+                          <th className="w-8" />
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {items.map((item, idx) => (
+                          <LineItemRow
+                            key={item._id}
+                            index={idx}
+                            item={item}
+                            onChange={(u) => setItems((p) => p.map((i, j) => (j === idx ? u : i)))}
+                            onRemove={() => setItems((p) => p.filter((_, j) => j !== idx))}
+                            includeInactive
+                          />
+                        ))}
+                      </tbody>
+                    </table>
+                    {items.length === 0 && (
+                      <div className="py-12 text-center text-muted-foreground text-sm">
+                        <Plus className="w-8 h-8 mx-auto mb-2 opacity-30" />
+                        No items. Click "Add Item" to begin.
+                      </div>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Summary — 3 cols */}
+            <div className="col-span-3">
+              <Card>
+                <CardHeader className="pb-2"><CardTitle className="text-sm">Summary</CardTitle></CardHeader>
+                <CardContent className="space-y-2">
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">Sub Total</span>
+                    <span className="font-medium tabular-nums">₹{paisaToRupee(subTotalP).toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">{gstHalfRate !== null ? `CGST (${gstHalfRate}%)` : 'CGST'}</span>
+                    <span className="font-medium tabular-nums">₹{paisaToRupee(gstTotalP / 2).toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">{gstHalfRate !== null ? `SGST (${gstHalfRate}%)` : 'SGST'}</span>
+                    <span className="font-medium tabular-nums">₹{paisaToRupee(gstTotalP / 2).toFixed(2)}</span>
+                  </div>
+                  {discountP > 0 && (
+                    <div className="flex justify-between text-sm">
+                      <span className="text-muted-foreground">Discount</span>
+                      <span className="font-medium tabular-nums">−₹{paisaToRupee(discountP).toFixed(2)}</span>
+                    </div>
+                  )}
+                  {roundOffP !== 0 && (
+                    <div className="flex justify-between text-sm">
+                      <span className="text-muted-foreground">Round Off</span>
+                      <span className="font-medium text-slate-500">
+                        {roundOffP > 0 ? '+' : ''}₹{paisaToRupee(roundOffP).toFixed(2)}
+                      </span>
+                    </div>
+                  )}
+                  <div className="border-t pt-2.5 mt-1">
+                    <div className="flex justify-between items-center">
+                      <span className="font-semibold text-slate-700">Grand Total</span>
+                      <span className="text-xl font-bold text-brand-700 tabular-nums">₹{paisaToRupee(grandTotalP)}</span>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="flex justify-end gap-3 px-6 py-4 border-t shrink-0">
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button
+            onClick={handleSave}
+            disabled={updateMutation.isPending}
+            className="px-8"
+          >
+            <Save className="w-4 h-4 mr-2" />
+            {updateMutation.isPending ? 'Saving…' : 'Save Changes'}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
