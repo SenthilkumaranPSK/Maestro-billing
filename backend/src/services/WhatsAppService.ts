@@ -1,11 +1,42 @@
 import { Client, LocalAuth, MessageMedia } from 'whatsapp-web.js';
 import QRCode from 'qrcode';
 import path from 'path';
+import fs from 'fs';
 import puppeteer from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import { executablePath } from 'puppeteer';
 
 puppeteer.use(StealthPlugin());
+
+/**
+ * Find a Chromium-based browser on this machine. On a customer PC there is no
+ * puppeteer-downloaded Chrome, so look for installed Chrome first and fall
+ * back to Edge (preinstalled on every Windows 10/11). Dev machines fall
+ * through to puppeteer's own download as a last resort.
+ */
+function findBrowserPath(): string | null {
+  const pf = process.env['PROGRAMFILES'] ?? 'C:\\Program Files';
+  const pf86 = process.env['PROGRAMFILES(X86)'] ?? 'C:\\Program Files (x86)';
+  const local = process.env['LOCALAPPDATA'] ?? '';
+  const candidates = [
+    process.env.CHROME_PATH,
+    path.join(pf, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+    path.join(pf86, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+    local ? path.join(local, 'Google', 'Chrome', 'Application', 'chrome.exe') : undefined,
+    path.join(pf86, 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+    path.join(pf, 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+  ];
+  for (const c of candidates) {
+    if (c && fs.existsSync(c)) return c;
+  }
+  try {
+    const p = executablePath();
+    if (p && fs.existsSync(p)) return p;
+  } catch {
+    // puppeteer has no downloaded browser — nothing more to try
+  }
+  return null;
+}
 
 export type WhatsAppStatus = 'DISCONNECTED' | 'CONNECTING' | 'QR_READY' | 'CONNECTED';
 
@@ -58,11 +89,18 @@ export class WhatsAppService {
     // puppeteer sessions were getting silently rejected by WhatsApp's
     // bot-detection: QR codes cycled every ~20s (vs. the normal ~60s) and
     // "authenticated" never fired, even against a freshly re-linked session.
+    const browserPath = findBrowserPath();
+    if (!browserPath) {
+      console.error('No Chromium browser found for WhatsApp (Chrome/Edge not installed?)');
+      this.status = 'DISCONNECTED';
+      return;
+    }
+
     let browserWSEndpoint: string;
     try {
       const browser = await puppeteer.launch({
         headless: true,
-        executablePath: executablePath(),
+        executablePath: browserPath,
         args: ['--no-sandbox', '--disable-setuid-sandbox'],
       });
       this.browser = browser;
@@ -75,7 +113,9 @@ export class WhatsAppService {
 
     this.client = new Client({
       authStrategy: new LocalAuth({
-        dataPath: path.join(process.cwd(), '.wwebjs_auth'),
+        // WA_DATA_DIR lets the desktop app keep the session in a writable
+        // per-user folder (Program Files is read-only for normal users).
+        dataPath: path.join(process.env.WA_DATA_DIR ?? process.cwd(), '.wwebjs_auth'),
       }),
       puppeteer: {
         browserWSEndpoint,

@@ -1,0 +1,49 @@
+{
+  "name": "maestro-billing-desktop",
+  "version": "1.0.0",
+  "description": "The Maestro Studio's — Billing System (desktop)",
+  "main": "main.js",
+  "author": "The Maestro Studio's",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "icon": "node scripts/make-icon.js",
+    "dist": "electron-builder --win"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "png-to-ico": "^2.1.8"
+  },
+  "build": {
+    "appId": "in.maestrostudios.billing",
+    "productName": "Maestro Billing",
+    "asar": false,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main.js"
+    ],
+    "extraResources": [
+      { "from": "../backend/dist", "to": "app/backend/dist" },
+      { "from": "../backend/node_modules", "to": "app/backend/node_modules" },
+      { "from": "../backend/package.json", "to": "app/backend/package.json" },
+      { "from": "../backend/prisma", "to": "app/backend/prisma" },
+      { "from": "../node_modules", "to": "app/node_modules" },
+      { "from": "../frontend/dist", "to": "app/frontend/dist" },
+      { "from": "template", "to": "app/template" }
+    ],
+    "win": {
+      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "deleteAppDataOnUninstall": false,
+      "createDesktopShortcut": true,
+      "shortcutName": "Maestro Billing"
+    }
+  }
+}

@@ -2,6 +2,9 @@ import 'dotenv/config';
 import Fastify, { FastifyRequest, FastifyReply } from 'fastify';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
+import fastifyStatic from '@fastify/static';
+import path from 'path';
+import fs from 'fs';
 import { PrismaClient } from '@prisma/client';
 
 import { customerRoutes } from './routes/customers';
@@ -86,6 +89,25 @@ async function main() {
   await app.register(whatsappRoutes, { prefix: '/api/v1/whatsapp'  });
   await app.register(backupRoutes,   { prefix: '/api/v1/backups'   });
   await app.register(printerRoutes,  { prefix: '/api/v1/printer'   });
+
+  // ── Static frontend (single-process mode) ────────────────────────────────
+  // When a built frontend exists (production / desktop app), serve it from
+  // this same process so the whole app lives at one URL. In dev, Vite serves
+  // the frontend itself and this block is skipped (no dist folder).
+  const frontendDist =
+    process.env.FRONTEND_DIST ?? path.resolve(__dirname, '..', '..', 'frontend', 'dist');
+  if (fs.existsSync(path.join(frontendDist, 'index.html'))) {
+    await app.register(fastifyStatic, { root: frontendDist });
+    // SPA fallback: deep links like /history must serve index.html; real API
+    // and asset misses keep their 404s.
+    app.setNotFoundHandler((request, reply) => {
+      if (request.method === 'GET' && !request.url.startsWith('/api')) {
+        return reply.sendFile('index.html');
+      }
+      return reply.status(404).send({ success: false, error: 'Not found' });
+    });
+    app.log.info(`Serving frontend from ${frontendDist}`);
+  }
 
   // ── Health ───────────────────────────────────────────────────────────────
   // /live  — liveness probe: the process is up (never touches the DB)
