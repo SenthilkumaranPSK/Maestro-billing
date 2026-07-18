@@ -2,10 +2,8 @@ import { FastifyInstance } from 'fastify';
 import { BackupService, BackupError } from '../services/BackupService';
 
 export async function backupRoutes(fastify: FastifyInstance) {
-  const auth = { onRequest: [fastify.authenticate] };
-
   // GET /api/v1/backups — list available backup files
-  fastify.get('/', auth, async (_req, reply) => {
+  fastify.get('/', async (_req, reply) => {
     try {
       const svc = new BackupService();
       return reply.send({ success: true, data: svc.list() });
@@ -18,7 +16,7 @@ export async function backupRoutes(fastify: FastifyInstance) {
   });
 
   // POST /api/v1/backups — create a new backup
-  fastify.post('/', auth, async (_req, reply) => {
+  fastify.post('/', async (_req, reply) => {
     try {
       const svc = new BackupService();
       const filePath = await svc.backup();
@@ -34,7 +32,7 @@ export async function backupRoutes(fastify: FastifyInstance) {
 
   // POST /api/v1/backups/:file/restore — restore from a backup
   // Requires header: X-Confirm-Restore: yes
-  fastify.post<{ Params: { file: string } }>('/:file/restore', auth, async (request, reply) => {
+  fastify.post<{ Params: { file: string } }>('/:file/restore', async (request, reply) => {
     if (request.headers['x-confirm-restore'] !== 'yes') {
       return reply.status(400).send({
         success: false,

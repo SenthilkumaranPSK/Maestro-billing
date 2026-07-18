@@ -5,7 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { productsApi } from '@/api/products';
 import type { BillItemForm } from '@/types';
-import { paisaToRupee } from '@/types';
+import { paisaToRupee, rupeeToPaisa } from '@/types';
 
 interface LineItemRowProps {
   index: number;
@@ -58,9 +58,14 @@ export function LineItemRow({ index, item, onChange, onRemove, includeInactive =
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
-  const lineTotal = item.qty * item.unitPrice;
-  const gstAmt = (lineTotal * item.gstRate) / 100;
-  const totalWithGst = lineTotal + gstAmt;
+  // Integer-paise rounding, matching the backend's BillService.computeItemTotals
+  // exactly — otherwise a fractional qty/price can show a row total here that
+  // differs by a paisa or two from what the bill actually saves and charges.
+  const lineTotalP = Math.round(item.qty * rupeeToPaisa(item.unitPrice));
+  const gstAmtP = Math.round((lineTotalP * item.gstRate) / 100);
+  const lineTotal = paisaToRupee(lineTotalP);
+  const gstAmt = paisaToRupee(gstAmtP);
+  const totalWithGst = paisaToRupee(lineTotalP + gstAmtP);
 
   return (
     <tr className="border-b group animate-in fade-in slide-in-from-top-1 duration-200">

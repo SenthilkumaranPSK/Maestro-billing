@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import Fastify, { FastifyRequest, FastifyReply } from 'fastify';
+import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import fastifyStatic from '@fastify/static';
@@ -17,19 +17,6 @@ import { printerRoutes } from './routes/printer';
 import { errorHandler } from './middleware/errorHandler';
 import { WhatsAppService } from './services/WhatsAppService';
 import { BackupService } from './services/BackupService';
-
-// ── Boot guard ────────────────────────────────────────────────────────────────
-// Refuse to start in production with the default placeholder secret.
-if (process.env.NODE_ENV === 'production') {
-  const secret = process.env.JWT_SECRET;
-  if (!secret || secret === '__GENERATE_ON_FIRST_RUN__') {
-    console.error(
-      'ERROR: JWT_SECRET must be set before running in production.\n' +
-        "Generate a secret with: node -e \"console.log(require('crypto').randomBytes(48).toString('hex'))\"",
-    );
-    process.exit(1);
-  }
-}
 
 const prisma = new PrismaClient();
 const whatsapp = new WhatsAppService();
@@ -60,9 +47,6 @@ async function main() {
   // Decorators
   app.decorate('prisma', prisma);
   app.decorate('whatsapp', whatsapp);
-  // Stub — this app is single-user local; replace with real JWT verification
-  // if multi-user support is ever added.
-  app.decorate('authenticate', async (_req: FastifyRequest, _reply: FastifyReply) => {});
 
   // ── Plugins ──────────────────────────────────────────────────────────────
   // CORS — support a comma-separated list of origins from the env var so the
@@ -99,9 +83,14 @@ async function main() {
   if (fs.existsSync(path.join(frontendDist, 'index.html'))) {
     await app.register(fastifyStatic, { root: frontendDist });
     // SPA fallback: deep links like /history must serve index.html; real API
-    // and asset misses keep their 404s.
+    // and asset misses keep their 404s. A path ending in a file extension
+    // (e.g. a stale-cached /assets/index-<oldhash>.js after an update) is
+    // treated as a missing asset, not a client route, so it 404s cleanly
+    // instead of returning HTML that the browser then fails to parse as JS.
     app.setNotFoundHandler((request, reply) => {
-      if (request.method === 'GET' && !request.url.startsWith('/api')) {
+      const pathname = request.url.split('?')[0] ?? '';
+      const looksLikeFile = /\.[a-zA-Z0-9]+$/.test(pathname);
+      if (request.method === 'GET' && !pathname.startsWith('/api') && !looksLikeFile) {
         return reply.sendFile('index.html');
       }
       return reply.status(404).send({ success: false, error: 'Not found' });
@@ -193,6 +182,5 @@ declare module 'fastify' {
   interface FastifyInstance {
     prisma: PrismaClient;
     whatsapp: WhatsAppService;
-    authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
   }
 }

@@ -73,12 +73,8 @@ npm run build
 NODE_ENV=production node backend/dist/server.js
 ```
 
-> **Important:** Before running in production, set a real `JWT_SECRET` in `backend/.env`.
-> Generate one with:
-> ```bash
-> node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
-> ```
-> The server will refuse to start in production if `JWT_SECRET` is missing or still set to `__GENERATE_ON_FIRST_RUN__`.
+> **Note:** this app has no login — it's built for a single trusted operator on the
+> studio's own PC/LAN. Don't expose it to the public internet.
 
 ---
 
@@ -93,7 +89,6 @@ Edit `backend/.env` to configure the app.
 | `HOST` | `127.0.0.1` | Bind address (`0.0.0.0` to allow LAN access) |
 | `NODE_ENV` | `development` | `development` or `production` |
 | `CORS_ORIGIN` | `http://localhost:5173` | Comma-separated allowed origins for CORS |
-| `JWT_SECRET` | `__GENERATE_ON_FIRST_RUN__` | Secret for signing JWTs — must be changed before production |
 | `LOG_LEVEL` | `info` | Pino log level (`debug`, `info`, `warn`, `error`) |
 
 To allow access from another device on your LAN:

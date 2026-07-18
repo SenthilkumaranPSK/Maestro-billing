@@ -37,9 +37,44 @@ npm run dist
 `%APPDATA%/Maestro Billing/data/`
 - `database/studio.db` (+ `database/backups/`)
 - `.wwebjs_auth/` — WhatsApp session (scan QR once in Settings)
-- `.secret` — generated at first run
 
 Uninstalling keeps this folder, so bills survive reinstalls/updates.
+
+## Known workspace quirks
+
+**TypeScript / `@fastify/*` plugins.** `npm install` at the repo root can
+hoist a `@fastify/*` plugin (e.g. `@fastify/static`, `@fastify/jwt`) into the
+root `node_modules` instead of keeping it beside `backend/node_modules/fastify`.
+TypeScript then can't resolve that plugin's `declare module 'fastify'`
+augmentation and `tsc` fails on things like `reply.sendFile`. Fix: copy the
+plugin folder from the root into `backend/node_modules/@fastify/<name>` so it
+sits next to the `fastify` package it augments. Only affects local
+type-checking — the packaged app ships pre-built `dist/`, so it never hits
+this at runtime.
+
+**WhatsApp / puppeteer at packaging time.** `puppeteer-extra` (and its stealth
+plugin) consistently gets hoisted to the workspace root, but its own
+transitive deps (`puppeteer-core`, `@puppeteer/browsers`, ...) sometimes land
+in `backend/node_modules` instead depending on how a given `npm install`
+resolved things. Since code in the packaged app can only resolve **upward**
+(app/backend/node_modules → app/node_modules, never the reverse), a package
+living in app/node_modules must find everything IT needs at that same level
+or higher — if part of its dependency tree only exists one level down in
+app/backend/node_modules, WhatsApp fails at boot with a `MODULE_NOT_FOUND` on
+something like `@puppeteer/browsers`, silently (caught, logged, WhatsApp just
+never connects). `npm run stage` (part of `npm run dist`) now handles this
+automatically — it merges staged backend deps into staged root deps so root
+is always a complete superset. If you ever build without going through
+`stage`, or add new puppeteer-family packages, re-check this.
+
+**`puppeteer-core` must be pinned to the exact same version in the root
+`package.json` and `backend/package.json`** (currently `24.38.0`, no caret).
+A version *mismatch* between the two (even a minor-version drift like
+24.38.0 vs 24.43.1) can make npm install two separate copies with
+incompatible internal dependency resolutions — this once manifested as
+`ERR_REQUIRE_ESM` on `@puppeteer/browsers` deep inside `puppeteer-core`,
+crashing WhatsApp init at boot. If you bump one, bump the other to match,
+exactly.
 
 ## Requirements on the client PC
 

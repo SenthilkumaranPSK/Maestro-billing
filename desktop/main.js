@@ -7,7 +7,6 @@
 const { app, BrowserWindow, dialog, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const crypto = require('crypto');
 const http = require('http');
 
 const PORT = 3179;
@@ -27,6 +26,10 @@ const TEMPLATE_DB = app.isPackaged
   : path.join(__dirname, 'template', 'studio.db');
 
 let mainWindow = null;
+// A double-click on the shortcut while the first instance is still starting
+// (server/WhatsApp warm-up) arrives before mainWindow exists — remember it
+// and focus as soon as the window is actually created.
+let focusPending = false;
 
 // A second double-click on the shortcut must focus the running app,
 // not boot a second server against the same database.
@@ -38,6 +41,8 @@ if (!gotLock) {
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.focus();
+    } else {
+      focusPending = true;
     }
   });
 }
@@ -55,19 +60,6 @@ function prepareDataDir() {
   return { dataRoot, dbFile };
 }
 
-function loadOrCreateSecret(dataRoot) {
-  const secretFile = path.join(dataRoot, '.secret');
-  try {
-    const existing = fs.readFileSync(secretFile, 'utf8').trim();
-    if (existing.length >= 32) return existing;
-  } catch {
-    // first run
-  }
-  const secret = crypto.randomBytes(48).toString('hex');
-  fs.writeFileSync(secretFile, secret, 'utf8');
-  return secret;
-}
-
 function startBackend() {
   const { dataRoot, dbFile } = prepareDataDir();
 
@@ -78,7 +70,6 @@ function startBackend() {
   process.env.CORS_ORIGIN = APP_URL;
   process.env.FRONTEND_DIST = path.join(APP_ROOT, 'frontend', 'dist');
   process.env.WA_DATA_DIR = dataRoot;
-  process.env.JWT_SECRET = loadOrCreateSecret(dataRoot);
   process.env.LOG_LEVEL = process.env.LOG_LEVEL || 'info';
 
   // Runs Fastify inside this (Node-capable) Electron main process.
@@ -111,6 +102,15 @@ function waitForServer(retriesLeft, onReady) {
 }
 
 function createWindow() {
+  // electron-builder embeds build/icon.ico into the exe (covers the taskbar
+  // and shortcuts automatically), but the window/title-bar icon is set here
+  // explicitly so it's never left blank regardless of Windows icon caching.
+  // Packaged: shipped alongside "app" as its own resource (see package.json
+  // extraResources). Dev: read straight from the desktop/build folder.
+  const iconPath = app.isPackaged
+    ? path.join(process.resourcesPath, 'icon.ico')
+    : path.join(__dirname, 'build', 'icon.ico');
+
   mainWindow = new BrowserWindow({
     width: 1360,
     height: 860,
@@ -119,6 +119,7 @@ function createWindow() {
     autoHideMenuBar: true,
     title: 'Maestro Billing',
     backgroundColor: '#f8fafc',
+    icon: fs.existsSync(iconPath) ? iconPath : undefined,
     webPreferences: {
       // The UI is our own local site — no Node access needed in the renderer.
       nodeIntegration: false,
@@ -138,7 +139,32 @@ function createWindow() {
     mainWindow = null;
   });
 
+  // If the server passed its health check but then dies before the page
+  // finishes loading (crash in the brief gap between the two), the window
+  // would otherwise sit blank with no clue why. Offer a retry instead.
+  mainWindow.webContents.on('did-fail-load', (_e, errorCode, errorDescription) => {
+    if (errorCode === -3) return; // ERR_ABORTED — normal on a redirect/reload, not a failure
+    dialog
+      .showMessageBox(mainWindow, {
+        type: 'error',
+        title: 'Maestro Billing',
+        message: 'The billing app failed to load.',
+        detail: errorDescription || 'Unknown error',
+        buttons: ['Retry', 'Quit'],
+        defaultId: 0,
+      })
+      .then(({ response }) => {
+        if (response === 0) mainWindow?.loadURL(APP_URL);
+        else app.quit();
+      });
+  });
+
   mainWindow.loadURL(APP_URL);
+
+  if (focusPending) {
+    focusPending = false;
+    mainWindow.focus();
+  }
 }
 
 app.whenReady().then(() => {
@@ -156,13 +182,20 @@ app.on('window-all-closed', () => {
   app.quit();
 });
 
-app.on('before-quit', () => {
-  // Triggers the backend's graceful shutdown (WhatsApp Chrome teardown,
-  // DB disconnect). Its handler ends with process.exit, which is fine —
-  // the app is quitting anyway.
+let quitting = false;
+app.on('before-quit', (event) => {
+  // Without preventDefault, Electron's own quit sequence races ahead and can
+  // kill the process before the backend's async shutdown below — closing
+  // WhatsApp's Chrome and disconnecting Prisma — has actually finished,
+  // leaving a zombie chrome.exe holding the session lock. The backend's
+  // SIGTERM handler ends with process.exit() itself, which is what actually
+  // terminates the app (with its own 10s failsafe if something hangs).
+  if (quitting) return;
+  quitting = true;
+  event.preventDefault();
   try {
     process.emit('SIGTERM', 'SIGTERM');
   } catch {
-    // best effort
+    app.exit(1);
   }
 });

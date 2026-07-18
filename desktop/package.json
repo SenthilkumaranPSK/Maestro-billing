@@ -27,6 +27,7 @@
       "main.js"
     ],
     "extraResources": [
+      { "from": "build/icon.ico", "to": "icon.ico" },
       { "from": "../backend/dist", "to": "app/backend/dist" },
       { "from": "staging/backend_node_modules", "to": "app/backend/node_modules" },
       { "from": "../backend/package.json", "to": "app/backend/package.json" },
