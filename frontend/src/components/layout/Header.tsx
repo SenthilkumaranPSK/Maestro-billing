@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Clock, LogOut } from 'lucide-react';
-import { authApi } from '@/api/auth';
+import { Clock } from 'lucide-react';
 
 interface HeaderProps {
   title: string;
@@ -26,21 +25,11 @@ export function Header({ title }: HeaderProps) {
       >
         {title}
       </h1>
-      <div className="flex items-center gap-3">
-        <div className="flex items-center gap-2 rounded-full bg-slate-50 px-3.5 py-1.5 text-sm text-slate-500">
-          <Clock className="w-3.5 h-3.5 text-slate-400" />
-          <span>{date}</span>
-          <span className="h-3 w-px bg-slate-200" />
-          <span className="font-semibold text-slate-700 tabular-nums">{time}</span>
-        </div>
-        <button
-          onClick={() => { if (confirm('Sign out of the billing app?')) authApi.logout(); }}
-          className="flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm text-slate-500 hover:bg-slate-100 hover:text-slate-700 transition-colors"
-          title="Sign out"
-        >
-          <LogOut className="w-3.5 h-3.5" />
-          Sign out
-        </button>
+      <div className="flex items-center gap-2 rounded-full bg-slate-50 px-3.5 py-1.5 text-sm text-slate-500">
+        <Clock className="w-3.5 h-3.5 text-slate-400" />
+        <span>{date}</span>
+        <span className="h-3 w-px bg-slate-200" />
+        <span className="font-semibold text-slate-700 tabular-nums">{time}</span>
       </div>
     </header>
   );

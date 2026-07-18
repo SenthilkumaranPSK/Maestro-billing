@@ -2,10 +2,8 @@ import 'dotenv/config';
 import Fastify, { FastifyRequest, FastifyReply } from 'fastify';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
-import jwt from '@fastify/jwt';
 import { PrismaClient } from '@prisma/client';
 
-import { authRoutes } from './routes/auth';
 import { customerRoutes } from './routes/customers';
 import { productRoutes } from './routes/products';
 import { billRoutes } from './routes/bills';
@@ -59,34 +57,9 @@ async function main() {
   // Decorators
   app.decorate('prisma', prisma);
   app.decorate('whatsapp', whatsapp);
-
-  // ── Auth ─────────────────────────────────────────────────────────────────
-  // The production boot guard above refuses to start with the placeholder
-  // secret, so the fallback here can only ever be used in development.
-  await app.register(jwt, {
-    secret: process.env.JWT_SECRET ?? 'dev-only-secret-change-me',
-  });
-
-  app.decorate('authenticate', async (request: FastifyRequest, reply: FastifyReply) => {
-    try {
-      await request.jwtVerify();
-    } catch {
-      return reply.status(401).send({ success: false, error: 'Please log in' });
-    }
-  });
-
-  // One choke point secures the whole API: everything under /api/v1 needs a
-  // valid token except the login route itself. /live and /health stay open
-  // for probes.
-  app.addHook('onRequest', async (request, reply) => {
-    if (!request.url.startsWith('/api/v1')) return;
-    if (request.url.startsWith('/api/v1/auth/login')) return;
-    try {
-      await request.jwtVerify();
-    } catch {
-      return reply.status(401).send({ success: false, error: 'Please log in' });
-    }
-  });
+  // Stub — this app is single-user local; replace with real JWT verification
+  // if multi-user support is ever added.
+  app.decorate('authenticate', async (_req: FastifyRequest, _reply: FastifyReply) => {});
 
   // ── Plugins ──────────────────────────────────────────────────────────────
   // CORS — support a comma-separated list of origins from the env var so the
@@ -106,7 +79,6 @@ async function main() {
   app.setErrorHandler(errorHandler);
 
   // ── Routes ───────────────────────────────────────────────────────────────
-  await app.register(authRoutes,     { prefix: '/api/v1/auth'      });
   await app.register(customerRoutes, { prefix: '/api/v1/customers' });
   await app.register(productRoutes,  { prefix: '/api/v1/products'  });
   await app.register(billRoutes,     { prefix: '/api/v1/bills'     });
@@ -200,12 +172,5 @@ declare module 'fastify' {
     prisma: PrismaClient;
     whatsapp: WhatsAppService;
     authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
-  }
-}
-
-declare module '@fastify/jwt' {
-  interface FastifyJWT {
-    payload: { id: number; username: string; role: string };
-    user: { id: number; username: string; role: string };
   }
 }

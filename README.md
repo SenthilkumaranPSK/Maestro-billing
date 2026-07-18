@@ -45,18 +45,6 @@ npm run db:seed
 
 ---
 
-## Login
-
-The whole API requires a login (JWT). Seeding creates a default account **only when the users table is empty**:
-
-| Username | Password |
-|---|---|
-| `maestro` | `maestro@2026` |
-
-**Change the password from Settings → Change Password immediately** on any installation reachable from outside the machine. Tokens expire after 7 days; `/live` and `/health` remain open for probes.
-
----
-
 ## Running in Development
 
 Open **two terminals**:
