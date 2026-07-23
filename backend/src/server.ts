@@ -78,6 +78,15 @@ async function main() {
         imgSrc: ["'self'", 'data:'],
         connectSrc: ["'self'"],
         objectSrc: ["'none'"],
+        // helmet's default CSP directives include this unless explicitly
+        // removed — it tells the browser to silently rewrite every http://
+        // sub-resource request to https://. This app is intentionally
+        // HTTP-only (127.0.0.1 loopback, no TLS cert anywhere), so every
+        // asset request (JS bundle, CSS, images) was getting "upgraded" to
+        // an https:// URL nothing listens on, then reported as
+        // ERR_BLOCKED_BY_CSP — the app failed to load every single time.
+        // `null` is helmet's documented way to delete a default directive.
+        upgradeInsecureRequests: null,
       },
     },
   });
