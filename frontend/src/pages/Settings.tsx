@@ -1,4 +1,4 @@
-import { HardDrive, Smartphone, RotateCcw, FileBarChart2, Percent, ChevronRight } from 'lucide-react';
+import { Smartphone, RotateCcw, FileBarChart2, Percent, ChevronRight, Save } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
@@ -25,17 +25,6 @@ export default function SettingsPage() {
   const { data: backups } = useQuery({
     queryKey: ['backups'],
     queryFn: backupsApi.list,
-  });
-
-  const backupMutation = useMutation({
-    mutationFn: backupsApi.create,
-    onSuccess: (data) => {
-      qc.invalidateQueries({ queryKey: ['backups'] });
-      toast({ title: 'Backup created', description: data.name, variant: 'success' });
-    },
-    onError: (err: Error) => {
-      toast({ title: 'Backup failed', description: err.message, variant: 'destructive' });
-    },
   });
 
   const restoreMutation = useMutation({
@@ -68,10 +57,6 @@ export default function SettingsPage() {
     <div className="max-w-4xl space-y-5">
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold">Settings</h2>
-        <Button variant="outline" onClick={() => backupMutation.mutate()} disabled={backupMutation.isPending}>
-          <HardDrive className="h-4 w-4 mr-1" />
-          {backupMutation.isPending ? 'Backing up…' : 'Backup DB'}
-        </Button>
       </div>
 
       <div className="grid grid-cols-3 gap-5 items-start">
@@ -132,18 +117,19 @@ export default function SettingsPage() {
       </Card>
 
       <Card>
-        <CardHeader className="pb-3 flex flex-row items-center justify-between">
-          <CardTitle className="text-sm">Database Backups</CardTitle>
-          <Button variant="outline" size="sm" onClick={() => backupMutation.mutate()} disabled={backupMutation.isPending}>
-            <HardDrive className="h-4 w-4 mr-2" />
-            {backupMutation.isPending ? 'Backing up…' : 'Create Backup Now'}
-          </Button>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm">Database</CardTitle>
         </CardHeader>
         <CardContent>
           <p className="text-xs text-muted-foreground mb-3">
-            A backup is taken automatically every day when the app starts. The last 30 are kept in{' '}
-            <code className="bg-slate-100 px-1 rounded">database/backups/</code>.
-            Restoring rolls the whole database back to that moment.
+            A backup is taken automatically every morning, the first time the app is opened that
+            day — there's no manual "backup now" button, it's all automatic. The last 30 are kept
+            in <code className="bg-slate-100 px-1 rounded">D:\Billing</code> (or{' '}
+            <code className="bg-slate-100 px-1 rounded">E:\Billing</code> if D: isn't available) —
+            a separate drive from wherever the app and its live database live, on purpose.
+            Restoring rolls the whole database back to that moment. Use{' '}
+            <span className="font-medium text-slate-700">Save a Copy</span> to save any backup to a
+            location of your choice — a USB drive, Desktop, cloud-synced folder, wherever.
           </p>
           {(backups?.length ?? 0) === 0 ? (
             <p className="text-sm text-muted-foreground py-3 text-center">No backups yet.</p>
@@ -157,16 +143,26 @@ export default function SettingsPage() {
                       {b.name} · {(b.size / 1024).toFixed(0)} KB
                     </p>
                   </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="shrink-0 ml-3 text-amber-700 border-amber-300 hover:bg-amber-50"
-                    onClick={() => handleRestore(b.name, b.createdAt)}
-                    disabled={restoreMutation.isPending}
-                  >
-                    <RotateCcw className="h-3.5 w-3.5 mr-1.5" />
-                    Restore
-                  </Button>
+                  <div className="flex items-center gap-2 shrink-0 ml-3">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => backupsApi.download(b.name)}
+                    >
+                      <Save className="h-3.5 w-3.5 mr-1.5" />
+                      Save a Copy
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="text-amber-700 border-amber-300 hover:bg-amber-50"
+                      onClick={() => handleRestore(b.name, b.createdAt)}
+                      disabled={restoreMutation.isPending}
+                    >
+                      <RotateCcw className="h-3.5 w-3.5 mr-1.5" />
+                      Restore
+                    </Button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -191,6 +187,19 @@ export default function SettingsPage() {
                 <span className="text-left">
                   <span className="block font-medium">Day Report</span>
                   <span className="block text-xs text-muted-foreground">End-of-day closing summary</span>
+                </span>
+              </span>
+              <ChevronRight className="h-4 w-4 text-slate-400 shrink-0" />
+            </button>
+            <button
+              className="w-full flex items-center justify-between rounded-lg border border-slate-200 px-4 py-3 text-sm hover:bg-slate-50 hover:border-brand-400 transition-colors"
+              onClick={() => navigate('/month-report')}
+            >
+              <span className="flex items-center gap-3">
+                <FileBarChart2 className="h-4 w-4 text-brand-700 shrink-0" />
+                <span className="text-left">
+                  <span className="block font-medium">Month Report</span>
+                  <span className="block text-xs text-muted-foreground">Monthly closing summary</span>
                 </span>
               </span>
               <ChevronRight className="h-4 w-4 text-slate-400 shrink-0" />

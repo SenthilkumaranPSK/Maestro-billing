@@ -181,8 +181,8 @@ test('getNextBillNumber: increments from the highest existing in the current yea
     ],
   });
   const next = await service.getNextBillNumber();
-  // Default prefix is "PS"; year 2026; first bill was 0001 so next is 0002
-  assert.match(next, /^PS-2026-\d{4}$/);
+  // Default prefix is "MS" (see BillService.getNextBillNumber, matches seed.ts); year 2026; first bill was 0001 so next is 0002
+  assert.match(next, /^MS-2026-\d{4}$/);
   const seq = parseInt(next.split('-')[2], 10);
   assert.ok(seq >= 2, `expected seq >= 2, got ${seq}`);
 });

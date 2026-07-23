@@ -12,6 +12,13 @@ export class BackupError extends Error {
 
 const MIN_BACKUP_BYTES = 1024; // refuse to keep a backup smaller than 1 KB
 
+// Backups deliberately live off the same drive as the app/database, so a
+// failing C: drive (or a botched install/uninstall) can't take the database
+// AND its safety net down together. D:\Billing is tried first, then
+// E:\Billing, for whichever drive actually exists on this PC; a single-drive
+// PC (no D: or E:) falls back to the old sibling-of-the-database folder.
+const PREFERRED_BACKUP_DIRS = ['D:\\Billing', 'E:\\Billing'];
+
 export class BackupService {
   private readonly dbPath: string;
   private readonly backupDir: string;
@@ -29,7 +36,18 @@ export class BackupService {
       );
     }
 
-    this.backupDir = path.resolve(path.dirname(this.dbPath), 'backups');
+    this.backupDir = BackupService.resolveBackupDir(this.dbPath);
+  }
+
+  private static resolveBackupDir(dbPath: string): string {
+    // Escape hatch for tests (and anyone who wants a specific location) —
+    // otherwise this resolution depends on which drives happen to exist on
+    // whatever machine it runs on.
+    if (process.env.BACKUP_DIR) return process.env.BACKUP_DIR;
+    for (const dir of PREFERRED_BACKUP_DIRS) {
+      if (fs.existsSync(dir.slice(0, 3))) return dir; // e.g. "D:\"
+    }
+    return path.resolve(path.dirname(dbPath), 'backups');
   }
 
   async backup(): Promise<string> {
@@ -50,14 +68,40 @@ export class BackupService {
     );
 
     if (cliResult.status !== 0) {
-      // Fallback: flush WAL to the main file, then copy.
-      // This is safe as long as no write is in progress, which is true for a
-      // single-user local app that is idle during the backup.
+      // Fallback: flush WAL to the main file, then copy. This is the path
+      // actually used on essentially every real operator PC — the sqlite3
+      // CLI above isn't bundled with the app and isn't a stock Windows
+      // component, so `cliResult.status !== 0` is the common case, not a
+      // rare edge case.
       const tmp = new PrismaClient({
         datasources: { db: { url: `file:${this.dbPath}` } },
       });
       try {
-        await tmp.$queryRawUnsafe('PRAGMA wal_checkpoint(TRUNCATE)');
+        // Without busy_timeout, a checkpoint that can't get the write lock
+        // right away (a bill save in flight) gives up immediately rather
+        // than waiting — wait up to 5s for the lock instead of bailing.
+        await tmp.$queryRawUnsafe('PRAGMA busy_timeout=5000');
+        // wal_checkpoint returns one row: (busy, log, checkpointed). busy=1
+        // means it couldn't get exclusive access and only partially
+        // checkpointed — the copy below would then be structurally valid
+        // but silently missing the most recent transactions. Retry a few
+        // times (busy_timeout already covers most of the wait) before
+        // proceeding anyway — a slightly stale backup beats none.
+        let busy = 1;
+        for (let attempt = 0; attempt < 3 && busy !== 0; attempt++) {
+          const rows = await tmp.$queryRawUnsafe<Array<{ busy: number }>>(
+            'PRAGMA wal_checkpoint(TRUNCATE)',
+          );
+          busy = rows[0]?.busy ?? 0;
+          if (busy !== 0 && attempt < 2) {
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+          }
+        }
+        if (busy !== 0) {
+          console.warn(
+            'Backup: WAL checkpoint stayed busy after retries — this backup may be missing the most recent writes.',
+          );
+        }
       } finally {
         await tmp.$disconnect();
       }
@@ -78,15 +122,19 @@ export class BackupService {
     return backupPath;
   }
 
-  restore(fileName: string): void {
-    // Only allow a plain filename, not a path traversal
+  // Resolves a backup file name to its on-disk path, confined to backupDir
+  // (path.basename strips any directory traversal) and confirmed to exist.
+  resolveBackupPath(fileName: string): string {
     const safe = path.basename(fileName);
     const src = path.join(this.backupDir, safe);
-
     if (!fs.existsSync(src)) {
       throw new BackupError(`Backup file not found: ${safe}`);
     }
+    return src;
+  }
 
+  restore(fileName: string): void {
+    const src = this.resolveBackupPath(fileName);
     const size = fs.statSync(src).size;
     if (size < MIN_BACKUP_BYTES) {
       throw new BackupError(

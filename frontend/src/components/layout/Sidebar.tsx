@@ -1,6 +1,6 @@
 import { NavLink } from 'react-router-dom';
 import {
-  Receipt, Users, Package, History, Settings,
+  Receipt, Users, Package, ListChecks, History, Settings,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -8,6 +8,7 @@ const nav = [
   { to: '/billing',    icon: Receipt,          label: 'New Bill' },
   { to: '/customers',  icon: Users,            label: 'Customers' },
   { to: '/products',   icon: Package,          label: 'Products' },
+  { to: '/services',   icon: ListChecks,       label: 'Services' },
   { to: '/history',    icon: History,          label: 'Bill History' },
   { to: '/settings',   icon: Settings,         label: 'Settings' },
 ];

@@ -58,6 +58,10 @@ test('BackupService: reads DB path from process.env.DATABASE_URL', async () => {
   copyFileSync(TEMPLATE_DB, dbFile);
 
   process.env.DATABASE_URL = `file:${dbFile}`;
+  // Pin the backup dir explicitly — production prefers D:\Billing/E:\Billing
+  // when present, which would make this test's expectations depend on
+  // whatever drives happen to exist on the machine running it.
+  process.env.BACKUP_DIR = join(dir, 'backups');
   // Dynamic import so the module reads the env var we just set
   const { BackupService } = await import(`../src/services/BackupService.ts?cb=${Date.now()}`);
 
@@ -95,6 +99,7 @@ test('BackupService: absolute path in DATABASE_URL is used as-is', async () => {
   // letter. We expect BackupService to use the absolute path verbatim,
   // not re-resolve it against cwd.
   process.env.DATABASE_URL = `file:${dbFile}`;
+  process.env.BACKUP_DIR = join(dir, 'backups');
   const { BackupService } = await import(`../src/services/BackupService.ts?cb=${Date.now()}-${Math.random()}-abs`);
 
   const svc = new BackupService();
@@ -113,6 +118,7 @@ test('BackupService: rejects a backup smaller than 1 KB', async () => {
   writeFileSync(dbFile, '');
 
   process.env.DATABASE_URL = `file:${dbFile}`;
+  process.env.BACKUP_DIR = join(dir, 'backups');
   const { BackupService } = await import(`../src/services/BackupService.ts?cb=${Date.now()}-${Math.random()}-tiny`);
 
   const svc = new BackupService();
@@ -144,6 +150,7 @@ test('BackupService: prunes old backups beyond keepCount', async () => {
   assert.equal(readdirSync(backupsDir).length, 5);
 
   process.env.DATABASE_URL = `file:${dbFile}`;
+  process.env.BACKUP_DIR = backupsDir;
   const { BackupService } = await import(`../src/services/BackupService.ts?cb=${Date.now()}-${Math.random()}-prune`);
 
   const svc = new BackupService();
@@ -172,6 +179,7 @@ test('BackupService: relative DATABASE_URL is resolved against process.cwd()', a
     // path.isAbsolute() check in the service: "./..." is NOT absolute,
     // so it gets resolved against process.cwd().
     process.env.DATABASE_URL = `file:./.test-backup-rel.db`;
+    process.env.BACKUP_DIR = localBackups;
     const { BackupService } = await import(`../src/services/BackupService.ts?cb=${Date.now()}-${Math.random()}-rel`);
 
     const svc = new BackupService();

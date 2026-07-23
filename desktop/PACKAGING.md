@@ -34,11 +34,20 @@ npm run dist
 
 ## Where the installed app keeps data
 
-`%APPDATA%/Maestro Billing/data/`
-- `database/studio.db` (+ `database/backups/`)
+`%APPDATA%/Maestro Billing/data/` — unless relocated on first run (main.js
+asks once where to put `studio.db`; see `db-location.json` in the same
+folder for the pointer to wherever it ended up):
+- `database/studio.db`
 - `.wwebjs_auth/` — WhatsApp session (scan QR once in Settings)
 
 Uninstalling keeps this folder, so bills survive reinstalls/updates.
+
+Backups are deliberately NOT under `%APPDATA%` — `BackupService` defaults to
+`D:\Billing` (falling back to `E:\Billing`, then finally to a `backups/`
+folder next to `studio.db` on a single-drive PC with neither), so a backup
+survives even if the app's own drive/profile is lost. One is taken
+automatically the first time the app is opened each day; there is no manual
+"backup now" trigger in the UI.
 
 ## Known workspace quirks
 

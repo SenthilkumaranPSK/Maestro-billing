@@ -8,6 +8,23 @@ import { executablePath } from 'puppeteer';
 
 puppeteer.use(StealthPlugin());
 
+/** Races a promise against a timeout so a stuck Chrome/CDP call can't hang forever. */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`Timed out after ${ms}ms`)), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
 /**
  * Find a Chromium-based browser on this machine. On a customer PC there is no
  * puppeteer-downloaded Chrome, so look for installed Chrome first and fall
@@ -49,32 +66,48 @@ export class WhatsAppService {
   // on every reconnect.
   private browser: Awaited<ReturnType<typeof puppeteer.launch>> | null = null;
   private initializing = false;
+  private shuttingDown = false;
+  private reconnectTimer: NodeJS.Timeout | null = null;
+  // Tracks the in-flight initialize() call so shutdown() can wait for it —
+  // otherwise a browser that doInitialize() is mid-launch on assigns itself
+  // to this.browser *after* shutdown already closed everything, leaking it.
+  private initPromise: Promise<void> | null = null;
 
   constructor() {
     this.initialize();
   }
 
-  private async initialize() {
+  private initialize(): Promise<void> {
     // The 'disconnected' retry timer can fire while a previous initialize is
     // still in flight — never run two at once or Chrome instances pile up.
-    if (this.initializing) return;
+    if (this.initializing) return this.initPromise ?? Promise.resolve();
     this.initializing = true;
-    try {
-      await this.doInitialize();
-    } finally {
+    this.initPromise = this.doInitialize().finally(() => {
       this.initializing = false;
-    }
+      this.initPromise = null;
+    });
+    return this.initPromise;
+  }
+
+  /** Schedules a reconnect attempt unless the app is shutting down. Shared by
+   * every failure path (disconnected event, launch failure, init rejection)
+   * so none of them silently strand the service for the rest of the day. */
+  private scheduleReconnect() {
+    if (this.shuttingDown) return;
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = setTimeout(() => this.initialize(), 5000);
   }
 
   private async doInitialize() {
+    if (this.shuttingDown) return;
     if (this.client) {
-      await this.client.destroy().catch((err: unknown) => {
+      await withTimeout(this.client.destroy(), 10_000).catch((err: unknown) => {
         console.error('Failed to destroy previous WhatsApp client:', err);
       });
       this.client = null;
     }
     if (this.browser) {
-      await this.browser.close().catch((err: unknown) => {
+      await withTimeout(this.browser.close(), 10_000).catch((err: unknown) => {
         console.error('Failed to close previous WhatsApp browser:', err);
       });
       this.browser = null;
@@ -93,6 +126,9 @@ export class WhatsAppService {
     if (!browserPath) {
       console.error('No Chromium browser found for WhatsApp (Chrome/Edge not installed?)');
       this.status = 'DISCONNECTED';
+      // Chrome/Edge could be installed later, or CHROME_PATH fixed — keep
+      // trying rather than stranding the service for the rest of the day.
+      this.scheduleReconnect();
       return;
     }
 
@@ -101,13 +137,18 @@ export class WhatsAppService {
       const browser = await puppeteer.launch({
         headless: true,
         executablePath: browserPath,
-        args: ['--no-sandbox', '--disable-setuid-sandbox'],
+        // No --no-sandbox: this Chrome instance renders live WhatsApp Web
+        // content (messages/media from arbitrary contacts) — keep the OS
+        // sandbox so a renderer exploit doesn't get direct host access.
+        // --disable-setuid-sandbox was a Linux-only flag anyway; this app
+        // only ships on Windows.
       });
       this.browser = browser;
       browserWSEndpoint = browser.wsEndpoint();
     } catch (err) {
       console.error('Failed to launch stealth-patched Chrome for WhatsApp:', err);
       this.status = 'DISCONNECTED';
+      this.scheduleReconnect();
       return;
     }
 
@@ -162,12 +203,21 @@ export class WhatsAppService {
       this.status = 'DISCONNECTED';
       this.qrCodeData = null;
       console.warn('WhatsApp client disconnected. Retrying initialization...');
-      setTimeout(() => this.initialize(), 5000);
+      // (scheduleReconnect() itself no-ops while shuttingDown — see its
+      // comment: a reconnect that starts writing fresh session files right
+      // as the process is killed can corrupt the LocalAuth session, forcing
+      // an unwanted re-scan of the QR code next launch even though nothing
+      // ever called logout().)
+      this.scheduleReconnect();
     });
 
     this.client.initialize().catch((err) => {
       console.error('Failed to initialize WhatsApp client:', err);
       this.status = 'DISCONNECTED';
+      // whatsapp-web.js quirks (slow first load, a stuck page) can reject
+      // here without ever emitting 'disconnected' — without this, that one
+      // rejection permanently strands the service.
+      this.scheduleReconnect();
     });
   }
 
@@ -180,12 +230,24 @@ export class WhatsAppService {
 
   /** Tear down the client and its Chrome process (called on server shutdown). */
   async shutdown(): Promise<void> {
+    this.shuttingDown = true;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    // Let any in-flight initialize() finish assigning this.client/this.browser
+    // before we tear them down, so a browser it just launched can't outlive
+    // this call (doInitialize() itself no-ops further work once shuttingDown
+    // is set, so this just waits out the launch already in progress).
+    if (this.initPromise) {
+      await this.initPromise.catch(() => {});
+    }
     if (this.client) {
-      await this.client.destroy().catch(() => {});
+      await withTimeout(this.client.destroy(), 8_000).catch(() => {});
       this.client = null;
     }
     if (this.browser) {
-      await this.browser.close().catch(() => {});
+      await withTimeout(this.browser.close(), 8_000).catch(() => {});
       this.browser = null;
     }
     this.status = 'DISCONNECTED';
@@ -205,10 +267,15 @@ export class WhatsAppService {
     const recipient = cleaned.length === 10 ? `91${cleaned}@c.us` : `${cleaned}@c.us`;
 
     const media = new MessageMedia('application/pdf', pdfBase64, fileName);
-    await this.client.sendMessage(recipient, media, {
-      caption:
-        caption ??
-        `Your invoice ${fileName.replace('.pdf', '')} from The Maestro Studio's. Thank you!`,
-    });
+    // A stuck Chrome page (network drop, WhatsApp Web hang) would otherwise
+    // leave this — and the frontend's "sending" spinner — hanging forever.
+    await withTimeout(
+      this.client.sendMessage(recipient, media, {
+        caption:
+          caption ??
+          `Your invoice ${fileName.replace('.pdf', '')} from The Maestro Studio's. Thank you!`,
+      }),
+      45_000,
+    );
   }
 }

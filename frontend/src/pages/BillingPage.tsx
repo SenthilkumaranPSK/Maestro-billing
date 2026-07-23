@@ -7,16 +7,20 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { CustomerBar, type CustomerInfo } from '@/components/billing/CustomerBar';
 import { LineItemRow } from '@/components/billing/LineItemRow';
-import { ThermalPreviewModal } from '@/components/billing/ThermalPreviewModal';
+import { LayoutToggle, type BillLayout } from '@/components/billing/LayoutToggle';
+import { GstModeToggle } from '@/components/billing/GstModeToggle';
+import { ServiceDescriptionInput } from '@/components/billing/ServiceDescriptionInput';
 import { billsApi } from '@/api/bills';
 import { settingsApi } from '@/api/settings';
 import { customersApi } from '@/api/customers';
 import { printerApi } from '@/api/printer';
 // pdf-lib is heavy (~400KB) — loaded on demand so the app starts fast.
 const loadPdfLib = () => import('@/lib/pdf');
+const loadA4Lib = () => import('@/lib/a4invoice');
 import { whatsappApi } from '@/api/whatsapp';
 import { useToast } from '@/hooks/use-toast';
 import { isValidIndianPhone } from '@/lib/utils';
+import { computeLineTotals } from '@/lib/billMath';
 import type { BillItemForm, Bill, Settings } from '@/types';
 import { rupeeToPaisa, paisaToRupee, formatCurrency } from '@/types';
 
@@ -41,9 +45,12 @@ async function sendBillViaWhatsApp(
   bill: Bill,
   phone: string,
   settings: Partial<Settings>,
+  layout: BillLayout,
 ): Promise<void> {
-  const { generateBillPDFBase64 } = await loadPdfLib();
-  const pdfBase64 = await generateBillPDFBase64(bill, settings);
+  const pdfBase64 =
+    layout === 'a4'
+      ? await (await loadA4Lib()).generateA4InvoicePDFBase64(bill, settings)
+      : await (await loadPdfLib()).generateBillPDFBase64(bill, settings);
   await whatsappApi.sendPdf({
     phone,
     pdfBase64,
@@ -90,7 +97,16 @@ export default function BillingPage() {
   const [sendOnWhatsApp, setSendOnWhatsApp] = useState(false);
   const [items, setItems] = useState<BillItemForm[]>([newEmptyItem()]);
   const [savedBill, setSavedBill] = useState<Bill | null>(null);
-  const [showThermal, setShowThermal] = useState(false);
+  // Which printed layout Print/PDF/WhatsApp use — thermal receipt (default)
+  // or the full-page A4 "Service Bill" invoice.
+  const [layout, setLayout] = useState<BillLayout>('thermal');
+  // A4-only fields — optional, shown collapsed since most bills never need
+  // them (per-unit retail sales rather than a dated service engagement).
+  const [serviceDescription, setServiceDescription] = useState('');
+  const [serviceFrom, setServiceFrom] = useState('');
+  const [serviceTo, setServiceTo] = useState('');
+  // Whole-bill GST pricing mode — see components/billing/GstModeToggle.
+  const [gstInclusive, setGstInclusive] = useState(false);
 
   const { data: nextNumber } = useQuery({
     queryKey: ['bills', 'next-number'],
@@ -113,13 +129,10 @@ export default function BillingPage() {
   });
 
   // Live totals — integer paise, computed over exactly the rows that will be
-  // saved and with the backend's per-item rounding (Math.round subtotal, then
-  // Math.round GST on it), so the displayed figures always match the stored bill.
+  // saved and with the backend's per-item rounding (see lib/billMath), so the
+  // displayed figures always match the stored bill.
   const countedItems = items.filter((i) => i.productName.trim() && i.qty > 0);
-  const subTotalP = countedItems.reduce(
-    (s, i) => s + Math.round(i.qty * rupeeToPaisa(i.unitPrice)), 0);
-  const gstTotalP = countedItems.reduce(
-    (s, i) => s + Math.round((Math.round(i.qty * rupeeToPaisa(i.unitPrice)) * i.gstRate) / 100), 0);
+  const { subTotalP, gstTotalP } = computeLineTotals(countedItems, gstInclusive);
   // Effective half-rate for label — null when items have mixed GST rates
   const _activeRates = [...new Set(countedItems.filter(i => i.gstRate > 0).map(i => i.gstRate))];
   const gstHalfRate  = _activeRates.length === 1 ? _activeRates[0] / 2 : null;
@@ -144,7 +157,7 @@ export default function BillingPage() {
         } else {
           setSendingWhatsApp(true);
           try {
-            await sendBillViaWhatsApp(bill, customer.phone.trim(), settings ?? {});
+            await sendBillViaWhatsApp(bill, customer.phone.trim(), settings ?? {}, layout);
             toast({
               title: 'Sent on WhatsApp!',
               description: `Invoice ${bill.billNumber}.pdf delivered to ${customer.phone}.`,
@@ -226,12 +239,21 @@ export default function BillingPage() {
       items: validItems.map((i) => ({
         productId: i.productId,
         productName: i.productName,
+        hsnSac: i.hsnSac,
         unit: i.unit,
         qty: i.qty,
         unitPrice: rupeeToPaisa(i.unitPrice),
         gstRate: i.gstRate,
       })),
       roundOffAmount: roundOffP,
+      // Not gated on `layout` — that toggle only controls which fields are
+      // shown/editable in the form. Submitting must reflect whatever's
+      // actually in state, or switching back to Thermal right before Save
+      // would silently wipe out Service Details the operator already typed.
+      serviceDescription: serviceDescription.trim() || undefined,
+      serviceFrom: serviceFrom || undefined,
+      serviceTo: serviceTo || undefined,
+      gstInclusive,
     });
   };
 
@@ -260,7 +282,7 @@ export default function BillingPage() {
     }
     setSendingWhatsApp(true);
     try {
-      await sendBillViaWhatsApp(savedBill, customer.phone.trim(), settings ?? {});
+      await sendBillViaWhatsApp(savedBill, customer.phone.trim(), settings ?? {}, layout);
       toast({
         title: 'Sent on WhatsApp!',
         description: `Invoice ${savedBill.billNumber}.pdf delivered to ${customer.phone}.`,
@@ -275,6 +297,28 @@ export default function BillingPage() {
       });
     } finally {
       setSendingWhatsApp(false);
+    }
+  };
+
+  const handlePrint = async () => {
+    if (!savedBill) return;
+    if (layout === 'a4') {
+      const { printA4InvoicePDF } = await loadA4Lib();
+      await printA4InvoicePDF(savedBill, settings ?? {});
+    } else {
+      const { printBillPDF } = await loadPdfLib();
+      await printBillPDF(savedBill, settings ?? {});
+    }
+  };
+
+  const handleDownloadPdf = async () => {
+    if (!savedBill) return;
+    if (layout === 'a4') {
+      const { downloadA4InvoicePDF } = await loadA4Lib();
+      await downloadA4InvoicePDF(savedBill, settings ?? {});
+    } else {
+      const { downloadBillPDF } = await loadPdfLib();
+      await downloadBillPDF(savedBill, settings ?? {});
     }
   };
 
@@ -301,6 +345,11 @@ export default function BillingPage() {
     setItems([newEmptyItem()]);
     setSendOnWhatsApp(false);
     setSavedBill(null);
+    setLayout('thermal');
+    setServiceDescription('');
+    setServiceFrom('');
+    setServiceTo('');
+    setGstInclusive(false);
     qc.invalidateQueries({ queryKey: ['bills', 'next-number'] });
     qc.refetchQueries({ queryKey: ['bills', 'next-number'] });
   };
@@ -347,18 +396,19 @@ export default function BillingPage() {
           </div>
         </div>
 
-        <div className="flex gap-2">
+        <div className="flex gap-2 items-center">
+          <LayoutToggle value={layout} onChange={setLayout} />
           <Button variant="outline" size="sm" onClick={handleReset}>
             <RotateCcw className="w-3.5 h-3.5 mr-1.5" />
             New Bill
           </Button>
           {savedBill ? (
             <>
-              <Button variant="outline" size="sm" onClick={() => setShowThermal(true)}>
+              <Button variant="outline" size="sm" onClick={handlePrint}>
                 <Printer className="w-3.5 h-3.5 mr-1.5" />
-                Thermal
+                Print
               </Button>
-              <Button variant="outline" size="sm" onClick={async () => savedBill && (await loadPdfLib()).downloadBillPDF(savedBill, settings ?? {} as never)}>
+              <Button variant="outline" size="sm" onClick={handleDownloadPdf}>
                 <FileText className="w-3.5 h-3.5 mr-1.5" />
                 PDF
               </Button>
@@ -401,6 +451,36 @@ export default function BillingPage() {
         </CardContent>
       </Card>
 
+      {/* ── Service Details — shown only in A4 mode, since this info only
+             appears on the A4 invoice layout ────────────────────────────── */}
+      {layout === 'a4' && (
+      <Card className="border-slate-200 animate-in fade-in slide-in-from-top-1 duration-200">
+        <CardContent className="pt-3 pb-3">
+          <p className="text-xs font-medium text-slate-500 uppercase tracking-wide mb-2">
+            Service Details <span className="normal-case font-normal text-muted-foreground">(optional — A4 invoice only)</span>
+          </p>
+            <div className="grid grid-cols-12 gap-3">
+              <div className="col-span-6">
+                <Label className="text-xs text-muted-foreground mb-1.5 block">Service Description</Label>
+                <ServiceDescriptionInput
+                  value={serviceDescription}
+                  disabled={!!savedBill}
+                  onChange={setServiceDescription}
+                />
+              </div>
+              <div className="col-span-3">
+                <Label className="text-xs text-muted-foreground mb-1.5 block">Service From</Label>
+                <Input type="date" value={serviceFrom} disabled={!!savedBill} onChange={(e) => setServiceFrom(e.target.value)} />
+              </div>
+              <div className="col-span-3">
+                <Label className="text-xs text-muted-foreground mb-1.5 block">Service To</Label>
+                <Input type="date" value={serviceTo} disabled={!!savedBill} onChange={(e) => setServiceTo(e.target.value)} />
+              </div>
+            </div>
+        </CardContent>
+      </Card>
+      )}
+
       {/* ── Items table + Summary ────────────────────────────────── */}
       <div className="grid grid-cols-12 gap-4">
 
@@ -410,14 +490,17 @@ export default function BillingPage() {
             <CardHeader className="pb-3 flex flex-row items-center justify-between">
               <CardTitle className="text-sm">Bill Items</CardTitle>
               {!savedBill && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setItems((prev) => [...prev, newEmptyItem()])}
-                >
-                  <Plus className="w-4 h-4 mr-1" />
-                  Add Item
-                </Button>
+                <div className="flex items-center gap-2">
+                  <GstModeToggle value={gstInclusive} onChange={setGstInclusive} />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setItems((prev) => [...prev, newEmptyItem()])}
+                  >
+                    <Plus className="w-4 h-4 mr-1" />
+                    Add Item
+                  </Button>
+                </div>
               )}
             </CardHeader>
             <CardContent className="p-0 overflow-visible">
@@ -430,6 +513,9 @@ export default function BillingPage() {
                       <th className="text-right py-2 px-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground w-16">Qty</th>
                       <th className="text-right py-2 px-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground w-24">Price (₹)</th>
                       <th className="text-right py-2 px-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground w-16">GST %</th>
+                      {layout === 'a4' && (
+                        <th className="text-left py-2 px-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground w-24">HSN/SAC</th>
+                      )}
                       <th className="text-right py-2 px-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground w-24">Amount</th>
                       {!savedBill && <th className="w-8" />}
                     </tr>
@@ -440,6 +526,7 @@ export default function BillingPage() {
                         key={item._id}
                         index={idx}
                         item={item}
+                        showHsnSac={layout === 'a4'}
                         onChange={(updated) =>
                           setItems((prev) => prev.map((i, j) => (j === idx ? updated : i)))
                         }
@@ -536,14 +623,14 @@ export default function BillingPage() {
 
           {savedBill && (
             <div className="space-y-2 animate-in fade-in slide-in-from-bottom-2 duration-300">
-              <Button variant="outline" className="w-full" onClick={() => setShowThermal(true)}>
+              <Button variant="outline" className="w-full" onClick={handlePrint}>
                 <Printer className="w-4 h-4 mr-2" />
-                Print Receipt
+                Print
               </Button>
               <Button
                 variant="outline"
                 className="w-full"
-                onClick={async () => (await loadPdfLib()).downloadBillPDF(savedBill, settings ?? {} as never)}
+                onClick={handleDownloadPdf}
               >
                 <FileText className="w-4 h-4 mr-2" />
                 Download PDF
@@ -562,14 +649,6 @@ export default function BillingPage() {
           )}
         </div>
       </div>
-
-      {showThermal && savedBill && (
-        <ThermalPreviewModal
-          bill={savedBill}
-          settings={settings ?? {}}
-          onClose={() => setShowThermal(false)}
-        />
-      )}
     </div>
   );
 }

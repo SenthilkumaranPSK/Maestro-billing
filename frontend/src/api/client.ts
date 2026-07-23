@@ -2,7 +2,10 @@ import axios, { AxiosError } from 'axios';
 
 export const api = axios.create({
   baseURL: '/api/v1',
-  headers: { 'Content-Type': 'application/json' },
+  // A custom header forces the browser to preflight every request — closes
+  // off a background webpage silently POSTing to body-less endpoints like
+  // /backups or /reports/generate (see backend/src/middleware/requireAppHeader.ts).
+  headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'maestro-billing-app' },
   // Generous because a WhatsApp PDF send can take 20–30s through the backend,
   // but finite so a hung request never leaves a spinner stuck forever.
   timeout: 60_000,

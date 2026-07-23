@@ -8,6 +8,7 @@ export interface CreateBillPayload {
   items: Array<{
     productId?: number;
     productName: string;
+    hsnSac?: string;
     unit: string;
     qty: number;
     unitPrice: number; // paise
@@ -16,6 +17,11 @@ export interface CreateBillPayload {
   notes?: string;
   discountAmount?: number; // paise
   roundOffAmount?: number; // paise
+  // A4 "Service Bill" layout only — see backend schema.prisma Bill model.
+  serviceDescription?: string;
+  serviceFrom?: string;
+  serviceTo?: string;
+  gstInclusive?: boolean;
 }
 
 export const billsApi = {

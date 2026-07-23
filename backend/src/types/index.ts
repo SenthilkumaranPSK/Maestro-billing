@@ -6,6 +6,7 @@ export interface PaginationQuery {
 export interface BillItemInput {
   productId?: number;
   productName: string;
+  hsnSac?: string | null;
   unit: string;
   qty: number;
   unitPrice: number; // in paise
@@ -20,6 +21,12 @@ export interface CreateBillInput {
   notes?: string;
   discountAmount?: number; // in paise
   roundOffAmount?: number; // in paise (positive = round up, negative = round down)
+  // A4 "Service Bill" layout only — see Bill.serviceDescription in schema.prisma
+  serviceDescription?: string;
+  serviceFrom?: string;
+  serviceTo?: string;
+  // See Bill.gstInclusive in schema.prisma
+  gstInclusive?: boolean;
 }
 
 export interface SettingInput {

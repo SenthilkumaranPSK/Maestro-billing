@@ -29,7 +29,22 @@ export class BillService {
     return `${prefix}-${year}-${String(seq).padStart(4, '0')}`;
   }
 
-  computeItemTotals(items: BillItemInput[]): {
+  /**
+   * gstInclusive=false (default, unchanged behaviour): unitPrice is the
+   * pre-tax base — GST is computed and added on top, so the customer pays
+   * qty * unitPrice * (1 + gstRate/100).
+   *
+   * gstInclusive=true: unitPrice is the all-in sticker price the customer
+   * actually pays — GST is extracted from within it instead of added on top,
+   * so the customer pays exactly qty * unitPrice either way. Either mode
+   * still populates subTotal/gstAmount/totalAmount the same way (a taxable
+   * base + a GST amount), so every existing report/GST filing keeps working
+   * unchanged — only how that split was derived differs.
+   */
+  computeItemTotals(
+    items: BillItemInput[],
+    gstInclusive = false,
+  ): {
     items: Array<BillItemInput & { gstAmount: number; totalAmount: number }>;
     subTotal: number;
     totalGst: number;
@@ -39,9 +54,20 @@ export class BillService {
     let totalGst = 0;
 
     const computed = items.map((item) => {
-      const itemSubTotal = Math.round(item.qty * item.unitPrice);
-      const gstAmount = Math.round((itemSubTotal * item.gstRate) / 100);
-      const totalAmount = itemSubTotal + gstAmount;
+      const enteredTotal = Math.round(item.qty * item.unitPrice);
+      let itemSubTotal: number;
+      let gstAmount: number;
+      let totalAmount: number;
+
+      if (gstInclusive && item.gstRate > 0) {
+        totalAmount = enteredTotal;
+        itemSubTotal = Math.round((enteredTotal * 100) / (100 + item.gstRate));
+        gstAmount = totalAmount - itemSubTotal;
+      } else {
+        itemSubTotal = enteredTotal;
+        gstAmount = Math.round((itemSubTotal * item.gstRate) / 100);
+        totalAmount = itemSubTotal + gstAmount;
+      }
 
       subTotal += itemSubTotal;
       totalGst += gstAmount;
@@ -54,7 +80,7 @@ export class BillService {
 
   async createBill(input: CreateBillInput) {
     const { items: computedItems, subTotal, totalGst, grandTotal } =
-      this.computeItemTotals(input.items);
+      this.computeItemTotals(input.items, input.gstInclusive ?? false);
 
     const discountAmount = input.discountAmount ?? 0;
     const roundOffAmount = input.roundOffAmount ?? 0;
@@ -85,10 +111,15 @@ export class BillService {
             grandTotal: finalTotal,
             status: 'PAID',
             notes: input.notes,
+            serviceDescription: input.serviceDescription,
+            serviceFrom: input.serviceFrom ? new Date(input.serviceFrom) : null,
+            serviceTo: input.serviceTo ? new Date(input.serviceTo) : null,
+            gstInclusive: input.gstInclusive ?? false,
             items: {
               create: computedItems.map((item) => ({
                 productId: item.productId,
                 productName: item.productName,
+                hsnSac: item.hsnSac,
                 unit: item.unit,
                 qty: item.qty,
                 unitPrice: item.unitPrice,
@@ -113,7 +144,8 @@ export class BillService {
     if (!existing) throw new Error('Bill not found');
     if (existing.status === 'CANCELLED') throw new Error('Cancelled bills cannot be edited');
 
-    const { items: computedItems, subTotal, totalGst, grandTotal } = this.computeItemTotals(input.items);
+    const { items: computedItems, subTotal, totalGst, grandTotal } =
+      this.computeItemTotals(input.items, input.gstInclusive ?? false);
     const discountAmount = input.discountAmount ?? 0;
     const roundOffAmount = input.roundOffAmount ?? 0;
     const finalTotal = grandTotal - discountAmount + roundOffAmount;
@@ -140,10 +172,15 @@ export class BillService {
           status: 'PAID',
           paymentMode: null,
           notes: input.notes ?? null,
+          serviceDescription: input.serviceDescription ?? null,
+          serviceFrom: input.serviceFrom ? new Date(input.serviceFrom) : null,
+          serviceTo: input.serviceTo ? new Date(input.serviceTo) : null,
+          gstInclusive: input.gstInclusive ?? false,
           items: {
             create: computedItems.map((item) => ({
               productId: item.productId,
               productName: item.productName,
+              hsnSac: item.hsnSac,
               unit: item.unit,
               qty: item.qty,
               unitPrice: item.unitPrice,

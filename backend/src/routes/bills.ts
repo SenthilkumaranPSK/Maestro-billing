@@ -6,6 +6,7 @@ import {
   parseDateParam,
 } from '../utils/validators';
 import { BillService } from '../services/BillService';
+import { requireAppHeader } from '../middleware/requireAppHeader';
 
 export async function billRoutes(fastify: FastifyInstance) {
   const prisma = fastify.prisma;
@@ -82,29 +83,50 @@ export async function billRoutes(fastify: FastifyInstance) {
     return reply.send({ success: true, data: bill });
   });
 
-  fastify.post('/', async (request, reply) => {
+  fastify.post('/', { preHandler: requireAppHeader }, async (request, reply) => {
     const body = createBillSchema.parse(request.body);
     const bill = await billService.createBill(body);
 
-    await prisma.log.create({
-      data: {
-        action: 'CREATE',
-        entityType: 'bill',
-        entityId: bill.id,
-        newValue: JSON.stringify({ billNumber: bill.billNumber }),
-      },
-    });
+    // The bill is already committed at this point — a failure writing the
+    // audit log must never 500 the request (the operator would see "Error
+    // saving bill" for a bill that in fact saved fine, and the natural next
+    // action — clicking Save again — creates a genuine duplicate bill).
+    try {
+      await prisma.log.create({
+        data: {
+          action: 'CREATE',
+          entityType: 'bill',
+          entityId: bill.id,
+          newValue: JSON.stringify({ billNumber: bill.billNumber }),
+        },
+      });
+    } catch (err) {
+      fastify.log.error({ err, billId: bill.id }, 'Failed to write audit log for created bill');
+    }
 
     return reply.status(201).send({ success: true, data: bill });
   });
 
   // Full edit — replaces items, recalculates totals; any non-cancelled bill
-  fastify.put('/:id', async (request, reply) => {
+  fastify.put('/:id', { preHandler: requireAppHeader }, async (request, reply) => {
     const id = parseId((request.params as { id: string }).id);
     if (!id) return reply.status(400).send({ success: false, error: 'Invalid bill id' });
     const body = createBillSchema.parse(request.body);
+    let bill;
     try {
-      const bill = await billService.updateBill(id, body);
+      bill = await billService.updateBill(id, body);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Update failed';
+      if (msg.includes('Cancelled') || msg.includes('not found') || msg.includes('total of 0')) {
+        return reply.status(400).send({ success: false, error: msg });
+      }
+      throw err;
+    }
+
+    // Same reasoning as bill creation: the update already committed, so a
+    // log-write failure here must not turn into a 500 that looks like the
+    // save itself failed.
+    try {
       await prisma.log.create({
         data: {
           action: 'UPDATE',
@@ -113,17 +135,14 @@ export async function billRoutes(fastify: FastifyInstance) {
           newValue: JSON.stringify({ billNumber: bill.billNumber }),
         },
       });
-      return reply.send({ success: true, data: bill });
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Update failed';
-      if (msg.includes('Cancelled') || msg.includes('not found') || msg.includes('total of 0')) {
-        return reply.status(400).send({ success: false, error: msg });
-      }
-      throw err;
+    } catch (err) {
+      fastify.log.error({ err, billId: bill.id }, 'Failed to write audit log for updated bill');
     }
+
+    return reply.send({ success: true, data: bill });
   });
 
-  fastify.delete('/:id', async (request, reply) => {
+  fastify.delete('/:id', { preHandler: requireAppHeader }, async (request, reply) => {
     const id = parseId((request.params as { id: string }).id);
     if (!id) return reply.status(400).send({ success: false, error: 'Invalid bill id' });
 
@@ -134,13 +153,17 @@ export async function billRoutes(fastify: FastifyInstance) {
       data: { status: 'CANCELLED' },
     });
 
-    await prisma.log.create({
-      data: {
-        action: 'DELETE',
-        entityType: 'bill',
-        entityId: id,
-      },
-    });
+    try {
+      await prisma.log.create({
+        data: {
+          action: 'DELETE',
+          entityType: 'bill',
+          entityId: id,
+        },
+      });
+    } catch (err) {
+      fastify.log.error({ err, billId: id }, 'Failed to write audit log for cancelled bill');
+    }
 
     return reply.send({ success: true });
   });

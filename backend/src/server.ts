@@ -9,14 +9,17 @@ import { PrismaClient } from '@prisma/client';
 
 import { customerRoutes } from './routes/customers';
 import { productRoutes } from './routes/products';
+import { serviceRoutes } from './routes/services';
 import { billRoutes } from './routes/bills';
 import { settingsRoutes } from './routes/settings';
 import { whatsappRoutes } from './routes/whatsapp';
 import { backupRoutes } from './routes/backups';
 import { printerRoutes } from './routes/printer';
+import { reportRoutes } from './routes/reports';
 import { errorHandler } from './middleware/errorHandler';
 import { WhatsAppService } from './services/WhatsAppService';
 import { BackupService } from './services/BackupService';
+import { ReportService, previousMonthYm } from './services/ReportService';
 
 const prisma = new PrismaClient();
 const whatsapp = new WhatsAppService();
@@ -61,18 +64,36 @@ async function main() {
     origin: corsOrigins,
     credentials: true,
   });
-  await app.register(helmet, { contentSecurityPolicy: false });
+  // script-src 'self' is the meaningful backstop (blocks any injected/inline
+  // <script>, the actual XSS-relevant vector); style-src stays permissive
+  // because the app's own components render via inline style attributes —
+  // tightening that would need a much larger refactor for little extra gain
+  // here (no user-controlled HTML is ever injected as a style value).
+  await app.register(helmet, {
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'"],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        imgSrc: ["'self'", 'data:'],
+        connectSrc: ["'self'"],
+        objectSrc: ["'none'"],
+      },
+    },
+  });
 
   app.setErrorHandler(errorHandler);
 
   // ── Routes ───────────────────────────────────────────────────────────────
   await app.register(customerRoutes, { prefix: '/api/v1/customers' });
   await app.register(productRoutes,  { prefix: '/api/v1/products'  });
+  await app.register(serviceRoutes,  { prefix: '/api/v1/services'  });
   await app.register(billRoutes,     { prefix: '/api/v1/bills'     });
   await app.register(settingsRoutes, { prefix: '/api/v1/settings'  });
   await app.register(whatsappRoutes, { prefix: '/api/v1/whatsapp'  });
   await app.register(backupRoutes,   { prefix: '/api/v1/backups'   });
   await app.register(printerRoutes,  { prefix: '/api/v1/printer'   });
+  await app.register(reportRoutes,   { prefix: '/api/v1/reports'   });
 
   // ── Static frontend (single-process mode) ────────────────────────────────
   // When a built frontend exists (production / desktop app), serve it from
@@ -170,10 +191,40 @@ async function main() {
   };
   void autoBackup();
   setInterval(autoBackup, 24 * 60 * 60 * 1000).unref();
+
+  // ── Automatic monthly GST report ────────────────────────────────────────
+  // Once a calendar month has fully closed, generate its GST summary PDF
+  // unattended — the operator shouldn't have to remember to open the GST
+  // Report page and export it before filing. Checked on every boot and once
+  // a day, same cadence/idempotency pattern as auto-backup above: skip if
+  // that month's PDF already exists, generate if not.
+  const autoMonthlyReport = async () => {
+    try {
+      const svc = new ReportService(prisma);
+      const ym = previousMonthYm();
+      if (svc.hasReportFor(ym)) return;
+      const file = await svc.generateGstReportPdf(ym);
+      app.log.info(`Monthly GST report generated: ${file}`);
+    } catch (err) {
+      app.log.error({ err }, 'Automatic monthly report generation failed');
+    }
+  };
+  void autoMonthlyReport();
+  setInterval(autoMonthlyReport, 24 * 60 * 60 * 1000).unref();
 }
 
 main().catch((err) => {
   console.error(err);
+  // Running standalone (npm start / a CLI use) — exiting non-zero is the
+  // correct signal to whatever launched us. Running embedded in Electron's
+  // main process (desktop/main.js requires this module in-process, not as a
+  // child process), process.exit() here would kill the ENTIRE app instantly
+  // — before Electron's own waitForServer retry loop and "could not start"
+  // dialog (main.js) ever get a chance to run, so the app would just vanish
+  // with zero on-screen explanation (e.g. if the port is already bound by a
+  // stale process). Leave the process alive and let that existing dialog
+  // path handle it instead.
+  if (process.versions.electron) return;
   process.exit(1);
 });
 

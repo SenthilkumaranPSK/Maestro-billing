@@ -1,5 +1,5 @@
 import { useState, useEffect, useDeferredValue } from 'react';
-import { Search, FileText, Printer, Eye, Pencil, Ban, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Search, FileText, Eye, Pencil, Ban, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link, useLocation } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
@@ -15,10 +15,12 @@ import {
 } from '@/components/ui/select';
 import { BillDetailModal } from '@/components/billing/BillDetailModal';
 import { EditBillModal } from '@/components/billing/EditBillModal';
+import { LayoutToggle, type BillLayout } from '@/components/billing/LayoutToggle';
 import { billsApi } from '@/api/bills';
 import { settingsApi } from '@/api/settings';
 // pdf-lib is heavy (~400KB) — loaded on demand so the app starts fast.
 const loadPdfLib = () => import('@/lib/pdf');
+const loadA4Lib = () => import('@/lib/a4invoice');
 import { formatCurrency, billStatusVariant, type BillStatus, type Bill } from '@/types';
 import { formatDate } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
@@ -40,6 +42,8 @@ export default function HistoryPage() {
   const [page, setPage] = useState(1);
   const [selectedBill, setSelectedBill] = useState<Bill | null>(null);
   const [editingBill, setEditingBill] = useState<Bill | null>(null);
+  // Per-row Thermal/A4 choice for the row's own Download PDF icon.
+  const [rowLayout, setRowLayout] = useState<Record<number, BillLayout>>({});
   const LIMIT = 15;
 
   const { data, isLoading } = useQuery({
@@ -96,13 +100,13 @@ export default function HistoryPage() {
   const totalPages = Math.ceil((data?.meta.total ?? 0) / LIMIT);
 
   const handleDownloadPDF = async (bill: Bill) => {
-    const { downloadBillPDF } = await loadPdfLib();
-    await downloadBillPDF(bill, settings ?? {});
-  };
-
-  const handlePrint = async (bill: Bill) => {
-    const { printBillPDF } = await loadPdfLib();
-    await printBillPDF(bill, settings ?? {});
+    if ((rowLayout[bill.id] ?? 'thermal') === 'a4') {
+      const { downloadA4InvoicePDF } = await loadA4Lib();
+      await downloadA4InvoicePDF(bill, settings ?? {});
+    } else {
+      const { downloadBillPDF } = await loadPdfLib();
+      await downloadBillPDF(bill, settings ?? {});
+    }
   };
 
   return (
@@ -202,7 +206,7 @@ export default function HistoryPage() {
                       </Badge>
                     </td>
                     <td className="py-3 px-4">
-                      <div className="flex gap-1">
+                      <div className="flex gap-1 items-center">
                         <Button variant="ghost" size="icon" className="h-7 w-7" title="View" onClick={() => setSelectedBill(bill)}>
                           <Eye className="h-3.5 w-3.5" />
                         </Button>
@@ -211,6 +215,11 @@ export default function HistoryPage() {
                             <Pencil className="h-3.5 w-3.5" />
                           </Button>
                         )}
+                        <LayoutToggle
+                          compact
+                          value={rowLayout[bill.id] ?? 'thermal'}
+                          onChange={(v) => setRowLayout((prev) => ({ ...prev, [bill.id]: v }))}
+                        />
                         <Button variant="ghost" size="icon" className="h-7 w-7" title="Download PDF" onClick={() => handleDownloadPDF(bill)}>
                           <FileText className="h-3.5 w-3.5" />
                         </Button>
@@ -258,7 +267,6 @@ export default function HistoryPage() {
           bill={selectedBill}
           settings={settings ?? {}}
           onClose={() => setSelectedBill(null)}
-          onDownload={() => handleDownloadPDF(selectedBill)}
           onEdit={selectedBill.status !== 'CANCELLED' ? () => { setEditingBill(selectedBill); setSelectedBill(null); } : undefined}
         />
       )}

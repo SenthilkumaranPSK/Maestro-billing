@@ -20,4 +20,12 @@ export const backupsApi = {
     api.post(`/backups/${encodeURIComponent(fileName)}/restore`, {}, {
       headers: { 'X-Confirm-Restore': 'yes' },
     }),
+
+  // A plain navigation (not an axios/XHR request) so the browser/Electron
+  // treats the response's Content-Disposition: attachment as a download —
+  // in the desktop app this triggers the native Save As dialog (see
+  // desktop/main.js), letting the operator choose where the copy goes.
+  download: (fileName: string) => {
+    window.location.href = `/api/v1/backups/${encodeURIComponent(fileName)}/download`;
+  },
 };

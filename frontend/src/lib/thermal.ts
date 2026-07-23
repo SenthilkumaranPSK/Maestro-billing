@@ -6,8 +6,6 @@ export interface ThermalPreviewLine {
   bold?: boolean;
   center?: boolean;
   separator?: boolean;
-  /** Rendered one size smaller (studio address/phone/GSTIN header block). */
-  small?: boolean;
 }
 
 /**
@@ -80,6 +78,37 @@ function rpad(left: string, right: string, charWidth: number): string {
 }
 
 /**
+ * Three-column row: `left` at the start, `right` right-aligned at the end,
+ * `mid` squeezed into the gap between them (used only for the Sub Total row's
+ * total-quantity figure). Silently drops `mid` if there isn't room for all
+ * three on narrow (58mm) paper — `left`/`right` still always fit.
+ */
+function rpad3(left: string, mid: string, right: string, charWidth: number): string {
+  const chars = new Array(charWidth).fill(' ');
+  const place = (s: string, start: number) => {
+    for (let i = 0; i < s.length && start + i < charWidth; i++) chars[start + i] = s[i];
+  };
+  place(left, 0);
+  const rightStart = Math.max(0, charWidth - right.length);
+  place(right, rightStart);
+  const midStart = rightStart - mid.length - 2;
+  if (midStart >= left.length + 1) place(mid, midStart);
+  return chars.join('');
+}
+
+/**
+ * Whole-rupee amounts print without decimals (e.g. "5,000"); anything with a
+ * paisa remainder always gets exactly 2 decimals, never a stray 1 decimal.
+ */
+function formatAmt(paise: number): string {
+  const hasFraction = Math.round(paise) % 100 !== 0;
+  return paisaToRupee(paise).toLocaleString('en-IN', {
+    minimumFractionDigits: hasFraction ? 2 : 0,
+    maximumFractionDigits: 2,
+  });
+}
+
+/**
  * Emit a `prefix`-prefixed multi-line value. The first chunk carries the prefix
  * (e.g. "Customer: …"); continuation chunks are emitted without the prefix so
  * the wrapped text aligns with the first chunk. The last chunk is right-padded
@@ -124,7 +153,8 @@ export function buildReceiptPreview(bill: Bill, settings: Partial<Settings>): Th
   const paperWidth = normalizePaperWidth(settings.printer?.thermal_paper_width);
   const charWidth = getCharWidth(paperWidth);
 
-  const line = '='.repeat(charWidth);
+  // Every rule on this layout is the same thin weight — no heavier "="
+  // divider anywhere, matching the reference template.
   const dline = '-'.repeat(charWidth);
 
   const billDate = new Date(bill.billDate).toLocaleDateString('en-IN', {
@@ -132,193 +162,113 @@ export function buildReceiptPreview(bill: Bill, settings: Partial<Settings>): Th
     month: '2-digit',
     year: 'numeric',
   });
-  const billTime = new Date(bill.billDate).toLocaleTimeString('en-IN', {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: true,
-  });
 
-  const lines: ThermalPreviewLine[] = [
-    { text: line, separator: true, center: true },
-  ];
+  const lines: ThermalPreviewLine[] = [];
 
-  // Proprietor name — sits right below the logo, above the address.
+  // Studio header — logo (PDF output only; ESC/POS is text-only, see pdf.ts),
+  // then owner name, address, mobile, GSTIN, all centered.
   if (studioOwner) {
-    lines.push({ text: studioOwner, center: true, bold: true, small: true });
+    lines.push({ text: studioOwner, center: true, bold: true });
   }
-
   if (studioAddress) {
     // "\n" in the setting forces a line break at that exact point (e.g. street
     // vs city/pincode); each resulting segment is still word-wrapped so it
     // never overflows narrow (58mm) paper.
     studioAddress.split('\n').forEach((paragraph) => {
       splitText(paragraph.trim(), charWidth).forEach((addrLine) => {
-        lines.push({ text: addrLine, center: true, small: true });
+        lines.push({ text: addrLine, center: true });
       });
     });
   }
-
   if (studioPhone) {
-    lines.push({ text: `Ph: ${studioPhone}`, center: true, small: true });
+    lines.push({ text: `Mobile : ${studioPhone}`, center: true });
   }
   if (studioGstin) {
-    lines.push({ text: `GSTIN: ${studioGstin}`, center: true, small: true });
+    lines.push({ text: `GSTIN : ${studioGstin}`, center: true });
   }
 
-  // Customer + Bill info as a two-column layout: customer name/phone on the
-  // left, bill number/date+time right-aligned on the same lines.
   lines.push(
-    { text: line, separator: true, center: true },
-    { text: rpad(`Name: ${bill.customer?.name ?? 'Walk-in'}`, `Bill: ${bill.billNumber}`, charWidth) },
-  );
-
-  const phoneLeft = bill.customer?.phone ? `Ph: ${bill.customer.phone}` : '';
-  const dateRight = `Dt: ${billDate} ${billTime}`;
-
-  if (phoneLeft.length + dateRight.length + 1 <= charWidth) {
-    lines.push({ text: rpad(phoneLeft, dateRight, charWidth) });
-  } else {
-    // Not enough room on this paper width to pair phone + date without
-    // rpad() truncating the phone number — a phone number must never be cut
-    // off, so fall back to stacking them on their own lines instead.
-    if (phoneLeft) lines.push({ text: phoneLeft });
-    lines.push({ text: rpad('', dateRight, charWidth) });
-  }
-  // Items header.
-  lines.push(
-    { text: line, separator: true, center: true },
-    { text: rpad('ITEM', 'AMOUNT', charWidth), bold: true },
+    { text: dline, separator: true, center: true },
+    { text: 'Tax Bill', center: true, bold: true },
     { text: dline, separator: true, center: true },
   );
 
-  // Per-item lines: wrap product name, right-align subtotal on the last name chunk,
-  // then a qty × price breakdown line (no amount — the incl.-GST figure here
-  // read like a duplicate), then a "+ GST @rate%:" line so the tax split stays
-  // auditable. Item subtotals + GST lines add up to the bill TOTAL.
-  bill.items.forEach((item, i) => {
-    const subtotal = paisaToRupee(item.qty * item.unitPrice).toFixed(2);
-    const unitPrice = paisaToRupee(item.unitPrice).toFixed(2);
-
-    // Line 1: "1. <product name chunks>                                  <subtotal>"
-    emitWrapped(lines, `${i + 1}. `, item.productName, charWidth, { right: subtotal });
-
-    // Line 2: "   <qty> x <unit price>"
-    lines.push({
-      text: `   ${item.qty} ${item.unit} x ${unitPrice}`,
-    });
-
-    // Line 3 (only when GST applies): explicit tax detail.
-    if (item.gstRate > 0) {
-      const gstAmt = paisaToRupee(item.gstAmount).toFixed(2);
-      lines.push({
-        text: rpad(`   + GST @${item.gstRate}%:`, `+${gstAmt}`, charWidth),
-      });
+  // Customer + bill info as a two-column layout: name/GSTIN on the left,
+  // bill date/number right-aligned on the same lines. A long name or GSTIN
+  // must never be truncated with ".." just to fit next to the date/number —
+  // fall back to stacking them on their own line instead when they don't fit.
+  const pairOrStack = (leftText: string, rightText: string) => {
+    if (leftText.length + rightText.length + 1 <= charWidth) {
+      lines.push({ text: rpad(leftText, rightText, charWidth) });
+    } else {
+      if (leftText) lines.push({ text: leftText });
+      lines.push({ text: rpad('', rightText, charWidth) });
     }
+  };
+
+  const custName = bill.customer?.name ?? 'Walk-in Customer';
+  pairOrStack(`Name : ${custName}`, `Bill Date : ${billDate}`);
+  pairOrStack(bill.customer?.gstin ? `Gstin : ${bill.customer.gstin}` : '', `Bill Num : ${bill.billNumber}`);
+
+  // Item table header.
+  lines.push(
+    { text: dline, separator: true, center: true },
+    { text: rpad('SN  Product', 'Amt', charWidth), bold: true },
+    { text: dline, separator: true, center: true },
+  );
+
+  // Per-item lines: "N  <product name>            <amount>" then a
+  // "qty x price" breakdown line. No per-item GST — the tax split lives only
+  // in the totals block below, matching the reference template.
+  bill.items.forEach((item, i) => {
+    const amt = formatAmt(item.qty * item.unitPrice);
+    emitWrapped(lines, `${i + 1}  `, item.productName, charWidth, { right: amt });
+    lines.push({ text: `   ${item.qty} ${item.unit} x Rs${formatAmt(item.unitPrice)}` });
   });
 
-  // Per-item lines already show the GST split, so the summary stays minimal:
-  // discount and round-off (when present) and the total.
+  lines.push({ text: dline, separator: true, center: true });
+
+  // GST-inclusive bills print as a single all-in figure — no Sub Total/CGST/
+  // SGST breakdown — same rule as the A4 invoice (see lib/a4invoice.ts).
+  if (!bill.gstInclusive) {
+    const totalQty = bill.items.reduce((s, i) => s + i.qty, 0);
+    lines.push({ text: rpad3('Sub Total', `${totalQty} No`, `Rs ${formatAmt(bill.subTotal)}`, charWidth) });
+
+    if (bill.gstAmount > 0) {
+      const gstRates = [...new Set(bill.items.filter((i) => i.gstRate > 0).map((i) => i.gstRate))];
+      const halfRate = gstRates.length === 1 ? gstRates[0]! / 2 : null;
+      const half = Math.floor(bill.gstAmount / 2);
+      lines.push({ text: rpad(halfRate !== null ? `CGST ${halfRate}%` : 'CGST', `Rs ${formatAmt(half)}`, charWidth) });
+      lines.push({ text: rpad(halfRate !== null ? `SGST ${halfRate}%` : 'SGST', `Rs ${formatAmt(bill.gstAmount - half)}`, charWidth) });
+    }
+  }
+
   if (bill.discountAmount > 0) {
-    lines.push({ text: dline, separator: true, center: true });
-    lines.push({
-      text: rpad('Discount:', `-${paisaToRupee(bill.discountAmount).toFixed(2)}`, charWidth),
-    });
+    lines.push({ text: rpad('Discount', `-Rs ${formatAmt(bill.discountAmount)}`, charWidth) });
   }
 
   // grandTotal includes the round-off; without this line the printed items
-  // wouldn't add up to the printed TOTAL. Derived (not a stored field on the
-  // API's Bill shape): items-incl-GST − discount vs grand total.
+  // wouldn't add up to the printed Grand Total. Derived (not a stored field
+  // on the API's Bill shape): items-incl-GST − discount vs grand total.
   const itemsTotal = bill.items.reduce((s, i) => s + i.totalAmount, 0);
   const roundOff = bill.grandTotal - (itemsTotal - bill.discountAmount);
   if (roundOff !== 0) {
-    if (bill.discountAmount <= 0) lines.push({ text: dline, separator: true, center: true });
     lines.push({
-      text: rpad('Round Off:', `${roundOff > 0 ? '+' : '-'}${paisaToRupee(Math.abs(roundOff)).toFixed(2)}`, charWidth),
+      text: rpad('Round Off', `${roundOff > 0 ? '+' : '-'}Rs ${formatAmt(Math.abs(roundOff))}`, charWidth),
     });
   }
 
-  lines.push({ text: line, separator: true, center: true });
-  lines.push({
-    text: rpad('TOTAL:', `Rs.${paisaToRupee(bill.grandTotal).toFixed(2)}`, charWidth),
-    bold: true,
-  });
-  lines.push({ text: line, separator: true, center: true });
+  lines.push({ text: dline, separator: true, center: true });
+  lines.push({ text: rpad('Grand Total', `Rs ${formatAmt(bill.grandTotal)}`, charWidth), bold: true });
+  if (bill.gstInclusive && bill.gstAmount > 0) {
+    lines.push({ text: '(Price incl. of GST)', center: true });
+  }
   lines.push({ text: footer, center: true, bold: true });
-  lines.push({ text: line, separator: true, center: true });
   lines.push({ text: '' });
   lines.push({ text: '' });
   lines.push({ text: '' });
 
   return lines;
-}
-
-export function buildReceiptPrintHtml(bill: Bill, settings: Partial<Settings>): string {
-  const lines = buildReceiptPreview(bill, settings);
-  const paperWidth = normalizePaperWidth(settings.printer?.thermal_paper_width);
-  const pageWidth = paperWidth === '58' ? '58mm' : '80mm';
-  // 9px is readable on both 58mm and 80mm at 12×24 dot density; 7px is too small.
-  const fontSize = '9px';
-
-  const body = lines
-    .map((line) => {
-      const styles: string[] = ['white-space: pre'];
-      if (line.center) styles.push('text-align: center');
-      if (line.bold) styles.push('font-weight: bold');
-      if (line.separator) styles.push('color: #94a3b8');
-      // Small lines are centered header text (address/phone/GSTIN), never
-      // rpad-aligned columns, so a different size can't break alignment.
-      if (line.small) styles.push('font-size: 8px');
-      // Trailing spaces on rpad'd lines are load-bearing — they push the right
-      // column to the exact char-width edge. We must use a non-breaking space
-      // (&#160;) at the end so the browser doesn't collapse trailing whitespace
-      // on lines that happen to end with one. For the empty separator lines we
-      // emit &#160; to keep the line box alive.
-      const needsNbsp = line.text.length > 0 && line.text.endsWith(' ') && !line.separator;
-      const content = line.text.length > 0
-        ? escapeHtml(line.text) + (needsNbsp ? '&#160;' : '')
-        : '&#160;';
-      return `<div style="${styles.join('; ')};">${content}</div>`;
-    })
-    .join('');
-
-  return `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>Receipt - ${escapeHtml(bill.billNumber)}</title>
-<style>
-  @page { size: ${pageWidth} auto; margin: 0; }
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body {
-    font-family: 'Courier New', 'Consolas', monospace;
-    font-size: ${fontSize};
-    line-height: 1.2;
-    /* No padding: thermal paper is exactly pageWidth wide, and the lines are
-       already pre-padded by rpad() to fill that width. Any padding would
-       shrink the body and clip the rightmost characters. */
-    width: ${pageWidth};
-    background: #fff;
-    color: #000;
-  }
-  @media print {
-    @page { margin: 0; }
-  }
-</style></head>
-<body>${body}
-<script>
-  // Auto-open the print dialog once the receipt has rendered, and close the
-  // popup after printing so the operator never has to touch this window.
-  window.onload = function () {
-    window.print();
-    window.onafterprint = function () { window.close(); };
-  };
-</script>
-</body></html>`;
-}
-
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
 }
 
 // ESC/POS byte commands

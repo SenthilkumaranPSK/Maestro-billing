@@ -14,7 +14,7 @@ import type { Product } from '@/types';
 
 const UNITS = ['piece', 'photo', 'album', 'set', 'frame', 'session', 'roll', 'print'];
 
-const EMPTY: Partial<Product> = { name: '', description: '', unit: 'piece', unitPrice: 0, gstRate: 18, isActive: true };
+const EMPTY: Partial<Product> = { name: '', description: '', unit: 'piece', unitPrice: 0, gstRate: 18, hsnSac: '', isActive: true };
 
 export default function ProductsPage() {
   const { toast } = useToast();
@@ -88,14 +88,14 @@ export default function ProductsPage() {
             <table className="w-full bg-white">
               <thead>
                 <tr className="border-b bg-slate-50/80">
-                  {['Product Name', 'Unit', 'Price', 'GST %', 'Status', 'Actions'].map((h) => (
+                  {['Product Name', 'Unit', 'Price', 'GST %', 'HSN/SAC', 'Status', 'Actions'].map((h) => (
                     <th key={h} className="text-left py-2.5 px-4 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {isLoading && <tr><td colSpan={6} className="py-10 text-center text-sm text-muted-foreground">Loading…</td></tr>}
-                {!isLoading && products?.length === 0 && <tr><td colSpan={6} className="py-10 text-center text-sm text-muted-foreground">No products found</td></tr>}
+                {isLoading && <tr><td colSpan={7} className="py-10 text-center text-sm text-muted-foreground">Loading…</td></tr>}
+                {!isLoading && products?.length === 0 && <tr><td colSpan={7} className="py-10 text-center text-sm text-muted-foreground">No products found</td></tr>}
                 {products?.map((p) => (
                   <tr key={p.id} className="border-b last:border-b-0 hover:bg-slate-50 transition-colors">
                     <td className="py-3 px-4">
@@ -105,6 +105,7 @@ export default function ProductsPage() {
                     <td className="py-3 px-4 text-sm text-muted-foreground">{p.unit}</td>
                     <td className="py-3 px-4 text-sm font-semibold tabular-nums">{formatCurrency(p.unitPrice)}</td>
                     <td className="py-3 px-4 text-sm">{p.gstRate}%</td>
+                    <td className="py-3 px-4 text-sm text-muted-foreground font-mono">{p.hsnSac ?? '—'}</td>
                     <td className="py-3 px-4">
                       <Badge variant={p.isActive ? 'success' : 'secondary'}>{p.isActive ? 'Active' : 'Inactive'}</Badge>
                     </td>
@@ -167,6 +168,14 @@ export default function ProductsPage() {
                     onChange={(e) => setEditing({ ...editing, gstRate: parseFloat(e.target.value) || 0 })}
                   />
                 </div>
+              </div>
+              <div className="space-y-1.5">
+                <Label>HSN / SAC Code</Label>
+                <Input
+                  placeholder="e.g. 998386 — printed on A4 invoices"
+                  value={editing.hsnSac ?? ''}
+                  onChange={(e) => setEditing({ ...editing, hsnSac: e.target.value })}
+                />
               </div>
               <div className="space-y-1.5">
                 <Label>Price (₹)</Label>

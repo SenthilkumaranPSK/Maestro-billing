@@ -1,6 +1,7 @@
 ﻿import { FastifyInstance } from 'fastify';
 import { settingSchema, bulkSettingsSchema } from '../utils/validators';
 import { BackupService, BackupError } from '../services/BackupService';
+import { requireAppHeader } from '../middleware/requireAppHeader';
 
 export async function settingsRoutes(fastify: FastifyInstance) {
   const prisma = fastify.prisma;
@@ -25,7 +26,7 @@ export async function settingsRoutes(fastify: FastifyInstance) {
     return reply.send({ success: true, data: grouped });
   });
 
-  fastify.put('/', async (request, reply) => {
+  fastify.put('/', { preHandler: requireAppHeader }, async (request, reply) => {
     const body = settingSchema.parse(request.body);
     const setting = await prisma.setting.upsert({
       where: { key: body.key },
@@ -36,7 +37,7 @@ export async function settingsRoutes(fastify: FastifyInstance) {
   });
 
   // Bulk update settings
-  fastify.put('/bulk', async (request, reply) => {
+  fastify.put('/bulk', { preHandler: requireAppHeader }, async (request, reply) => {
     const body = bulkSettingsSchema.parse(request.body);
     const updates = await Promise.all(
       body.map((s) =>
@@ -50,7 +51,7 @@ export async function settingsRoutes(fastify: FastifyInstance) {
     return reply.send({ success: true, data: updates });
   });
 
-  fastify.post('/backup', async (_request, reply) => {
+  fastify.post('/backup', { preHandler: requireAppHeader }, async (_request, reply) => {
     try {
       // Instantiated lazily — the constructor throws if the DB file is missing,
       // and doing that at route-registration time would crash the whole server.

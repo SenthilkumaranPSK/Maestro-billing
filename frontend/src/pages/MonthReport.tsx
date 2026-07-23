@@ -1,53 +1,45 @@
-import { useRef, useEffect } from 'react';
-import { Printer, Calendar, ArrowLeft } from 'lucide-react';
+import { useRef, useState } from 'react';
+import { Printer, ArrowLeft } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
-import { useSearchParams, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { billsApi } from '@/api/bills';
 import { formatCurrency } from '@/types';
-import { todayISO } from '@/lib/utils';
 
-export default function DayReportPage() {
+function currentMonth(): string {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function monthBounds(ym: string): { from: string; to: string } {
+  const [y, m] = ym.split('-').map(Number);
+  const lastDay = new Date(y!, m!, 0).getDate();
+  return {
+    from: `${ym}-01`,
+    to: `${ym}-${String(lastDay).padStart(2, '0')}`,
+  };
+}
+
+export default function MonthReportPage() {
   const navigate = useNavigate();
-  const [searchParams, setSearchParams] = useSearchParams();
-  // Persist the selected date in the URL (?date=YYYY-MM-DD) so a refresh or
-  // shared link keeps the same view. Default to today.
-  const dateParam = searchParams.get('date');
-  const isValid = !!dateParam && /^\d{4}-\d{2}-\d{2}$/.test(dateParam);
-  const date = isValid ? dateParam! : todayISO();
+  const [month, setMonth] = useState(currentMonth());
+  const { from, to } = monthBounds(month);
   const printRef = useRef<HTMLDivElement>(null);
 
-  // If the URL has no `?date=` or has an invalid one, replace the URL so
-  // the displayed date and the URL stay in sync (refresh / share works).
-  useEffect(() => {
-    if (!isValid) {
-      setSearchParams({}, { replace: true });
-    }
-  }, [isValid, setSearchParams]);
-
-  const setDate = (value: string) => {
-    if (value === todayISO()) {
-      // Keep the URL clean for the default view.
-      setSearchParams({});
-    } else {
-      setSearchParams({ date: value });
-    }
-  };
-
   const { data: billsData } = useQuery({
-    queryKey: ['bills', 'day', date],
-    queryFn: () => billsApi.list({ from: date, to: date, limit: 1000 }),
+    queryKey: ['bills', 'month-report', from, to],
+    queryFn: () => billsApi.list({ from, to, limit: 2000 }),
   });
 
-  // Cancelled bills are excluded from the day's revenue figures.
+  // Cancelled bills are excluded from the month's revenue figures.
   const bills = (billsData?.data ?? []).filter((b) => b.status !== 'CANCELLED');
   const totalRevenue = bills.reduce((s, b) => s + b.grandTotal, 0);
+  const totalGst = bills.reduce((s, b) => s + b.gstAmount, 0);
   const truncated = (billsData?.meta.total ?? 0) > (billsData?.data.length ?? 0);
 
-  const displayDate = new Date(date + 'T00:00:00').toLocaleDateString('en-IN', {
-    weekday: 'long', day: '2-digit', month: 'long', year: 'numeric',
+  const displayMonth = new Date(from + 'T00:00:00').toLocaleDateString('en-IN', {
+    month: 'long', year: 'numeric',
   });
 
   const handlePrint = () => {
@@ -63,20 +55,17 @@ export default function DayReportPage() {
             <ArrowLeft className="w-4 h-4" />
           </Button>
           <div>
-            <h2 className="text-lg font-semibold">Day Report</h2>
-            <p className="text-sm text-muted-foreground">End-of-day closing summary</p>
+            <h2 className="text-lg font-semibold">Month Report</h2>
+            <p className="text-sm text-muted-foreground">Monthly closing summary</p>
           </div>
         </div>
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2">
-            <Calendar className="w-4 h-4 text-muted-foreground" />
-            <Input
-              type="date"
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
-              className="w-40"
-            />
-          </div>
+          <input
+            type="month"
+            className="flex h-10 rounded-lg border border-input bg-background px-3 py-2 text-sm"
+            value={month}
+            onChange={(e) => e.target.value && setMonth(e.target.value)}
+          />
           <Button variant="outline" onClick={handlePrint}>
             <Printer className="w-4 h-4 mr-2" />
             Print
@@ -91,28 +80,34 @@ export default function DayReportPage() {
           <p className="font-bold text-lg">THE MAESTRO STUDIO'S</p>
           <p className="text-sm">Brindavan Road, Fairlands</p>
           <p className="text-sm">Salem - 636 016</p>
-          <p className="font-semibold mt-2">DAY CLOSING REPORT</p>
-          <p className="text-sm">{displayDate}</p>
+          <p className="font-semibold mt-2">MONTH CLOSING REPORT</p>
+          <p className="text-sm">{displayMonth}</p>
         </div>
 
-        {/* Date heading (screen) */}
+        {/* Month heading (screen) */}
         <div className="print:hidden">
-          <p className="text-base font-semibold text-slate-700">{displayDate}</p>
+          <p className="text-base font-semibold text-slate-700">{displayMonth}</p>
         </div>
 
         {truncated && (
           <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 no-print">
-            This day has {billsData!.meta.total} bills but only {billsData!.data.length} could be
+            This month has {billsData!.meta.total} bills but only {billsData!.data.length} could be
             loaded — the totals below are incomplete.
           </div>
         )}
 
         {/* Summary cards */}
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-3 gap-3">
           <Card>
             <CardContent className="pt-4 pb-4">
               <p className="text-xs text-muted-foreground uppercase tracking-wide">Total Bills</p>
               <p className="text-3xl font-bold mt-1">{bills.length}</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="pt-4 pb-4">
+              <p className="text-xs text-muted-foreground uppercase tracking-wide">Total GST</p>
+              <p className="text-2xl font-bold mt-1">{formatCurrency(totalGst)}</p>
             </CardContent>
           </Card>
           <Card className="border-brand-500/30">
@@ -130,7 +125,7 @@ export default function DayReportPage() {
           </CardHeader>
           <CardContent className="p-0">
             {bills.length === 0 ? (
-              <p className="text-center text-muted-foreground py-8 text-sm">No bills on this date.</p>
+              <p className="text-center text-muted-foreground py-8 text-sm">No bills this month.</p>
             ) : (
               <table className="w-full">
                 <thead>
@@ -157,7 +152,7 @@ export default function DayReportPage() {
         {/* Print footer */}
         <div className="hidden print:block text-center pt-4 border-t text-xs text-gray-500">
           <p>Generated on {new Date().toLocaleString('en-IN')}</p>
-          <p className="mt-1">The Maestro Studio's — Day Closing Report</p>
+          <p className="mt-1">The Maestro Studio's — Month Closing Report</p>
         </div>
       </div>
     </div>

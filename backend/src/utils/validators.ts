@@ -6,7 +6,14 @@ export const phoneSchema = z
   .string()
   .min(10, 'Valid phone required')
   .max(20, 'Phone too long')
-  .regex(/^[\d\s+\-()]+$/, 'Phone contains invalid characters');
+  .regex(/^[\d\s+\-()]+$/, 'Phone contains invalid characters')
+  // The length checks above cap the *string* (digits + formatting), so a
+  // no-formatting run of 16+ digits still slid through as "valid" — cap the
+  // actual digit count too, at the E.164 international max of 15.
+  .refine((v) => {
+    const digits = v.replace(/\D/g, '').length;
+    return digits >= 10 && digits <= 15;
+  }, 'Phone must have 10-15 digits');
 
 export const customerSchema = z.object({
   name: z.string().min(1, 'Name is required').max(200, 'Name too long'),
@@ -29,12 +36,22 @@ export const productSchema = z.object({
   unit: z.string().min(1).max(20),
   unitPrice: z.number().int().positive('Price must be positive'),
   gstRate: z.number().min(0).max(100),
+  hsnSac: z.string().max(20, 'HSN/SAC too long').nullable().optional(),
+  isActive: z.boolean().optional(),
+});
+
+export const serviceSchema = z.object({
+  name: z.string().min(1, 'Service name is required').max(200, 'Service name too long'),
   isActive: z.boolean().optional(),
 });
 
 export const billItemSchema = z.object({
   productId: z.number().int().positive().optional(),
   productName: z.string().min(1).max(200, 'Product name too long'),
+  // .nullable() too, not just .optional() — products denormalize hsnSac from
+  // the Product row, which is a nullable column, so an unset code arrives as
+  // `null`, not `undefined`, and .optional() alone rejects null.
+  hsnSac: z.string().max(20, 'HSN/SAC too long').nullable().optional(),
   unit: z.string().min(1).max(20),
   qty: z.number().positive(),
   unitPrice: z.number().int().positive(),
@@ -52,6 +69,10 @@ export const createBillSchema = z.object({
   notes: z.string().max(2000, 'Notes too long').optional(),
   discountAmount: z.number().int().min(0).optional(),
   roundOffAmount: z.number().int().optional(),
+  serviceDescription: z.string().max(500, 'Service description too long').optional(),
+  serviceFrom: z.string().refine((s) => !isNaN(Date.parse(s)), 'Invalid service-from date').optional(),
+  serviceTo: z.string().refine((s) => !isNaN(Date.parse(s)), 'Invalid service-to date').optional(),
+  gstInclusive: z.boolean().optional(),
 });
 
 export const settingSchema = z.object({

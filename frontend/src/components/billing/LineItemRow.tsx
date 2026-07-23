@@ -21,9 +21,11 @@ interface LineItemRowProps {
   includeInactive?: boolean;
   /** Pressing Enter in the price field asks the parent to append a new row. */
   onRequestNewRow?: () => void;
+  /** Show an editable HSN/SAC column — A4 invoice layout only. */
+  showHsnSac?: boolean;
 }
 
-export function LineItemRow({ index, item, onChange, onRemove, includeInactive = false, onRequestNewRow }: LineItemRowProps) {
+export function LineItemRow({ index, item, onChange, onRemove, includeInactive = false, onRequestNewRow, showHsnSac = false }: LineItemRowProps) {
   const [productSearch, setProductSearch] = useState(item.productName);
   const [showDropdown, setShowDropdown] = useState(false);
   const ref = useRef<HTMLTableCellElement>(null);
@@ -81,8 +83,9 @@ export function LineItemRow({ index, item, onChange, onRemove, includeInactive =
             onChange={(e) => {
               setProductSearch(e.target.value);
               // Price is fixed by the selected product; typing a name breaks
-              // the product link, so the old price must not linger silently.
-              onChange({ ...item, productName: e.target.value, productId: undefined, unitPrice: 0 });
+              // the product link, so the old price (and HSN/SAC) must not
+              // linger silently.
+              onChange({ ...item, productName: e.target.value, productId: undefined, unitPrice: 0, hsnSac: undefined });
               setShowDropdown(true);
             }}
             onFocus={() => setShowDropdown(true)}
@@ -100,6 +103,7 @@ export function LineItemRow({ index, item, onChange, onRemove, includeInactive =
                       ...item,
                       productId: p.id,
                       productName: p.name,
+                      hsnSac: p.hsnSac,
                       unit: p.unit,
                       unitPrice: paisaToRupee(p.unitPrice),
                       gstRate: p.gstRate,
@@ -146,6 +150,18 @@ export function LineItemRow({ index, item, onChange, onRemove, includeInactive =
       <td className="py-2 px-2 w-20 text-right text-sm text-muted-foreground pr-4 font-medium">
         {item.gstRate}%
       </td>
+
+      {/* HSN/SAC — A4 invoice layout only */}
+      {showHsnSac && (
+        <td className="py-2 px-2 w-24">
+          <Input
+            className="h-8 text-sm font-mono"
+            placeholder="HSN/SAC"
+            value={item.hsnSac ?? ''}
+            onChange={(e) => onChange({ ...item, hsnSac: e.target.value })}
+          />
+        </td>
+      )}
 
       {/* Amount */}
       <td className="py-2 px-2 w-28 text-right">

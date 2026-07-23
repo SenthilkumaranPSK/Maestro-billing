@@ -24,6 +24,14 @@ export interface Product {
   unit: string;
   unitPrice: number; // paise
   gstRate: number;
+  hsnSac?: string;
+  isActive: boolean;
+}
+
+/** Reusable catalog entry feeding the Service Description autocomplete on A4 invoices. */
+export interface Service {
+  id: number;
+  name: string;
   isActive: boolean;
 }
 
@@ -32,6 +40,7 @@ export interface BillItem {
   billId: number;
   productId?: number;
   productName: string;
+  hsnSac?: string;
   unit: string;
   qty: number;
   unitPrice: number; // paise
@@ -75,6 +84,13 @@ export interface Bill {
   status: BillStatus;
   paymentMode?: PaymentMode;
   notes?: string;
+  // A4 "Service Bill" layout only — see backend schema.prisma Bill model.
+  serviceDescription?: string;
+  serviceFrom?: string;
+  serviceTo?: string;
+  // Whether item prices were entered GST-inclusive (tax extracted from the
+  // sticker price) or GST-exclusive (tax added on top, the default).
+  gstInclusive: boolean;
   items: BillItem[];
   payments: Payment[];
   createdAt: string;
@@ -84,6 +100,7 @@ export interface BillItemForm {
   _id: string;           // stable React key (UI-only, not sent to API)
   productId?: number;
   productName: string;
+  hsnSac?: string;
   unit: string;
   qty: number;
   unitPrice: number; // rupees (UI layer)

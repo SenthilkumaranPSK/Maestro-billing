@@ -4,7 +4,7 @@
 // (database, backups, WhatsApp session) lives in the per-user app-data
 // folder, because the install directory is not writable.
 
-const { app, BrowserWindow, dialog, shell } = require('electron');
+const { app, BrowserWindow, dialog, shell, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
@@ -47,15 +47,96 @@ if (!gotLock) {
   });
 }
 
+// The database's folder is user-choosable (e.g. a bigger D:\ or E:\ drive)
+// but that choice itself has to live somewhere fixed, so it survives even
+// after the database moves off C: — this small pointer file is that fixed
+// spot. Backups and the WhatsApp session are NOT affected by this: they
+// always stay under dataRoot (%APPDATA%), only the .db file relocates.
+const DB_LOCATION_POINTER = path.join(app.getPath('userData'), 'db-location.json');
+const DEFAULT_DB_DIR = path.join(app.getPath('userData'), 'data', 'database');
+
+function readDbLocationPointer() {
+  try {
+    const { dbDir } = JSON.parse(fs.readFileSync(DB_LOCATION_POINTER, 'utf8'));
+    return typeof dbDir === 'string' && dbDir ? dbDir : null;
+  } catch {
+    return null; // no pointer yet — this is the first run
+  }
+}
+
+function writeDbLocationPointer(dbDir) {
+  fs.mkdirSync(path.dirname(DB_LOCATION_POINTER), { recursive: true });
+  fs.writeFileSync(DB_LOCATION_POINTER, JSON.stringify({ dbDir }), 'utf8');
+}
+
+// Asked once, ever, on the very first launch (there is no later "change
+// location" setting) — where should studio.db live? Defaults to the normal
+// per-user app-data folder, but the operator can instead pick a folder on
+// another drive (handy when C: is small/an SSD they want to keep free).
+function chooseDbDirOnFirstRun() {
+  const { response } = dialog.showMessageBoxSync({
+    type: 'question',
+    title: 'Maestro Billing — Database Location',
+    message: 'Where should the billing database be stored?',
+    detail:
+      `This is asked once. "Use Default" keeps it with the app:\n${DEFAULT_DB_DIR}\n\n` +
+      'Or pick a folder on a different drive (e.g. D:\\ or E:\\). Backups and the ' +
+      'WhatsApp session always stay in the default app-data folder either way.',
+    buttons: ['Use Default Location', 'Choose Folder…'],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true,
+  });
+  if (response === 0) return DEFAULT_DB_DIR;
+
+  const picked = dialog.showOpenDialogSync({
+    title: 'Choose a folder for the Maestro Billing database',
+    properties: ['openDirectory', 'createDirectory'],
+  });
+  if (!picked || picked.length === 0) return DEFAULT_DB_DIR;
+  return path.join(picked[0], 'Maestro Billing Database');
+}
+
+// rename() fails with EXDEV across drives (e.g. C: -> D:) — fall back to
+// copy+delete in that case. Used for studio.db and its WAL/SHM sidecars.
+function moveFile(src, dest) {
+  try {
+    fs.renameSync(src, dest);
+  } catch (err) {
+    if (err.code !== 'EXDEV') throw err;
+    fs.copyFileSync(src, dest);
+    fs.unlinkSync(src);
+  }
+}
+
 function prepareDataDir() {
   const dataRoot = path.join(app.getPath('userData'), 'data');
-  const dbDir = path.join(dataRoot, 'database');
+  fs.mkdirSync(dataRoot, { recursive: true });
+
+  let dbDir = readDbLocationPointer();
+  if (!dbDir) {
+    dbDir = chooseDbDirOnFirstRun();
+    writeDbLocationPointer(dbDir);
+  }
   fs.mkdirSync(dbDir, { recursive: true });
 
   const dbFile = path.join(dbDir, 'studio.db');
   if (!fs.existsSync(dbFile)) {
-    // First run: install the pre-migrated, seeded database template.
-    fs.copyFileSync(TEMPLATE_DB, dbFile);
+    const existingDbFile = path.join(DEFAULT_DB_DIR, 'studio.db');
+    if (dbDir !== DEFAULT_DB_DIR && fs.existsSync(existingDbFile)) {
+      // This install already had a real database at the default location
+      // (from before this folder-choice existed, or from a run where the
+      // operator picked "Use Default" previously) — carry it across along
+      // with its WAL/SHM sidecars instead of handing them a blank template.
+      moveFile(existingDbFile, dbFile);
+      for (const suffix of ['-wal', '-shm']) {
+        const sidecar = existingDbFile + suffix;
+        if (fs.existsSync(sidecar)) moveFile(sidecar, dbFile + suffix);
+      }
+    } else {
+      // Genuine first run: install the pre-migrated, seeded database template.
+      fs.copyFileSync(TEMPLATE_DB, dbFile);
+    }
   }
   return { dataRoot, dbFile };
 }
@@ -167,6 +248,40 @@ function createWindow() {
   }
 }
 
+// Backup/report "Save a Copy" downloads (see backend routes/backups.ts and
+// routes/reports.ts) arrive here as a normal Chromium download. Rather than
+// silently dropping the file in the default Downloads folder, prompt a
+// native Save As dialog every time so the operator can put the copy
+// anywhere they like — a USB drive, a cloud-synced folder, wherever.
+//
+// Scoped to our own download routes: this app never loads remote content
+// (see setWindowOpenHandler above), so nothing else can trigger a download
+// today — but scoping the handler is a free belt-and-suspenders guard
+// against any download-triggering content ever reaching this window.
+function setupBackupDownloads() {
+  session.defaultSession.on('will-download', (_event, item) => {
+    const url = item.getURL();
+    const isBackup = url.startsWith(`${APP_URL}/api/v1/backups/`);
+    const isReport = url.startsWith(`${APP_URL}/api/v1/reports/`);
+    if (!isBackup && !isReport) {
+      item.cancel();
+      return;
+    }
+    const chosenPath = dialog.showSaveDialogSync(mainWindow ?? undefined, {
+      title: isBackup ? 'Save Backup Copy' : 'Save Report Copy',
+      defaultPath: item.getFilename(),
+      filters: isBackup
+        ? [{ name: 'Database Backup', extensions: ['db'] }]
+        : [{ name: 'GST Report PDF', extensions: ['pdf'] }],
+    });
+    if (chosenPath) {
+      item.setSavePath(chosenPath);
+    } else {
+      item.cancel();
+    }
+  });
+}
+
 app.whenReady().then(() => {
   try {
     startBackend();
@@ -175,6 +290,7 @@ app.whenReady().then(() => {
     app.quit();
     return;
   }
+  setupBackupDownloads();
   waitForServer(60, createWindow);
 });
 
@@ -183,6 +299,16 @@ app.on('window-all-closed', () => {
 });
 
 let quitting = false;
+function beginGracefulShutdown() {
+  if (quitting) return;
+  quitting = true;
+  try {
+    process.emit('SIGTERM', 'SIGTERM');
+  } catch {
+    app.exit(1);
+  }
+}
+
 app.on('before-quit', (event) => {
   // Without preventDefault, Electron's own quit sequence races ahead and can
   // kill the process before the backend's async shutdown below — closing
@@ -191,11 +317,17 @@ app.on('before-quit', (event) => {
   // SIGTERM handler ends with process.exit() itself, which is what actually
   // terminates the app (with its own 10s failsafe if something hangs).
   if (quitting) return;
-  quitting = true;
   event.preventDefault();
-  try {
-    process.emit('SIGTERM', 'SIGTERM');
-  } catch {
-    app.exit(1);
-  }
+  beginGracefulShutdown();
 });
+
+// Windows/Linux-only: fired on OS shutdown, restart, or user log-off — a
+// separate path from a normal in-app quit, and one 'before-quit' does NOT
+// cover. Without this handler, Windows just force-kills the whole process
+// (including WhatsApp's Chrome instance) partway through, whatever it's
+// doing at that instant — which was the actual cause of WhatsApp needing a
+// fresh QR scan after a system shutdown/restart (not a real "logout" call
+// anywhere in this codebase, just an unclean process kill). preventDefault()
+// has no effect here (Windows will not wait for us either way), so this is
+// purely "run cleanup as fast as possible before the OS pulls the plug."
+app.on('session-end', beginGracefulShutdown);

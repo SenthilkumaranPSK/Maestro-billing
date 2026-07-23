@@ -6,8 +6,10 @@ const titles: Record<string, string> = {
   '/billing':    'New Bill',
   '/customers':  'Customers',
   '/products':   'Products',
+  '/services':   'Services',
   '/history':    'Bill History',
   '/day-report': 'Day Report',
+  '/month-report': 'Month Report',
   '/gst-report': 'GST Report',
   '/settings':   'Settings',
 };

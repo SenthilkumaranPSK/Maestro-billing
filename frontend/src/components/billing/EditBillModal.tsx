@@ -7,9 +7,13 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { CustomerBar, type CustomerInfo } from '@/components/billing/CustomerBar';
 import { LineItemRow } from '@/components/billing/LineItemRow';
+import { LayoutToggle, type BillLayout } from '@/components/billing/LayoutToggle';
+import { GstModeToggle } from '@/components/billing/GstModeToggle';
+import { ServiceDescriptionInput } from '@/components/billing/ServiceDescriptionInput';
 import { billsApi } from '@/api/bills';
 import { customersApi } from '@/api/customers';
 import { useToast } from '@/hooks/use-toast';
+import { computeLineTotals } from '@/lib/billMath';
 import type { Bill, BillItemForm } from '@/types';
 import { paisaToRupee, rupeeToPaisa } from '@/types';
 
@@ -43,6 +47,7 @@ export function EditBillModal({ bill, onClose, onSaved }: EditBillModalProps) {
       _id: crypto.randomUUID(),
       productId: i.productId,
       productName: i.productName,
+      hsnSac: i.hsnSac,
       unit: i.unit,
       qty: i.qty,
       unitPrice: paisaToRupee(i.unitPrice),
@@ -50,18 +55,25 @@ export function EditBillModal({ bill, onClose, onSaved }: EditBillModalProps) {
     })),
   );
 
-  // Bill date, discount and notes are not editable — they keep the bill's
-  // original values (same rules as the billing page: no backdating, prices
-  // and discounts fixed). Only customer and items can change.
+  // Bill date and discount are not editable — they keep the bill's original
+  // values (same rules as the billing page: no backdating, discount fixed).
   const discountP = bill.discountAmount;
 
+  // Entry-form layout choice — same idea as BillingPage: A4 mode shows the
+  // Service Details fields + HSN/SAC column, Thermal stays compact. Default
+  // guessed from whether this bill already has service info on it.
+  const [layout, setLayout] = useState<BillLayout>(
+    bill.serviceDescription || bill.serviceFrom || bill.serviceTo ? 'a4' : 'thermal',
+  );
+  const [gstInclusive, setGstInclusive] = useState(bill.gstInclusive);
+  const [serviceDescription, setServiceDescription] = useState(bill.serviceDescription ?? '');
+  const [serviceFrom, setServiceFrom] = useState(bill.serviceFrom?.slice(0, 10) ?? '');
+  const [serviceTo, setServiceTo] = useState(bill.serviceTo?.slice(0, 10) ?? '');
+
   // Integer-paise totals mirroring the backend's per-item rounding — see
-  // BillingPage for the same math.
+  // lib/billMath for the same math.
   const countedItems = items.filter((i) => i.productName.trim() && i.qty > 0);
-  const subTotalP = countedItems.reduce(
-    (s, i) => s + Math.round(i.qty * rupeeToPaisa(i.unitPrice)), 0);
-  const gstTotalP = countedItems.reduce(
-    (s, i) => s + Math.round((Math.round(i.qty * rupeeToPaisa(i.unitPrice)) * i.gstRate) / 100), 0);
+  const { subTotalP, gstTotalP } = computeLineTotals(countedItems, gstInclusive);
   const _activeRates = [...new Set(countedItems.filter(i => i.gstRate > 0).map(i => i.gstRate))];
   const gstHalfRate  = _activeRates.length === 1 ? _activeRates[0] / 2 : null;
   const rawTotalP   = subTotalP + gstTotalP - discountP;
@@ -119,6 +131,7 @@ export function EditBillModal({ bill, onClose, onSaved }: EditBillModalProps) {
       items: validItems.map((i) => ({
         productId: i.productId,
         productName: i.productName,
+        hsnSac: i.hsnSac,
         unit: i.unit,
         qty: i.qty,
         unitPrice: rupeeToPaisa(i.unitPrice),
@@ -127,6 +140,14 @@ export function EditBillModal({ bill, onClose, onSaved }: EditBillModalProps) {
       notes: bill.notes,
       discountAmount: bill.discountAmount,
       roundOffAmount: roundOffP,
+      // Not gated on `layout` — that toggle only controls which fields are
+      // shown/editable in the form. Submitting must reflect whatever's
+      // actually in state, or switching back to Thermal right before Save
+      // would silently wipe out Service Details the bill already had.
+      serviceDescription: serviceDescription.trim() || undefined,
+      serviceFrom: serviceFrom || undefined,
+      serviceTo: serviceTo || undefined,
+      gstInclusive,
     });
   };
 
@@ -143,7 +164,10 @@ export function EditBillModal({ bill, onClose, onSaved }: EditBillModalProps) {
             <h3 className="font-bold text-lg">Edit Bill — {bill.billNumber}</h3>
             <p className="text-xs text-amber-600 font-medium">Changes replace all items and recalculate totals</p>
           </div>
-          <Button variant="ghost" size="icon" onClick={onClose}><X className="h-4 w-4" /></Button>
+          <div className="flex items-center gap-2">
+            <LayoutToggle value={layout} onChange={setLayout} />
+            <Button variant="ghost" size="icon" onClick={onClose}><X className="h-4 w-4" /></Button>
+          </div>
         </div>
 
         {/* Scrollable body */}
@@ -165,6 +189,31 @@ export function EditBillModal({ bill, onClose, onSaved }: EditBillModalProps) {
             </CardContent>
           </Card>
 
+          {/* Service Details — shown only in A4 mode */}
+          {layout === 'a4' && (
+            <Card className="border-slate-200 animate-in fade-in slide-in-from-top-1 duration-200">
+              <CardContent className="pt-3 pb-3">
+                <p className="text-xs font-medium text-slate-500 uppercase tracking-wide mb-2">
+                  Service Details <span className="normal-case font-normal text-muted-foreground">(optional — A4 invoice only)</span>
+                </p>
+                <div className="grid grid-cols-12 gap-3">
+                  <div className="col-span-6">
+                    <Label className="text-xs text-muted-foreground mb-1.5 block">Service Description</Label>
+                    <ServiceDescriptionInput value={serviceDescription} onChange={setServiceDescription} />
+                  </div>
+                  <div className="col-span-3">
+                    <Label className="text-xs text-muted-foreground mb-1.5 block">Service From</Label>
+                    <Input type="date" value={serviceFrom} onChange={(e) => setServiceFrom(e.target.value)} />
+                  </div>
+                  <div className="col-span-3">
+                    <Label className="text-xs text-muted-foreground mb-1.5 block">Service To</Label>
+                    <Input type="date" value={serviceTo} onChange={(e) => setServiceTo(e.target.value)} />
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
           {/* Items + Summary */}
           <div className="grid grid-cols-12 gap-4">
 
@@ -173,13 +222,16 @@ export function EditBillModal({ bill, onClose, onSaved }: EditBillModalProps) {
               <Card>
                 <CardHeader className="pb-3 flex flex-row items-center justify-between">
                   <CardTitle className="text-sm">Bill Items</CardTitle>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setItems((p) => [...p, newEmptyItem()])}
-                  >
-                    <Plus className="w-4 h-4 mr-1" /> Add Item
-                  </Button>
+                  <div className="flex items-center gap-2">
+                    <GstModeToggle value={gstInclusive} onChange={setGstInclusive} />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setItems((p) => [...p, newEmptyItem()])}
+                    >
+                      <Plus className="w-4 h-4 mr-1" /> Add Item
+                    </Button>
+                  </div>
                 </CardHeader>
                 <CardContent className="p-0 overflow-visible">
                   <div className="overflow-visible">
@@ -191,6 +243,9 @@ export function EditBillModal({ bill, onClose, onSaved }: EditBillModalProps) {
                           <th className="text-right py-2 px-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground w-16">Qty</th>
                           <th className="text-right py-2 px-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground w-24">Price (₹)</th>
                           <th className="text-right py-2 px-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground w-16">GST %</th>
+                          {layout === 'a4' && (
+                            <th className="text-left py-2 px-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground w-24">HSN/SAC</th>
+                          )}
                           <th className="text-right py-2 px-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground w-24">Amount</th>
                           <th className="w-8" />
                         </tr>
@@ -201,6 +256,7 @@ export function EditBillModal({ bill, onClose, onSaved }: EditBillModalProps) {
                             key={item._id}
                             index={idx}
                             item={item}
+                            showHsnSac={layout === 'a4'}
                             onChange={(u) => setItems((p) => p.map((i, j) => (j === idx ? u : i)))}
                             onRemove={() => setItems((p) => p.filter((_, j) => j !== idx))}
                             includeInactive

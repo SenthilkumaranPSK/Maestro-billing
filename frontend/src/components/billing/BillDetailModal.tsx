@@ -1,10 +1,14 @@
 import { X, FileText, Printer, Pencil } from 'lucide-react';
+import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { ThermalPreviewModal } from './ThermalPreviewModal';
-import { useState, useEffect } from 'react';
+import { LayoutToggle, type BillLayout } from '@/components/billing/LayoutToggle';
 import { formatCurrency, billStatusVariant, type Bill, type Settings, type BillStatus } from '@/types';
 import { formatDate } from '@/lib/utils';
+
+// pdf-lib is heavy (~400KB) — loaded on demand, same pattern as BillingPage/History.
+const loadPdfLib = () => import('@/lib/pdf');
+const loadA4Lib = () => import('@/lib/a4invoice');
 
 const statusVariant = billStatusVariant;
 
@@ -12,12 +16,31 @@ interface BillDetailModalProps {
   bill: Bill;
   settings: Partial<Settings>;
   onClose: () => void;
-  onDownload: () => void;
   onEdit?: () => void;
 }
 
-export function BillDetailModal({ bill, settings, onClose, onDownload, onEdit }: BillDetailModalProps) {
-  const [showThermal, setShowThermal] = useState(false);
+export function BillDetailModal({ bill, settings, onClose, onEdit }: BillDetailModalProps) {
+  const [layout, setLayout] = useState<BillLayout>('thermal');
+
+  const handlePrint = async () => {
+    if (layout === 'a4') {
+      const { printA4InvoicePDF } = await loadA4Lib();
+      await printA4InvoicePDF(bill, settings);
+    } else {
+      const { printBillPDF } = await loadPdfLib();
+      await printBillPDF(bill, settings);
+    }
+  };
+
+  const handleDownload = async () => {
+    if (layout === 'a4') {
+      const { downloadA4InvoicePDF } = await loadA4Lib();
+      await downloadA4InvoicePDF(bill, settings);
+    } else {
+      const { downloadBillPDF } = await loadPdfLib();
+      await downloadBillPDF(bill, settings);
+    }
+  };
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -30,7 +53,6 @@ export function BillDetailModal({ bill, settings, onClose, onDownload, onEdit }:
   }, [onClose]);
 
   return (
-    <>
       <div
         className="fixed inset-0 z-50 bg-slate-950/50 backdrop-blur-[2px] flex items-center justify-center p-4 animate-in fade-in-0 duration-150"
         onClick={(e) => {
@@ -49,16 +71,17 @@ export function BillDetailModal({ bill, settings, onClose, onDownload, onEdit }:
               </div>
               <Badge variant={statusVariant[bill.status as BillStatus]}>{bill.status}</Badge>
             </div>
-            <div className="flex gap-2">
+            <div className="flex gap-2 items-center">
+              <LayoutToggle value={layout} onChange={setLayout} compact />
               {bill.status !== 'CANCELLED' && onEdit && (
                 <Button variant="outline" size="sm" onClick={onEdit} className="border-amber-300 text-amber-700 hover:bg-amber-50">
                   <Pencil className="h-4 w-4 mr-1" /> Edit
                 </Button>
               )}
-              <Button variant="outline" size="sm" onClick={() => setShowThermal(true)}>
-                <Printer className="h-4 w-4 mr-1" /> Thermal
+              <Button variant="outline" size="sm" onClick={handlePrint}>
+                <Printer className="h-4 w-4 mr-1" /> Print
               </Button>
-              <Button variant="outline" size="sm" onClick={onDownload}>
+              <Button variant="outline" size="sm" onClick={handleDownload}>
                 <FileText className="h-4 w-4 mr-1" /> PDF
               </Button>
               <Button variant="ghost" size="icon" onClick={onClose}>
@@ -133,14 +156,5 @@ export function BillDetailModal({ bill, settings, onClose, onDownload, onEdit }:
           </div>
         </div>
       </div>
-
-      {showThermal && (
-        <ThermalPreviewModal
-          bill={bill}
-          settings={settings}
-          onClose={() => setShowThermal(false)}
-        />
-      )}
-    </>
   );
 }
