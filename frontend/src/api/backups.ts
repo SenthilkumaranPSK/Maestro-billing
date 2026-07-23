@@ -7,9 +7,22 @@ export interface BackupFile {
   createdAt: string;
 }
 
+export interface BackupListResult {
+  backups: BackupFile[];
+  /** False when the backup folder is on the same drive as the live database. */
+  onSeparateDrive: boolean;
+  backupDir: string;
+}
+
 export const backupsApi = {
   list: () =>
-    api.get<ApiResponse<BackupFile[]>>('/backups').then((r) => r.data.data),
+    api
+      .get<ApiResponse<BackupFile[]> & { meta: { onSeparateDrive: boolean; backupDir: string } }>('/backups')
+      .then((r): BackupListResult => ({
+        backups: r.data.data,
+        onSeparateDrive: r.data.meta.onSeparateDrive,
+        backupDir: r.data.meta.backupDir,
+      })),
 
   // Explicit {} body — a bodyless POST with a stray content-type gets a 415
   // from Fastify, so always send parseable JSON.

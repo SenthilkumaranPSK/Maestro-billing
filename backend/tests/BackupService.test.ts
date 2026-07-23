@@ -141,7 +141,10 @@ test('BackupService: prunes old backups beyond keepCount', async () => {
   mkdirSync(backupsDir, { recursive: true });
   copyFileSync(TEMPLATE_DB, dbFile);
 
-  // Pre-create 5 fake backups, dated 5 days apart, oldest first.
+  // Pre-create 5 fake backups directly at the top level of backupsDir —
+  // this is the legacy (pre-month-folder) layout, still expected to be
+  // read transparently alongside new nested ones. Dated 5 days apart,
+  // oldest first.
   for (let i = 0; i < 5; i++) {
     const d = new Date(Date.now() - (5 - i) * 24 * 3600 * 1000);
     const stamp = d.toISOString().replace(/[:.]/g, '-').slice(0, 19);
@@ -154,13 +157,57 @@ test('BackupService: prunes old backups beyond keepCount', async () => {
   const { BackupService } = await import(`../src/services/BackupService.ts?cb=${Date.now()}-${Math.random()}-prune`);
 
   const svc = new BackupService();
-  await svc.backup(); // creates 1 new + prunes to keep last 30 (no-op, we have 6)
+  const newBackupPath = await svc.backup(); // creates 1 new + prunes to keep last 30 (no-op, we have 6)
 
-  // We have 5 pre-existing + 1 new = 6. keepCount=30 so no pruning.
-  // (This test just verifies the function runs and the file is created;
-  // the pruning behavior is best tested separately if needed.)
-  const final = readdirSync(backupsDir).filter((f) => f.endsWith('.db'));
-  assert.equal(final.length, 6);
+  // The new backup lands under a "YYYY-MM" month subfolder, not flat at
+  // backupsDir's top level — verify that explicitly, then use the public
+  // list() API (not a raw non-recursive readdir) to count backups, since
+  // list() is what's actually responsible for seeing both the 5 legacy
+  // flat files and the 1 new nested one as a single unified set.
+  assert.match(newBackupPath, /[\\/]\d{4}-\d{2}[\\/]studio_/, 'new backup should be nested under a YYYY-MM folder');
+  assert.equal(svc.list().length, 6, '5 legacy flat + 1 new nested = 6 total');
+
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('BackupService: pruning removes old backups AND the now-empty month folder', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'studio-backup-prune2-'));
+  const dbFile = join(dir, 'prune2.db');
+  const backupsDir = join(dir, 'backups');
+  copyFileSync(TEMPLATE_DB, dbFile);
+
+  // 2 old backups in one month folder — expected to be fully pruned away,
+  // including the now-empty folder itself. Year 2000 guarantees these sort
+  // as the oldest regardless of when this test actually runs.
+  const oldMonthDir = join(backupsDir, '2000-01');
+  mkdirSync(oldMonthDir, { recursive: true });
+  writeFileSync(join(oldMonthDir, 'studio_2000-01-01T00-00-00.db'), '');
+  writeFileSync(join(oldMonthDir, 'studio_2000-01-02T00-00-00.db'), '');
+
+  // 30 backups in a different month folder, dated far in the future (2099)
+  // so they always sort as the newest regardless of the real system clock —
+  // exactly at keepCount, so all 30 should survive pruning.
+  const newMonthDir = join(backupsDir, '2099-01');
+  mkdirSync(newMonthDir, { recursive: true });
+  for (let i = 0; i < 30; i++) {
+    const n = String(i + 1).padStart(2, '0');
+    writeFileSync(join(newMonthDir, `studio_2099-01-${n}T00-00-00.db`), '');
+  }
+
+  process.env.DATABASE_URL = `file:${dbFile}`;
+  process.env.BACKUP_DIR = backupsDir;
+  const { BackupService } = await import(`../src/services/BackupService.ts?cb=${Date.now()}-${Math.random()}-prune2`);
+
+  const svc = new BackupService();
+  // Adds one more real (present-day-dated) backup, sorting between the two
+  // synthetic sets — pushing the total to 33, so pruning to keepCount (30)
+  // must remove exactly this new one plus the 2 old ones.
+  await svc.backup();
+
+  const remaining = svc.list();
+  assert.equal(remaining.length, 30, 'pruned down to keepCount (30)');
+  assert.ok(!remaining.some((f) => f.name.startsWith('2000-01/')), 'the 2 oldest backups should be gone');
+  assert.ok(!existsSync(oldMonthDir), 'the now-empty 2000-01 folder should be removed, not left behind');
 
   rmSync(dir, { recursive: true, force: true });
 });

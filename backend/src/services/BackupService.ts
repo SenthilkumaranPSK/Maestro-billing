@@ -39,6 +39,23 @@ export class BackupService {
     this.backupDir = BackupService.resolveBackupDir(this.dbPath);
   }
 
+  /**
+   * True only when backups actually land on a different drive letter than
+   * the live database — the thing PREFERRED_BACKUP_DIRS is meant to
+   * guarantee. On a single-drive PC (no D:/E:) this is false: backups fall
+   * back to a folder next to the live database, so a failed/stolen/wiped
+   * drive would take out the database AND every backup together. The
+   * Settings page surfaces this so it's never a silent false sense of
+   * security.
+   */
+  get onSeparateDrive(): boolean {
+    return path.parse(this.dbPath).root.toLowerCase() !== path.parse(this.backupDir).root.toLowerCase();
+  }
+
+  get resolvedBackupDir(): string {
+    return this.backupDir;
+  }
+
   private static resolveBackupDir(dbPath: string): string {
     // Escape hatch for tests (and anyone who wants a specific location) —
     // otherwise this resolution depends on which drives happen to exist on
@@ -51,13 +68,19 @@ export class BackupService {
   }
 
   async backup(): Promise<string> {
-    if (!fs.existsSync(this.backupDir)) {
-      fs.mkdirSync(this.backupDir, { recursive: true });
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    // Grouped into a per-month subfolder (e.g. "2026-07") so a growing
+    // history of daily backups doesn't just pile up as one flat folder of
+    // loose files — makes it obvious at a glance which month a backup is
+    // from when browsing the folder directly (not just in the app's list).
+    const monthFolder = timestamp.slice(0, 7);
+    const monthDir = path.join(this.backupDir, monthFolder);
+    if (!fs.existsSync(monthDir)) {
+      fs.mkdirSync(monthDir, { recursive: true });
     }
 
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
     const backupFileName = `studio_${timestamp}.db`;
-    const backupPath = path.join(this.backupDir, backupFileName);
+    const backupPath = path.join(monthDir, backupFileName);
 
     // Prefer the sqlite3 CLI — it uses the online backup API, which is WAL-safe
     // and works even while the DB is being written to.
@@ -122,13 +145,20 @@ export class BackupService {
     return backupPath;
   }
 
-  // Resolves a backup file name to its on-disk path, confined to backupDir
-  // (path.basename strips any directory traversal) and confirmed to exist.
+  // Resolves a backup file name to its on-disk path, confined to backupDir.
+  // `fileName` is either a bare name (legacy backups made before month
+  // folders existed) or "YYYY-MM/studio_....db" (current scheme) — each
+  // segment is run through path.basename so neither can escape backupDir via
+  // "..", regardless of how many segments are present.
   resolveBackupPath(fileName: string): string {
-    const safe = path.basename(fileName);
-    const src = path.join(this.backupDir, safe);
+    const segments = fileName
+      .replace(/\\/g, '/')
+      .split('/')
+      .filter(Boolean)
+      .map((segment) => path.basename(segment));
+    const src = path.join(this.backupDir, ...segments);
     if (!fs.existsSync(src)) {
-      throw new BackupError(`Backup file not found: ${safe}`);
+      throw new BackupError(`Backup file not found: ${fileName}`);
     }
     return src;
   }
@@ -155,25 +185,53 @@ export class BackupService {
     }
   }
 
+  // `name` is "YYYY-MM/studio_....db" for backups made under the current
+  // month-folder scheme, or a bare filename for legacy backups made before
+  // it existed (still supported so older backups don't just disappear from
+  // the list) — resolveBackupPath()/pruneOldBackups() both accept either.
   list(): Array<{ name: string; size: number; createdAt: Date }> {
     if (!fs.existsSync(this.backupDir)) return [];
-    return fs
-      .readdirSync(this.backupDir)
-      .filter((f) => f.endsWith('.db'))
-      .map((f) => {
-        const stat = fs.statSync(path.join(this.backupDir, f));
-        return { name: f, size: stat.size, createdAt: stat.mtime };
-      })
-      // Sort by filename (it embeds the ISO timestamp), newest first. File
-      // mtime is unreliable on Windows — CopyFileW preserves the source's
-      // timestamp, so copied backups can share identical mtimes.
-      .sort((a, b) => b.name.localeCompare(a.name));
+    const results: Array<{ name: string; size: number; createdAt: Date }> = [];
+
+    for (const entry of fs.readdirSync(this.backupDir, { withFileTypes: true })) {
+      if (entry.isDirectory() && /^\d{4}-\d{2}$/.test(entry.name)) {
+        const monthDir = path.join(this.backupDir, entry.name);
+        for (const f of fs.readdirSync(monthDir)) {
+          if (!f.endsWith('.db')) continue;
+          const stat = fs.statSync(path.join(monthDir, f));
+          results.push({ name: `${entry.name}/${f}`, size: stat.size, createdAt: stat.mtime });
+        }
+      } else if (entry.isFile() && entry.name.endsWith('.db')) {
+        const stat = fs.statSync(path.join(this.backupDir, entry.name));
+        results.push({ name: entry.name, size: stat.size, createdAt: stat.mtime });
+      }
+    }
+
+    // Sort by the base filename (it embeds the ISO timestamp), newest first,
+    // ignoring any month-folder prefix so nesting never affects ordering.
+    // File mtime is unreliable on Windows — CopyFileW preserves the source's
+    // timestamp, so copied backups can share identical mtimes.
+    const baseName = (name: string) => name.slice(name.lastIndexOf('/') + 1);
+    return results.sort((a, b) => baseName(b.name).localeCompare(baseName(a.name)));
   }
 
   private pruneOldBackups(keepCount: number): void {
     const files = this.list();
-    files
-      .slice(keepCount)
-      .forEach((f) => fs.unlinkSync(path.join(this.backupDir, f.name)));
+    const toDelete = files.slice(keepCount);
+    for (const f of toDelete) {
+      fs.unlinkSync(path.join(this.backupDir, f.name));
+    }
+    // Clean up any month folder left empty by the deletions above so old
+    // backups don't leave a trail of empty dated folders behind forever.
+    const touchedMonthDirs = new Set(
+      toDelete
+        .filter((f) => f.name.includes('/'))
+        .map((f) => path.join(this.backupDir, f.name.slice(0, f.name.indexOf('/')))),
+    );
+    for (const dir of touchedMonthDirs) {
+      if (fs.existsSync(dir) && fs.readdirSync(dir).length === 0) {
+        fs.rmdirSync(dir);
+      }
+    }
   }
 }

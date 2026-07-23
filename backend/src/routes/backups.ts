@@ -9,7 +9,11 @@ export async function backupRoutes(fastify: FastifyInstance) {
   fastify.get('/', { preHandler: requireAppHeader }, async (_req, reply) => {
     try {
       const svc = new BackupService();
-      return reply.send({ success: true, data: svc.list() });
+      return reply.send({
+        success: true,
+        data: svc.list(),
+        meta: { onSeparateDrive: svc.onSeparateDrive, backupDir: svc.resolvedBackupDir },
+      });
     } catch (err) {
       if (err instanceof BackupError) {
         return reply.status(400).send({ success: false, error: err.message });
@@ -62,7 +66,10 @@ export async function backupRoutes(fastify: FastifyInstance) {
     try {
       const svc = new BackupService();
       const filePath = await svc.backup();
-      const name = filePath.split(/[\\/]/).pop() ?? filePath;
+      // Relative to backupDir (e.g. "2026-07/studio_....db"), not just the
+      // bare filename — resolveBackupPath() needs the month-folder prefix
+      // to find it again for a subsequent download/restore call.
+      const name = path.relative(svc.resolvedBackupDir, filePath).replace(/\\/g, '/');
       return reply.status(201).send({ success: true, data: { name } });
     } catch (err) {
       if (err instanceof BackupError) {

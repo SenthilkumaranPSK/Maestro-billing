@@ -1,4 +1,4 @@
-import { Smartphone, RotateCcw, FileBarChart2, Percent, ChevronRight, Save } from 'lucide-react';
+import { Smartphone, RotateCcw, FileBarChart2, Percent, ChevronRight, Save, AlertTriangle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
@@ -22,10 +22,11 @@ export default function SettingsPage() {
     },
   });
 
-  const { data: backups } = useQuery({
+  const { data: backupData } = useQuery({
     queryKey: ['backups'],
     queryFn: backupsApi.list,
   });
+  const backups = backupData?.backups;
 
   const restoreMutation = useMutation({
     mutationFn: backupsApi.restore,
@@ -131,6 +132,19 @@ export default function SettingsPage() {
             <span className="font-medium text-slate-700">Save a Copy</span> to save any backup to a
             location of your choice — a USB drive, Desktop, cloud-synced folder, wherever.
           </p>
+          {backupData && !backupData.onSeparateDrive && (
+            <div className="flex items-start gap-2.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5 mb-3">
+              <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+              <p className="text-xs text-amber-800">
+                <span className="font-semibold">No second drive found</span> — backups are currently
+                stored on the same drive as the live database ({backupData.backupDir}), so a failed,
+                stolen, or wiped drive would take out both together. Connect a D: or E: drive so
+                backups move there automatically, or regularly use{' '}
+                <span className="font-medium">Save a Copy</span> below to put one on a USB drive or a
+                cloud-synced folder.
+              </p>
+            </div>
+          )}
           {(backups?.length ?? 0) === 0 ? (
             <p className="text-sm text-muted-foreground py-3 text-center">No backups yet.</p>
           ) : (
