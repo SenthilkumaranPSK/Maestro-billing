@@ -1,5 +1,6 @@
 ﻿import { FastifyInstance } from 'fastify';
 import { customerSchema, parseId, parseIntParam } from '../utils/validators';
+import { requireAppHeader } from '../middleware/requireAppHeader';
 
 export async function customerRoutes(fastify: FastifyInstance) {
   const prisma = fastify.prisma;
@@ -64,13 +65,13 @@ export async function customerRoutes(fastify: FastifyInstance) {
     return reply.send({ success: true, data: bills });
   });
 
-  fastify.post('/', async (request, reply) => {
+  fastify.post('/', { preHandler: requireAppHeader }, async (request, reply) => {
     const body = customerSchema.parse(request.body);
     const customer = await prisma.customer.create({ data: body });
     return reply.status(201).send({ success: true, data: customer });
   });
 
-  fastify.put('/:id', async (request, reply) => {
+  fastify.put('/:id', { preHandler: requireAppHeader }, async (request, reply) => {
     const id = parseId((request.params as { id: string }).id);
     if (!id) return reply.status(400).send({ success: false, error: 'Invalid customer id' });
     const body = customerSchema.parse(request.body);
@@ -81,7 +82,7 @@ export async function customerRoutes(fastify: FastifyInstance) {
     return reply.send({ success: true, data: customer });
   });
 
-  fastify.delete('/:id', async (request, reply) => {
+  fastify.delete('/:id', { preHandler: requireAppHeader }, async (request, reply) => {
     const id = parseId((request.params as { id: string }).id);
     if (!id) return reply.status(400).send({ success: false, error: 'Invalid customer id' });
     await prisma.customer.update({

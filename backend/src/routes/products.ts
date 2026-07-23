@@ -1,5 +1,6 @@
 ﻿import { FastifyInstance } from 'fastify';
 import { productSchema, parseId } from '../utils/validators';
+import { requireAppHeader } from '../middleware/requireAppHeader';
 
 export async function productRoutes(fastify: FastifyInstance) {
   const prisma = fastify.prisma;
@@ -29,13 +30,13 @@ export async function productRoutes(fastify: FastifyInstance) {
     return reply.send({ success: true, data: product });
   });
 
-  fastify.post('/', async (request, reply) => {
+  fastify.post('/', { preHandler: requireAppHeader }, async (request, reply) => {
     const body = productSchema.parse(request.body);
     const product = await prisma.product.create({ data: body });
     return reply.status(201).send({ success: true, data: product });
   });
 
-  fastify.put('/:id', async (request, reply) => {
+  fastify.put('/:id', { preHandler: requireAppHeader }, async (request, reply) => {
     const id = parseId((request.params as { id: string }).id);
     if (!id) return reply.status(400).send({ success: false, error: 'Invalid product id' });
     const body = productSchema.partial().parse(request.body);
@@ -46,7 +47,7 @@ export async function productRoutes(fastify: FastifyInstance) {
     return reply.send({ success: true, data: product });
   });
 
-  fastify.delete('/:id', async (request, reply) => {
+  fastify.delete('/:id', { preHandler: requireAppHeader }, async (request, reply) => {
     const id = parseId((request.params as { id: string }).id);
     if (!id) return reply.status(400).send({ success: false, error: 'Invalid product id' });
     await prisma.product.update({
