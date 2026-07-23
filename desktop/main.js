@@ -109,6 +109,43 @@ function moveFile(src, dest) {
   }
 }
 
+// If the operator picked a custom folder (a USB drive, a network share)
+// this can fail on a later launch simply because that drive isn't connected
+// right now — not a real error, just a temporary unavailability. Without
+// this, prepareDataDir()'s mkdirSync would throw straight up to the
+// app.whenReady() catch-all, which shows a raw stack trace no operator
+// could act on. Give them a clear choice instead: retry (plug the drive
+// back in), fall back to the default location, or quit.
+function ensureDbDirAccessible(dbDir) {
+  for (;;) {
+    try {
+      fs.mkdirSync(dbDir, { recursive: true });
+      return dbDir;
+    } catch (err) {
+      const { response } = dialog.showMessageBoxSync({
+        type: 'error',
+        title: 'Maestro Billing — Database Location Unavailable',
+        message: `Can't reach the database folder:\n${dbDir}`,
+        detail:
+          `${err.message}\n\n` +
+          "If this is a USB drive or network share, make sure it's connected, then Retry.\n" +
+          `Otherwise, switch to the default location instead:\n${DEFAULT_DB_DIR}`,
+        buttons: ['Retry', 'Use Default Location', 'Quit'],
+        defaultId: 0,
+        cancelId: 2,
+      });
+      if (response === 0) continue;
+      if (response === 1) {
+        dbDir = DEFAULT_DB_DIR;
+        writeDbLocationPointer(dbDir); // remember the fallback so it's not asked again next time
+        continue;
+      }
+      app.quit();
+      process.exit(0);
+    }
+  }
+}
+
 function prepareDataDir() {
   const dataRoot = path.join(app.getPath('userData'), 'data');
   fs.mkdirSync(dataRoot, { recursive: true });
@@ -118,7 +155,7 @@ function prepareDataDir() {
     dbDir = chooseDbDirOnFirstRun();
     writeDbLocationPointer(dbDir);
   }
-  fs.mkdirSync(dbDir, { recursive: true });
+  dbDir = ensureDbDirAccessible(dbDir);
 
   const dbFile = path.join(dbDir, 'studio.db');
   if (!fs.existsSync(dbFile)) {
