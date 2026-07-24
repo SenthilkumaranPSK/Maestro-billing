@@ -54,7 +54,11 @@ export default function GstReportPage() {
         cgst: 0,
         sgst: 0,
       };
-      row.taxableValue += Math.round(item.qty * item.unitPrice);
+      // Not qty*unitPrice — for a GST-inclusive item, unitPrice is the
+      // all-in (tax-included) price, so that product overstates the
+      // taxable base by the tax amount itself. totalAmount-gstAmount is
+      // the actual taxable value in both inclusive and exclusive modes.
+      row.taxableValue += item.totalAmount - item.gstAmount;
       // Integer paise only — splitting an odd gstAmount with plain /2 on
       // both sides produces a .5 paisa fraction that each independently
       // rounds up on display, so CGST+SGST no longer add back up to the

@@ -1,5 +1,23 @@
 import { z } from 'zod';
 
+// JS Date arithmetic silently rolls an out-of-range day into the next
+// month/year instead of rejecting it (new Date(2026, 1, 31) just becomes
+// March 3) — Date.parse() does the same for ISO-shaped strings. So neither
+// isNaN(Date.parse(s)) nor a plain regex catches "2026-02-31". Every date
+// string accepted from the outside world is validated with this helper
+// against the YYYY-MM-DD portion so an impossible calendar date is rejected
+// with a clean 400 instead of silently shifting to a different real date.
+function isValidDateString(s: string): boolean {
+  if (isNaN(Date.parse(s))) return false;
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+  if (!match) return true;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const d = new Date(year, month - 1, day);
+  return d.getFullYear() === year && d.getMonth() === month - 1 && d.getDate() === day;
+}
+
 // Shared phone rule — used for customers and WhatsApp sends alike so the two
 // paths can never drift apart on what counts as a valid number.
 export const phoneSchema = z
@@ -63,15 +81,15 @@ export const createBillSchema = z.object({
   billDate: z
     .string()
     .min(1)
-    .refine((s) => !isNaN(Date.parse(s)), 'Invalid bill date'),
-  dueDate: z.string().optional(),
+    .refine(isValidDateString, 'Invalid bill date'),
+  dueDate: z.string().refine(isValidDateString, 'Invalid due date').optional(),
   items: z.array(billItemSchema).min(1, 'At least one item required'),
   notes: z.string().max(2000, 'Notes too long').optional(),
   discountAmount: z.number().int().min(0).optional(),
   roundOffAmount: z.number().int().optional(),
   serviceDescription: z.string().max(500, 'Service description too long').optional(),
-  serviceFrom: z.string().refine((s) => !isNaN(Date.parse(s)), 'Invalid service-from date').optional(),
-  serviceTo: z.string().refine((s) => !isNaN(Date.parse(s)), 'Invalid service-to date').optional(),
+  serviceFrom: z.string().refine(isValidDateString, 'Invalid service-from date').optional(),
+  serviceTo: z.string().refine(isValidDateString, 'Invalid service-to date').optional(),
   gstInclusive: z.boolean().optional(),
 });
 
@@ -104,7 +122,7 @@ export function parseIntParam(raw: string | undefined, def: number, max?: number
 
 /** Strict YYYY-MM-DD query param → Date at start/end of that day, else null. */
 export function parseDateParam(raw: string, edge: 'start' | 'end'): Date | null {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw) || !isValidDateString(raw)) return null;
   // .999 so a bill stamped in the day's final second isn't excluded from lte.
   const d = new Date(raw + (edge === 'start' ? 'T00:00:00' : 'T23:59:59.999'));
   return isNaN(d.getTime()) ? null : d;

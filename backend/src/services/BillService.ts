@@ -144,6 +144,16 @@ export class BillService {
     if (!existing) throw new Error('Bill not found');
     if (existing.status === 'CANCELLED') throw new Error('Cancelled bills cannot be edited');
 
+    // The app currently never creates Payment rows itself (every bill saves
+    // as fully PAID, no partial-payment UI exists) — this only guards
+    // against the day that changes. Recomputing totals below would silently
+    // delete any recorded payment history since it no longer lines up with
+    // the new totals; refuse instead of destroying it quietly.
+    const paymentCount = await this.prisma.payment.count({ where: { billId } });
+    if (paymentCount > 0) {
+      throw new Error('This bill has recorded payments and cannot be edited — editing would erase that payment history.');
+    }
+
     const { items: computedItems, subTotal, totalGst, grandTotal } =
       this.computeItemTotals(input.items, input.gstInclusive ?? false);
     const discountAmount = input.discountAmount ?? 0;
@@ -156,7 +166,9 @@ export class BillService {
 
     return this.prisma.$transaction(async (tx) => {
       await tx.billItem.deleteMany({ where: { billId } });
-      // Legacy payment rows are tied to the old totals — clear them.
+      // Guarded above (paymentCount > 0 throws before this point) — this is
+      // just belt-and-suspenders against a payment created in the gap
+      // between that check and this transaction.
       await tx.payment.deleteMany({ where: { billId } });
 
       return tx.bill.update({

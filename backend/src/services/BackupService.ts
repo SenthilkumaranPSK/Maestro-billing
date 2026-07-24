@@ -112,17 +112,25 @@ export class BackupService {
         // proceeding anyway — a slightly stale backup beats none.
         let busy = 1;
         for (let attempt = 0; attempt < 3 && busy !== 0; attempt++) {
-          const rows = await tmp.$queryRawUnsafe<Array<{ busy: number }>>(
+          const rows = await tmp.$queryRawUnsafe<Array<{ busy: bigint | number }>>(
             'PRAGMA wal_checkpoint(TRUNCATE)',
           );
-          busy = rows[0]?.busy ?? 0;
+          // SQLite's integer columns come back as BigInt via $queryRawUnsafe
+          // — Number() it before comparing, since `0n !== 0` is true in JS
+          // (no cross-type coercion across !==), which previously made this
+          // "busy" check fire on every checkpoint, busy or not.
+          busy = Number(rows[0]?.busy ?? 0);
           if (busy !== 0 && attempt < 2) {
             await new Promise((resolve) => setTimeout(resolve, 1000));
           }
         }
         if (busy !== 0) {
-          console.warn(
-            'Backup: WAL checkpoint stayed busy after retries — this backup may be missing the most recent writes.',
+          // Don't silently copy a file that's known to be missing recent
+          // writes — a backup that looks successful but is quietly stale is
+          // worse than no backup, since nobody has a reason to double-check
+          // it before relying on it in a real restore.
+          throw new BackupError(
+            'Backup aborted — the database is busy and the WAL checkpoint could not complete after retries. Try again shortly.',
           );
         }
       } finally {

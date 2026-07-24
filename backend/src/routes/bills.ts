@@ -117,7 +117,7 @@ export async function billRoutes(fastify: FastifyInstance) {
       bill = await billService.updateBill(id, body);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Update failed';
-      if (msg.includes('Cancelled') || msg.includes('not found') || msg.includes('total of 0')) {
+      if (msg.includes('Cancelled') || msg.includes('not found') || msg.includes('total of 0') || msg.includes('recorded payments')) {
         return reply.status(400).send({ success: false, error: msg });
       }
       throw err;

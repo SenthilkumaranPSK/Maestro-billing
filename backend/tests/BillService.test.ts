@@ -173,6 +173,33 @@ test('updateBill: REJECTS editing a CANCELLED bill', async () => {
   );
 });
 
+test('updateBill: REJECTS editing a bill that has recorded payments', async () => {
+  const bill = await service.createBill({
+    billDate: '2026-07-11T10:00:00.000Z',
+    items: [
+      { productName: 'X', unit: 'piece', qty: 1, unitPrice: 1000, gstRate: 0 },
+    ],
+  });
+  // The app itself never creates Payment rows today (always-PAID, no
+  // partial-payment UI) — insert one directly to simulate the day that
+  // changes, and confirm editing can no longer silently wipe it.
+  await prisma.payment.create({
+    data: { billId: bill.id, amount: 1000, paymentMode: 'CASH' },
+  });
+  await assert.rejects(
+    () =>
+      service.updateBill(bill.id, {
+        billDate: '2026-07-11T10:00:00.000Z',
+        items: [
+          { productName: 'X', unit: 'piece', qty: 1, unitPrice: 2000, gstRate: 0 },
+        ],
+      }),
+    /recorded payments/,
+  );
+  const paymentsAfter = await prisma.payment.count({ where: { billId: bill.id } });
+  assert.equal(paymentsAfter, 1, 'the payment row must survive the rejected edit');
+});
+
 test('getNextBillNumber: increments from the highest existing in the current year', async () => {
   await service.createBill({
     billDate: '2026-07-11T10:00:00.000Z',

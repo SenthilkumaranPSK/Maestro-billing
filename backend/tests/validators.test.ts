@@ -13,6 +13,7 @@ import {
   productSchema,
   createBillSchema,
   billItemSchema,
+  parseDateParam,
 } from '../src/utils/validators.ts';
 
 test('customerSchema accepts a minimal valid customer', () => {
@@ -158,6 +159,52 @@ test('createBillSchema accepts a minimal valid bill', () => {
     ],
   });
   assert.equal(result.success, true);
+});
+
+test('createBillSchema rejects an impossible calendar date (Feb 30) for billDate', () => {
+  // JS Date silently rolls "2026-02-30" over into March instead of
+  // rejecting it — the schema must catch this itself, not trust Date.parse.
+  const result = createBillSchema.safeParse({
+    billDate: '2026-02-30',
+    items: [
+      { productName: 'X', unit: 'piece', qty: 1, unitPrice: 100, gstRate: 0 },
+    ],
+  });
+  assert.equal(result.success, false);
+});
+
+test('createBillSchema rejects an invalid dueDate', () => {
+  const result = createBillSchema.safeParse({
+    billDate: '2026-07-11',
+    dueDate: 'not-a-date',
+    items: [
+      { productName: 'X', unit: 'piece', qty: 1, unitPrice: 100, gstRate: 0 },
+    ],
+  });
+  assert.equal(result.success, false);
+});
+
+test('createBillSchema accepts a valid dueDate', () => {
+  const result = createBillSchema.safeParse({
+    billDate: '2026-07-11',
+    dueDate: '2026-07-20',
+    items: [
+      { productName: 'X', unit: 'piece', qty: 1, unitPrice: 100, gstRate: 0 },
+    ],
+  });
+  assert.equal(result.success, true);
+});
+
+test('parseDateParam rejects an impossible calendar date', () => {
+  assert.equal(parseDateParam('2026-02-30', 'start'), null);
+  assert.equal(parseDateParam('2026-13-01', 'start'), null);
+});
+
+test('parseDateParam accepts a valid calendar date', () => {
+  const d = parseDateParam('2026-02-28', 'start');
+  assert.ok(d instanceof Date);
+  assert.equal(d?.getMonth(), 1); // February
+  assert.equal(d?.getDate(), 28);
 });
 
 test('createBillSchema rejects a 2001-char notes field', () => {

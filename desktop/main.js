@@ -12,6 +12,23 @@ const http = require('http');
 const PORT = 3179;
 const APP_URL = `http://127.0.0.1:${PORT}`;
 
+// url.startsWith(APP_URL) is not a safe origin check: a URL like
+// "http://127.0.0.1:3179@evil.example" passes that prefix test (the string
+// literally starts with APP_URL) but the "@" makes "127.0.0.1:3179" parsed
+// userinfo, not the host — it actually navigates to evil.example. Parse the
+// URL and compare the real origin instead. pathPrefix additionally restricts
+// to a specific route (e.g. the backup/report download endpoints).
+function isAppUrl(url, pathPrefix) {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  if (parsed.origin !== APP_URL) return false;
+  return pathPrefix ? parsed.pathname.startsWith(pathPrefix) : true;
+}
+
 // Data lives under %APPDATA%/Maestro Billing — set before any getPath call,
 // otherwise Electron derives the folder from the package name.
 app.setName('Maestro Billing');
@@ -247,7 +264,7 @@ function createWindow() {
 
   // The thermal receipt opens a popup that calls window.print() — allow it.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith(APP_URL) || url === 'about:blank') return { action: 'allow' };
+    if (isAppUrl(url) || url === 'about:blank') return { action: 'allow' };
     // Anything external (e.g. wa.me links) goes to the system browser.
     shell.openExternal(url);
     return { action: 'deny' };
@@ -261,7 +278,7 @@ function createWindow() {
   // same treatment as setWindowOpenHandler, so a stray external link can
   // never replace the billing UI with an arbitrary page.
   mainWindow.webContents.on('will-navigate', (event, url) => {
-    if (url.startsWith(APP_URL)) return;
+    if (isAppUrl(url)) return;
     event.preventDefault();
     shell.openExternal(url);
   });
@@ -349,8 +366,8 @@ function createWindow() {
 function setupBackupDownloads() {
   session.defaultSession.on('will-download', (_event, item) => {
     const url = item.getURL();
-    const isBackup = url.startsWith(`${APP_URL}/api/v1/backups/`);
-    const isReport = url.startsWith(`${APP_URL}/api/v1/reports/`);
+    const isBackup = isAppUrl(url, '/api/v1/backups/');
+    const isReport = isAppUrl(url, '/api/v1/reports/');
     const isBlobDownload = url.startsWith('blob:'); // bill/invoice PDFs, generated client-side
     if (!isBackup && !isReport && !isBlobDownload) {
       item.cancel();

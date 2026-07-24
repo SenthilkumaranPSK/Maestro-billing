@@ -86,7 +86,7 @@ export class ReportService {
 
   /** Builds and saves the GST summary PDF for a "YYYY-MM" month. Overwrites if regenerated. */
   async generateGstReportPdf(ym: string): Promise<string> {
-    if (!/^\d{4}-\d{2}$/.test(ym)) {
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(ym)) {
       throw new ReportError(`Invalid month "${ym}" — expected YYYY-MM`);
     }
     const { from, to } = monthBounds(ym);
@@ -111,7 +111,12 @@ export class ReportService {
     for (const bill of bills) {
       for (const item of bill.items) {
         const row = byRate.get(item.gstRate) ?? { rate: item.gstRate, taxableValue: 0, cgst: 0, sgst: 0 };
-        row.taxableValue += Math.round(item.qty * item.unitPrice);
+        // Not qty*unitPrice — for a GST-inclusive item, unitPrice is the
+        // all-in (tax-included) price, so that product overstates the
+        // taxable base by the tax amount itself. totalAmount-gstAmount is
+        // the actual taxable value in both inclusive and exclusive modes,
+        // since that's how BillService already computes/stores each item.
+        row.taxableValue += item.totalAmount - item.gstAmount;
         // Integer paise only — splitting an odd gstAmount in half must not
         // produce a .5 paise fraction (money() would then silently round it
         // away, making CGST+SGST not add back up to the printed total tax).

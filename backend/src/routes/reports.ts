@@ -8,7 +8,7 @@ import { requireAppHeader } from '../middleware/requireAppHeader';
 const generateBodySchema = z.object({
   // Defaults to last month (the most recently *completed* month) if omitted —
   // the same month the automatic monthly job would generate.
-  month: z.string().regex(/^\d{4}-\d{2}$/).optional(),
+  month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/).optional(),
 });
 
 export async function reportRoutes(fastify: FastifyInstance) {
