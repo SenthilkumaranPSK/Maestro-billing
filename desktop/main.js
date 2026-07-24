@@ -253,6 +253,19 @@ function createWindow() {
     return { action: 'deny' };
   });
 
+  // setWindowOpenHandler above only covers NEW windows/tabs (window.open,
+  // target="_blank"); it does nothing for the main window navigating itself
+  // (e.g. location.href = someUrl, or clicking a plain link). This app has
+  // no legitimate reason to ever navigate the main window away from its own
+  // server — block anything else and send it to the system browser instead,
+  // same treatment as setWindowOpenHandler, so a stray external link can
+  // never replace the billing UI with an arbitrary page.
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (url.startsWith(APP_URL)) return;
+    event.preventDefault();
+    shell.openExternal(url);
+  });
+
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
@@ -281,6 +294,28 @@ function createWindow() {
         message: 'The billing app failed to load.',
         detail: errorDescription || 'Unknown error',
         buttons: ['Retry', 'Quit'],
+        defaultId: 0,
+      })
+      .then(({ response }) => {
+        if (response === 0) mainWindow?.loadURL(APP_URL);
+        else app.quit();
+      });
+  });
+
+  // If the renderer process itself dies (a Chromium-level crash or OOM, not
+  // a JS error — those stay inside the page and don't hit this at all), the
+  // window would otherwise just sit there frozen/blank with no explanation
+  // and no way back except force-closing the app. Same recovery pattern as
+  // did-fail-load above: offer reload or quit instead of leaving it dead.
+  mainWindow.webContents.on('render-process-gone', (_e, details) => {
+    if (details.reason === 'clean-exit') return; // normal app-quit teardown
+    dialog
+      .showMessageBox(mainWindow, {
+        type: 'error',
+        title: 'Maestro Billing',
+        message: 'The billing app stopped responding.',
+        detail: `Reason: ${details.reason}`,
+        buttons: ['Reload', 'Quit'],
         defaultId: 0,
       })
       .then(({ response }) => {
