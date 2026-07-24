@@ -298,30 +298,35 @@ function createWindow() {
 }
 
 // Backup/report "Save a Copy" downloads (see backend routes/backups.ts and
-// routes/reports.ts) arrive here as a normal Chromium download. Rather than
+// routes/reports.ts) and bill/invoice PDF downloads (frontend lib/pdf.ts +
+// lib/a4invoice.ts — generated client-side as a blob: URL, not a server
+// route) all arrive here as a normal Chromium download. Rather than
 // silently dropping the file in the default Downloads folder, prompt a
 // native Save As dialog every time so the operator can put the copy
 // anywhere they like — a USB drive, a cloud-synced folder, wherever.
 //
-// Scoped to our own download routes: this app never loads remote content
-// (see setWindowOpenHandler above), so nothing else can trigger a download
-// today — but scoping the handler is a free belt-and-suspenders guard
-// against any download-triggering content ever reaching this window.
+// The blob: case was missed when this was first written ("this app never
+// loads remote content, so nothing else can trigger a download" — true,
+// but bill PDFs are a *local* blob: download, not remote content) — every
+// "Download PDF" click on a bill was silently cancelled below, with no
+// visible error, because its blob: URL matched neither the backup nor the
+// report route prefix.
 function setupBackupDownloads() {
   session.defaultSession.on('will-download', (_event, item) => {
     const url = item.getURL();
     const isBackup = url.startsWith(`${APP_URL}/api/v1/backups/`);
     const isReport = url.startsWith(`${APP_URL}/api/v1/reports/`);
-    if (!isBackup && !isReport) {
+    const isBlobDownload = url.startsWith('blob:'); // bill/invoice PDFs, generated client-side
+    if (!isBackup && !isReport && !isBlobDownload) {
       item.cancel();
       return;
     }
     const chosenPath = dialog.showSaveDialogSync(mainWindow ?? undefined, {
-      title: isBackup ? 'Save Backup Copy' : 'Save Report Copy',
+      title: isBackup ? 'Save Backup Copy' : isReport ? 'Save Report Copy' : 'Save Invoice PDF',
       defaultPath: item.getFilename(),
       filters: isBackup
         ? [{ name: 'Database Backup', extensions: ['db'] }]
-        : [{ name: 'GST Report PDF', extensions: ['pdf'] }],
+        : [{ name: 'PDF File', extensions: ['pdf'] }],
     });
     if (chosenPath) {
       item.setSavePath(chosenPath);
