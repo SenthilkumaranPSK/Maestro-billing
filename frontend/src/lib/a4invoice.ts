@@ -167,8 +167,12 @@ export async function generateA4InvoicePDF(bill: Bill, settings: Partial<Setting
   const custAddressLines = bill.customer?.address ? wrapText(regular, bill.customer.address, 9, colA_W - 16) : [];
   const serviceDescLines = bill.serviceDescription ? wrapText(regular, bill.serviceDescription, 9, colB_W - 16) : [];
 
+  // '0000000000' is the seeded Walk-in Customer's placeholder phone, not a
+  // real number — showing it on a printed invoice would look like a mistake.
+  const showCustPhone = !!bill.customer?.phone && bill.customer.phone !== '0000000000';
+
   const colA_ContentH = bill.customer
-    ? 14 + custNameLines.length * 12.5 + custAddressLines.length * 12 + (bill.customer.gstin ? 12 : 0)
+    ? 14 + custNameLines.length * 12.5 + custAddressLines.length * 12 + (showCustPhone ? 12 : 0) + (bill.customer.gstin ? 12 : 0)
     : 14 + 13;
   const colB_ContentH = 14 + serviceDescLines.length * 12;
   const colC_ContentH = 14 + (bill.serviceFrom || bill.serviceTo ? [bill.serviceFrom, bill.serviceTo].filter(Boolean).length : 1) * 12;
@@ -191,6 +195,10 @@ export async function generateA4InvoicePDF(bill: Bill, settings: Partial<Setting
     }
     for (const line of custAddressLines) {
       text(line, colA_X + 8, cy, { size: 9, color: BODY });
+      cy -= 12;
+    }
+    if (showCustPhone) {
+      text(`Mobile : ${bill.customer.phone}`, colA_X + 8, cy, { size: 9, color: BODY });
       cy -= 12;
     }
     if (bill.customer.gstin) {
@@ -226,8 +234,12 @@ export async function generateA4InvoicePDF(bill: Bill, settings: Partial<Setting
   y = infoBottom;
 
   // ── Item table ───────────────────────────────────────────────────────────
+  // SN is its own column (not "1. Product Name" folded into the description)
+  // to match the reference tax-bill layout, same as the thermal receipt's
+  // "SN  Product" header.
   const cols = [
-    { label: 'DESCRIPTION OF SERVICES', x: 0, w: contentW * 0.42 },
+    { label: 'SN', x: 0, w: contentW * 0.05 },
+    { label: 'PRODUCT', x: 0, w: contentW * 0.37 },
     { label: 'QUANTITY', x: 0, w: contentW * 0.14 },
     { label: 'PRICE', x: 0, w: contentW * 0.13 },
     { label: 'HSN / SAC', x: 0, w: contentW * 0.13 },
@@ -246,7 +258,8 @@ export async function generateA4InvoicePDF(bill: Bill, settings: Partial<Setting
   const tableHeaderBottom = tableTop - tableHeaderH;
 
   text(cols[0]!.label, cols[0]!.x + 8, tableTop - 15, { size: 9.5, font: bold });
-  for (const c of cols.slice(1, -1)) {
+  text(cols[1]!.label, cols[1]!.x + 8, tableTop - 15, { size: 9.5, font: bold });
+  for (const c of cols.slice(2, -1)) {
     text(c.label, c.x, tableTop - 15, { size: 9, font: bold, align: 'center', maxWidth: c.w });
   }
   // AMOUNT is the one column whose row data is right-aligned (money reads
@@ -254,7 +267,8 @@ export async function generateA4InvoicePDF(bill: Bill, settings: Partial<Setting
   // HSN — its header must use the same align+maxWidth as the row values
   // below (see the item loop), or the header centers over the column while
   // the actual figures hug the right edge, landing ~10pt apart.
-  text(cols[4]!.label, cols[4]!.x, tableTop - 15, { size: 9, font: bold, align: 'right', maxWidth: cols[4]!.w - 8 });
+  const amountCol = cols[cols.length - 1]!;
+  text(amountCol.label, amountCol.x, tableTop - 15, { size: 9, font: bold, align: 'right', maxWidth: amountCol.w - 8 });
   hline(tableHeaderBottom);
 
   // Totals and bank/signature blocks are anchored to fixed positions from the
@@ -263,7 +277,11 @@ export async function generateA4InvoicePDF(bill: Bill, settings: Partial<Setting
   // content and the page's outer border. The item table box itself extends
   // down to fill whatever space that leaves (real rows on top, blank space
   // within the same border below, same as a paper invoice with unused lines).
-  const totalsBoxH = 22 * 4; // Total / CGST / SGST / Grand Total
+  // Fixed height regardless of how many rows actually apply (Sub Total /
+  // CGST / SGST / Discount / Round Off / Grand Total) — the render loop
+  // divides it by the real row count, so extra rows just make each one
+  // proportionally shorter instead of overflowing.
+  const totalsBoxH = 22 * 4;
   const bankBoxH = 130;
   const bankBoxBottom = outerBottom;
   const bankBoxTop = bankBoxBottom + bankBoxH;
@@ -275,8 +293,8 @@ export async function generateA4InvoicePDF(bill: Bill, settings: Partial<Setting
   const LINE_H = 11;
   const ROW_PAD = 8;
   const BASE_ROW_H = 20;
-  const itemLines = bill.items.map((item, i) =>
-    wrapText(regular, `${i + 1}. ${item.productName}`, 9, cols[0]!.w - 16),
+  const itemLines = bill.items.map((item) =>
+    wrapText(regular, item.productName, 9, cols[1]!.w - 16),
   );
   const naturalRowHeights = itemLines.map((lines) => Math.max(BASE_ROW_H, lines.length * LINE_H + ROW_PAD));
   const naturalTotalH = naturalRowHeights.reduce((s, h) => s + h, 0);
@@ -291,17 +309,18 @@ export async function generateA4InvoicePDF(bill: Bill, settings: Partial<Setting
     const rowH = naturalRowHeights[i]! * scale;
     const lines = itemLines[i]!;
     const lineH = Math.min(LINE_H, (rowH - ROW_PAD) / lines.length);
+    const rowMid = ty - rowH / 2 - 3;
+    text(String(i + 1), cols[0]!.x, rowMid, { size: 9, color: BODY, align: 'center', maxWidth: cols[0]!.w });
     let ly = ty - ROW_PAD / 2 - 8;
     for (const line of lines) {
-      text(line, cols[0]!.x + 8, ly, { size: 9, color: BODY });
+      text(line, cols[1]!.x + 8, ly, { size: 9, color: BODY });
       ly -= lineH;
     }
-    const rowMid = ty - rowH / 2 - 3;
-    text(`${item.qty} ${item.unit}`, cols[1]!.x, rowMid, { size: 9, color: BODY, align: 'center', maxWidth: cols[1]!.w });
-    text(`Rs ${paisaToRupee(item.unitPrice).toFixed(2)}`, cols[2]!.x, rowMid, { size: 9, color: BODY, align: 'center', maxWidth: cols[2]!.w });
-    text(item.hsnSac ?? '-', cols[3]!.x, rowMid, { size: 9, color: BODY, align: 'center', maxWidth: cols[3]!.w });
+    text(`${item.qty} ${item.unit}`, cols[2]!.x, rowMid, { size: 9, color: BODY, align: 'center', maxWidth: cols[2]!.w });
+    text(`Rs ${paisaToRupee(item.unitPrice).toFixed(2)}`, cols[3]!.x, rowMid, { size: 9, color: BODY, align: 'center', maxWidth: cols[3]!.w });
+    text(item.hsnSac ?? '-', cols[4]!.x, rowMid, { size: 9, color: BODY, align: 'center', maxWidth: cols[4]!.w });
     const lineAmount = Math.round(item.qty * item.unitPrice);
-    text(`Rs ${formatRupees(lineAmount)}`, cols[4]!.x, rowMid, { size: 9, color: BODY, align: 'right', maxWidth: cols[4]!.w - 8 });
+    text(`Rs ${formatRupees(lineAmount)}`, cols[5]!.x, rowMid, { size: 9, color: BODY, align: 'right', maxWidth: cols[5]!.w - 8 });
     ty -= rowH;
   });
 
@@ -331,9 +350,12 @@ export async function generateA4InvoicePDF(bill: Bill, settings: Partial<Setting
   // "one sticker price", not a line-itemized tax split.
   const gstRates = [...new Set(bill.items.filter((i) => i.gstRate > 0).map((i) => i.gstRate))];
   const halfRate = gstRates.length === 1 ? gstRates[0]! / 2 : undefined;
-  const totalRows: Array<[string, number]> = [];
+  // [label, amount, mid?] — mid is the total-quantity note shown next to Sub
+  // Total, matching the thermal receipt's equivalent 3-column row.
+  const totalRows: Array<[string, number, string?]> = [];
   if (!bill.gstInclusive) {
-    totalRows.push(['Total', bill.subTotal]);
+    const totalQty = bill.items.reduce((s, i) => s + i.qty, 0);
+    totalRows.push(['Sub Total', bill.subTotal, `${totalQty} No`]);
     if (bill.gstAmount > 0) {
       const half = Math.floor(bill.gstAmount / 2);
       totalRows.push([halfRate !== undefined ? `CGST @ ${halfRate}%` : 'CGST', half]);
@@ -341,17 +363,27 @@ export async function generateA4InvoicePDF(bill: Bill, settings: Partial<Setting
     }
   }
   if (bill.discountAmount > 0) totalRows.push(['Discount', -bill.discountAmount]);
+  // Derived, not a stored field — same computation as the thermal receipt
+  // (lib/thermal.ts): items-incl-GST minus discount vs. the actual grand
+  // total. Without this line the printed items wouldn't add up to the
+  // printed Grand Total whenever rounding to the nearest rupee applied.
+  const itemsTotal = bill.items.reduce((s, i) => s + i.totalAmount, 0);
+  const roundOff = bill.grandTotal - (itemsTotal - bill.discountAmount);
+  if (roundOff !== 0) totalRows.push(['Round Off', roundOff]);
   totalRows.push(['Grand Total', bill.grandTotal]);
 
   const totalsRowH = totalsBoxH / totalRows.length;
   vline(totalsX, y - totalsBoxH, y);
   let tty = y;
-  totalRows.forEach(([label, amount], i) => {
+  totalRows.forEach(([label, amount, mid], i) => {
     const isLast = i === totalRows.length - 1;
     if (i > 0) hline(tty, totalsX, right);
     const f = isLast ? bold : regular;
     const size = isLast ? 10 : 9.5;
     text(label, totalsX + 8, tty - totalsRowH / 2 - 3, { size, font: f, color: isLast ? BLACK : BLACK });
+    if (mid) {
+      text(mid, totalsX + (right - totalsX) * 0.45, tty - totalsRowH / 2 - 3, { size, font: f, color: BODY });
+    }
     const amtStr = `${amount < 0 ? '-' : ''}Rs ${formatRupees(Math.abs(amount))}`;
     text(amtStr, right - 8, tty - totalsRowH / 2 - 3, { size, font: f, color: BODY, align: 'right' });
     tty -= totalsRowH;

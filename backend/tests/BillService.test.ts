@@ -195,7 +195,7 @@ test('updateBill: REJECTS editing a bill that has recorded payments', async () =
   assert.equal(paymentsAfter, 1, 'the payment row must survive the rejected edit');
 });
 
-test('getNextBillNumber: increments from the highest existing in the current year', async () => {
+test('getNextBillNumber: increments from the highest existing in the current year (NNN/YYYY format)', async () => {
   await service.createBill({
     billDate: '2026-07-11T10:00:00.000Z',
     items: [
@@ -203,8 +203,40 @@ test('getNextBillNumber: increments from the highest existing in the current yea
     ],
   });
   const next = await service.getNextBillNumber();
-  // Default prefix is "MS" (see BillService.getNextBillNumber, matches seed.ts); year 2026; first bill was 0001 so next is 0002
-  assert.match(next, /^MS-2026-\d{4}$/);
-  const seq = parseInt(next.split('-')[2], 10);
+  assert.match(next, /^\d{3}\/2026$/);
+  const seq = parseInt(next.split('/')[0], 10);
   assert.ok(seq >= 2, `expected seq >= 2, got ${seq}`);
+});
+
+test('getNextBillNumber: continues the sequence gap-free across the old PREFIX-YYYY-NNNN format', async () => {
+  // Simulates bills already created before the numbering format changed —
+  // GST filing expects a consistent, sequential invoice series within a
+  // year, so switching formats must not restart the count at 1.
+  await prisma.bill.create({
+    data: {
+      billNumber: 'MS-2026-0044',
+      billDate: new Date('2026-07-11T10:00:00.000Z'),
+      subTotal: 100,
+      grandTotal: 100,
+      status: 'PAID',
+    },
+  });
+  const next = await service.getNextBillNumber();
+  assert.equal(next, '045/2026');
+});
+
+test('getNextBillNumber: continues the sequence gap-free across the brief NNN/YY (2-digit year) format', async () => {
+  // Real bills already exist in this format from before the year was
+  // widened to 4 digits — must not restart the count at 1 either.
+  await prisma.bill.create({
+    data: {
+      billNumber: '048/26',
+      billDate: new Date('2026-07-11T10:00:00.000Z'),
+      subTotal: 100,
+      grandTotal: 100,
+      status: 'PAID',
+    },
+  });
+  const next = await service.getNextBillNumber();
+  assert.equal(next, '049/2026');
 });

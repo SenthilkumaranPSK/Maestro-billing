@@ -5,33 +5,55 @@ export class BillService {
   constructor(private readonly prisma: PrismaClient) {}
 
   async getNextBillNumber(): Promise<string> {
+    const year = new Date().getFullYear();
+    const yy = String(year).slice(-2);
+    const yyyy = String(year);
+
+    // Bill numbers have gone through two format changes: the original
+    // "PREFIX-YYYY-NNNN", then a brief "NNN/YY" (2-digit year), now
+    // "NNN/YYYY" (4-digit year). GST filing expects consistent, sequential
+    // invoice numbers within a year, so the sequence must keep counting up
+    // across every switch rather than restarting at 1 while older-format
+    // bills already exist for this year — check all three and continue
+    // from whichever has the highest sequence. (endsWith(`/${yy}`) and
+    // endsWith(`/${yyyy}`) can't collide with each other: the character
+    // right before the year in a 4-digit bill number is a digit, e.g.
+    // "049/2026" does not end with the literal substring "/26".)
     const prefixSetting = await this.prisma.setting.findUnique({
       where: { key: 'invoice_prefix' },
     });
-    // Fallback must match seed.ts — a mismatched prefix on an unseeded DB
-    // would fork the bill-number series.
+    // Fallback must match seed.ts — a mismatched prefix would miss the old
+    // series entirely and let the sequence restart from 1 mid-year.
     const prefix = prefixSetting?.value ?? 'MS';
 
-    const year = new Date().getFullYear();
+    const [oldFormatBill, shortYearBill, fullYearBill] = await Promise.all([
+      this.prisma.bill.findFirst({
+        where: { billNumber: { startsWith: `${prefix}-${year}-` } },
+        orderBy: { billNumber: 'desc' },
+      }),
+      this.prisma.bill.findFirst({
+        where: { billNumber: { endsWith: `/${yy}` } },
+        orderBy: { billNumber: 'desc' },
+      }),
+      this.prisma.bill.findFirst({
+        where: { billNumber: { endsWith: `/${yyyy}` } },
+        orderBy: { billNumber: 'desc' },
+      }),
+    ]);
 
-    // Ordered by billNumber (the actual sequence), not id — id is normally
-    // in lockstep with the sequence, but the two are only guaranteed to
-    // match by convention, not by a real constraint. billNumber's sequence
-    // is zero-padded to a fixed width, so a plain string sort already sorts
-    // numerically (up to 9999/year).
-    const lastBill = await this.prisma.bill.findFirst({
-      where: { billNumber: { startsWith: `${prefix}-${year}-` } },
-      orderBy: { billNumber: 'desc' },
-    });
-
-    let seq = 1;
-    if (lastBill) {
-      const parts = lastBill.billNumber.split('-');
-      const lastSeq = parseInt(parts[parts.length - 1] ?? '0', 10);
-      if (!isNaN(lastSeq)) seq = lastSeq + 1;
+    let seq = 0;
+    if (oldFormatBill) {
+      const parts = oldFormatBill.billNumber.split('-');
+      const n = parseInt(parts[parts.length - 1] ?? '0', 10);
+      if (!isNaN(n)) seq = Math.max(seq, n);
+    }
+    for (const bill of [shortYearBill, fullYearBill]) {
+      if (!bill) continue;
+      const n = parseInt(bill.billNumber.split('/')[0] ?? '0', 10);
+      if (!isNaN(n)) seq = Math.max(seq, n);
     }
 
-    return `${prefix}-${year}-${String(seq).padStart(4, '0')}`;
+    return `${String(seq + 1).padStart(3, '0')}/${yyyy}`;
   }
 
   /**

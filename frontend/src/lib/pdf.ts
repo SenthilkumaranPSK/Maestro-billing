@@ -44,6 +44,14 @@ const COURIER_CHAR_WIDTH = 0.6 * FONT_SIZE; // Courier glyphs are 0.6em wide
 export async function generateBillPDF(
   bill: Bill,
   settings: Partial<Settings>,
+  // Only meaningful for an actual physical thermal printer, whose print
+  // head can cut off content right at the paper's left edge — compensating
+  // by shifting content rightward. downloadBillPDF/generateBillPDFBase64
+  // (WhatsApp) show this same PDF on a screen, where there's no such
+  // hardware cutoff to compensate for, so it must default off; applying it
+  // there just adds a lopsided blank margin down the left side of a
+  // downloaded/viewed copy for no reason. Only printBillPDF passes true.
+  compensatePrinterMargin = false,
 ): Promise<Uint8Array> {
   const lines = buildReceiptPreview(bill, settings);
   const paperWidth = normalizePaperWidth(settings.printer?.thermal_paper_width);
@@ -70,7 +78,9 @@ export async function generateBillPDF(
   // /margin setting, which PDF content has no way to reach.
   const REQUESTED_SHIFT = 1.0 * 10 * MM_TO_PT; // 1cm
   const RIGHT_SAFETY_PT = 2;
-  const LEFT_SHIFT = Math.max(0, Math.min(REQUESTED_SHIFT, marginX - RIGHT_SAFETY_PT));
+  const LEFT_SHIFT = compensatePrinterMargin
+    ? Math.max(0, Math.min(REQUESTED_SHIFT, marginX - RIGHT_SAFETY_PT))
+    : 0;
 
   const pdfDoc = await PDFDocument.create();
   // Courier-Bold only (no regular weight): at the ~200dpi a thermal head
@@ -175,7 +185,7 @@ export async function downloadBillPDF(bill: Bill, settings: Partial<Settings>) {
 }
 
 export async function printBillPDF(bill: Bill, settings: Partial<Settings>) {
-  const bytes = await generateBillPDF(bill, settings);
+  const bytes = await generateBillPDF(bill, settings, true);
   const blob = new Blob([bytes.buffer.slice(0) as ArrayBuffer], { type: 'application/pdf' });
   const url = URL.createObjectURL(blob);
   const iframe = document.createElement('iframe');

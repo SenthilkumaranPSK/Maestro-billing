@@ -153,9 +153,9 @@ export function buildReceiptPreview(bill: Bill, settings: Partial<Settings>): Th
   const paperWidth = normalizePaperWidth(settings.printer?.thermal_paper_width);
   const charWidth = getCharWidth(paperWidth);
 
-  // Every rule on this layout is the same thin weight — no heavier "="
-  // divider anywhere, matching the reference template.
-  const dline = '-'.repeat(charWidth);
+  // A solid rule, not a dashed one — "-" repeated read as a row of dashes
+  // rather than a straight divider line.
+  const dline = '_'.repeat(charWidth);
 
   const billDate = new Date(bill.billDate).toLocaleDateString('en-IN', {
     day: '2-digit',
@@ -208,7 +208,16 @@ export function buildReceiptPreview(bill: Bill, settings: Partial<Settings>): Th
 
   const custName = bill.customer?.name ?? 'Walk-in Customer';
   pairOrStack(`Name : ${custName}`, `Bill Date : ${billDate}`);
-  pairOrStack(bill.customer?.gstin ? `Gstin : ${bill.customer.gstin}` : '', `Bill Num : ${bill.billNumber}`);
+  // '0000000000' is the seeded Walk-in Customer's placeholder phone, not a
+  // real number — showing it on a printed bill would look like a mistake.
+  const showPhone = !!bill.customer?.phone && bill.customer.phone !== '0000000000';
+  pairOrStack(showPhone ? `Mobile : ${bill.customer!.phone}` : '', `Bill Num : ${bill.billNumber}`);
+  // GSTIN is uncommon enough (most walk-in customers don't have one) that it
+  // only costs an extra line in the rarer case it's actually present, rather
+  // than always reserving a slot for it next to Mobile.
+  if (bill.customer?.gstin) {
+    lines.push({ text: `Gstin : ${bill.customer.gstin}` });
+  }
 
   // Item table header.
   lines.push(
@@ -217,13 +226,12 @@ export function buildReceiptPreview(bill: Bill, settings: Partial<Settings>): Th
     { text: dline, separator: true, center: true },
   );
 
-  // Per-item lines: "N  <product name>            <amount>" then a
-  // "qty x price" breakdown line. No per-item GST — the tax split lives only
-  // in the totals block below, matching the reference template.
+  // Per-item line: "N  <product name>            <amount>". No qty×price
+  // breakdown line and no per-item GST — the tax split lives only in the
+  // totals block below, matching the reference template.
   bill.items.forEach((item, i) => {
     const amt = formatAmt(item.qty * item.unitPrice);
     emitWrapped(lines, `${i + 1}  `, item.productName, charWidth, { right: amt });
-    lines.push({ text: `   ${item.qty} ${item.unit} x Rs${formatAmt(item.unitPrice)}` });
   });
 
   lines.push({ text: dline, separator: true, center: true });
