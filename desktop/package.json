@@ -73,11 +73,13 @@
       "icon": "build/icon.ico"
     },
     "nsis": {
-      "oneClick": true,
+      "oneClick": false,
       "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
       "deleteAppDataOnUninstall": false,
       "createDesktopShortcut": true,
-      "shortcutName": "Maestro Billing"
+      "shortcutName": "Maestro Billing",
+      "runAfterFinish": true
     }
   }
 }

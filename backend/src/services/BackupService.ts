@@ -163,7 +163,7 @@ export class BackupService {
     return src;
   }
 
-  restore(fileName: string): void {
+  async restore(fileName: string): Promise<void> {
     const src = this.resolveBackupPath(fileName);
     const size = fs.statSync(src).size;
     if (size < MIN_BACKUP_BYTES) {
@@ -172,16 +172,40 @@ export class BackupService {
       );
     }
 
-    // Write to a temp file first, then atomically rename over the live DB.
-    const tmp = `${this.dbPath}.restore-tmp`;
-    fs.copyFileSync(src, tmp);
-    fs.renameSync(tmp, this.dbPath);
-
-    // Drop the old database's WAL/SHM sidecar files — SQLite would otherwise
-    // replay the stale WAL onto the freshly restored file and corrupt it.
+    // Drop the live database's own WAL/SHM sidecars BEFORE swapping in the
+    // restored file, not after — once the file underneath changes, a stale
+    // WAL no longer corresponds to it and SQLite would try to apply it on
+    // the next connection. (Safe to remove first: the caller already took
+    // a fresh safety-snapshot backup and disconnected Prisma before calling
+    // this, so nothing has a reason to touch these sidecars in between.)
     for (const suffix of ['-wal', '-shm']) {
       const sidecar = this.dbPath + suffix;
       if (fs.existsSync(sidecar)) fs.unlinkSync(sidecar);
+    }
+
+    // Write to a temp file first, then atomically rename over the live DB.
+    const tmp = `${this.dbPath}.restore-tmp`;
+    fs.copyFileSync(src, tmp);
+
+    // Windows can throw EBUSY/EPERM if something still briefly holds a
+    // handle on the live file right after the caller's Prisma disconnect —
+    // retry on a real delay a few times before giving up, rather than
+    // failing outright on what's normally a momentary lock.
+    for (let attempt = 1; ; attempt++) {
+      try {
+        fs.renameSync(tmp, this.dbPath);
+        return;
+      } catch (err) {
+        if (attempt >= 5) {
+          try {
+            fs.unlinkSync(tmp);
+          } catch {
+            // best effort — the rename error below is the one that matters
+          }
+          throw err;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
     }
   }
 

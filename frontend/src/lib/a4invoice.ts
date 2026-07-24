@@ -153,14 +153,29 @@ export async function generateA4InvoicePDF(bill: Bill, settings: Partial<Setting
   hline(y);
 
   // ── 3-column info box: Service Bill To / Service Details / Service Date ──
-  const infoTop = y;
-  const infoBoxH = 108;
-  const infoBottom = infoTop - infoBoxH;
   const colA_W = contentW * 0.42;
   const colB_W = contentW * 0.32;
   const colA_X = left;
   const colB_X = left + colA_W;
   const colC_X = colB_X + colB_W;
+
+  // Wrapped line arrays are computed once, up front, and reused for both the
+  // height calculation below AND the actual drawing — an unusually long
+  // customer name/address or Service Description used to just draw past a
+  // fixed 108pt box height and overlap the item table header underneath it.
+  const custNameLines = bill.customer ? wrapText(bold, bill.customer.name, 9.5, colA_W - 16) : [];
+  const custAddressLines = bill.customer?.address ? wrapText(regular, bill.customer.address, 9, colA_W - 16) : [];
+  const serviceDescLines = bill.serviceDescription ? wrapText(regular, bill.serviceDescription, 9, colB_W - 16) : [];
+
+  const colA_ContentH = bill.customer
+    ? 14 + custNameLines.length * 12.5 + custAddressLines.length * 12 + (bill.customer.gstin ? 12 : 0)
+    : 14 + 13;
+  const colB_ContentH = 14 + serviceDescLines.length * 12;
+  const colC_ContentH = 14 + (bill.serviceFrom || bill.serviceTo ? [bill.serviceFrom, bill.serviceTo].filter(Boolean).length : 1) * 12;
+
+  const infoTop = y;
+  const infoBoxH = Math.max(108, colA_ContentH, colB_ContentH, colC_ContentH) + 6; // 6pt bottom padding
+  const infoBottom = infoTop - infoBoxH;
 
   hline(infoBottom);
   vline(colB_X, infoBottom, infoTop);
@@ -170,15 +185,13 @@ export async function generateA4InvoicePDF(bill: Bill, settings: Partial<Setting
   text('Service Bill To :', colA_X + 8, cy, { size: 9.5, font: bold });
   cy -= 14;
   if (bill.customer) {
-    for (const line of wrapText(bold, bill.customer.name, 9.5, colA_W - 16)) {
+    for (const line of custNameLines) {
       text(line, colA_X + 8, cy, { size: 9.5, font: bold, color: BODY });
       cy -= 12.5;
     }
-    if (bill.customer.address) {
-      for (const line of wrapText(regular, bill.customer.address, 9, colA_W - 16)) {
-        text(line, colA_X + 8, cy, { size: 9, color: BODY });
-        cy -= 12;
-      }
+    for (const line of custAddressLines) {
+      text(line, colA_X + 8, cy, { size: 9, color: BODY });
+      cy -= 12;
     }
     if (bill.customer.gstin) {
       text(`GST IN : ${bill.customer.gstin}`, colA_X + 8, cy, { size: 9, color: BODY });
@@ -190,11 +203,9 @@ export async function generateA4InvoicePDF(bill: Bill, settings: Partial<Setting
   cy = infoTop - 14;
   text('Service Details :', colB_X + 8, cy, { size: 9.5, font: bold });
   cy -= 14;
-  if (bill.serviceDescription) {
-    for (const line of wrapText(regular, bill.serviceDescription, 9, colB_W - 16)) {
-      text(line, colB_X + 8, cy, { size: 9, color: BODY });
-      cy -= 12;
-    }
+  for (const line of serviceDescLines) {
+    text(line, colB_X + 8, cy, { size: 9, color: BODY });
+    cy -= 12;
   }
 
   cy = infoTop - 14;

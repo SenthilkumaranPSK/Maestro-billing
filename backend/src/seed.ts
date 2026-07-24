@@ -60,6 +60,28 @@ async function main() {
   }
   console.log('✓ Sample products created');
 
+  // Sample services — feeds the A4 invoice's Service Description autocomplete.
+  // Deliberately just names, no HSN/SAC/price here: those are studio/CA-specific
+  // and shouldn't ship as a guessed default.
+  const services = [
+    'Wedding Photography',
+    'Wedding Videography',
+    'Pre-Wedding Shoot',
+    'Product Photography',
+    'Product Video Shoot',
+    'Baby / Family Portrait Session',
+    'Birthday & Event Coverage',
+    'Passport / ID Photo Service',
+  ];
+
+  for (const name of services) {
+    const existing = await prisma.service.findFirst({ where: { name } });
+    if (!existing) {
+      await prisma.service.create({ data: { name } });
+    }
+  }
+  console.log('✓ Sample services created');
+
   // Sample customer
   await prisma.customer.upsert({
     where: { id: 1 },

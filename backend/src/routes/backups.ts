@@ -98,7 +98,7 @@ export async function backupRoutes(fastify: FastifyInstance) {
       // stale connection keeps writing to the old inode). Prisma reconnects
       // automatically on the next query.
       await fastify.prisma.$disconnect();
-      svc.restore(file);
+      await svc.restore(file);
       return reply.send({ success: true, message: `Database restored from ${file}` });
     } catch (err) {
       if (err instanceof BackupError) {

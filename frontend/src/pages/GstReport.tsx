@@ -55,8 +55,13 @@ export default function GstReportPage() {
         sgst: 0,
       };
       row.taxableValue += Math.round(item.qty * item.unitPrice);
-      row.cgst += item.gstAmount / 2;
-      row.sgst += item.gstAmount / 2;
+      // Integer paise only — splitting an odd gstAmount with plain /2 on
+      // both sides produces a .5 paisa fraction that each independently
+      // rounds up on display, so CGST+SGST no longer add back up to the
+      // actual tax total. Same floor+remainder split as ReportService.ts.
+      const half = Math.floor(item.gstAmount / 2);
+      row.cgst += half;
+      row.sgst += item.gstAmount - half;
       byRate.set(item.gstRate, row);
     }
   }

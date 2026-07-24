@@ -268,7 +268,7 @@ export default function BillingPage() {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [savedBill, items, customer, createBillMutation.isPending]);
+  }, [savedBill, items, customer, createBillMutation.isPending, layout, gstInclusive, serviceDescription, serviceFrom, serviceTo]);
 
   const handleWhatsAppShare = async () => {
     if (!savedBill || !customer.phone) return;
@@ -338,7 +338,7 @@ export default function BillingPage() {
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
-  }, [savedBill, items, customer, createBillMutation.isPending]);
+  }, [savedBill, items, customer, createBillMutation.isPending, layout, gstInclusive, serviceDescription, serviceFrom, serviceTo]);
 
   const handleReset = () => {
     setCustomer({ name: '', phone: '', gstin: '' });

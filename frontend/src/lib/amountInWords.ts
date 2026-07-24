@@ -23,6 +23,26 @@ function threeDigits(n: number): string {
 }
 
 /**
+ * 0-99 is the common case (twoDigits handles it directly), but nothing
+ * stops a crore count itself reaching 100+ (₹100 crore = ₹1 billion) —
+ * twoDigits(100) would index TENS[10], which doesn't exist, and silently
+ * print "undefined Crore" on an actual tax invoice. Reuses the same
+ * thousand/hundred grouping as the rest of this file rather than adding a
+ * real Arab/Kharab unit above crore — this app will never realistically
+ * see amounts anywhere near this large, but it should degrade to *correct*
+ * words instead of "undefined" if it ever does.
+ */
+function crorePart(n: number): string {
+  if (n < 100) return twoDigits(n);
+  const thousands = Math.floor(n / 1000);
+  const rest = n % 1000;
+  const parts: string[] = [];
+  if (thousands) parts.push(`${twoDigits(thousands)} Thousand`);
+  if (rest) parts.push(threeDigits(rest));
+  return parts.join(' ');
+}
+
+/**
  * Whole non-negative integer → words using the Indian numbering system
  * (crore / lakh / thousand, not the Western million/billion grouping).
  */
@@ -39,7 +59,7 @@ export function numberToIndianWords(value: number): string {
   const hundred = num;
 
   const segments: string[] = [];
-  if (crore) segments.push(`${twoDigits(crore)} Crore`);
+  if (crore) segments.push(`${crorePart(crore)} Crore`);
   if (lakh) segments.push(`${twoDigits(lakh)} Lakh`);
   if (thousand) segments.push(`${twoDigits(thousand)} Thousand`);
   if (hundred) segments.push(threeDigits(hundred));
