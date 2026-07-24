@@ -8,6 +8,7 @@ import { customersApi } from '@/api/customers';
 import { settingsApi } from '@/api/settings';
 import { formatCurrency, billStatusVariant, type Bill, type BillStatus, type Customer } from '@/types';
 import { formatDate } from '@/lib/utils';
+import { useClosingTransition } from '@/hooks/use-closing-transition';
 
 interface CustomerLedgerModalProps {
   customer: Customer;
@@ -16,6 +17,7 @@ interface CustomerLedgerModalProps {
 
 export function CustomerLedgerModal({ customer, onClose }: CustomerLedgerModalProps) {
   const [selectedBill, setSelectedBill] = useState<Bill | null>(null);
+  const { closing, requestClose } = useClosingTransition(onClose);
 
   const { data: bills, isLoading } = useQuery({
     queryKey: ['customers', customer.id, 'bills'],
@@ -29,11 +31,11 @@ export function CustomerLedgerModal({ customer, onClose }: CustomerLedgerModalPr
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape') requestClose();
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onClose]);
+  }, [requestClose]);
 
   // Cancelled bills don't count toward what the customer has actually spent.
   const activeBills = (bills ?? []).filter((b) => b.status !== 'CANCELLED');
@@ -43,19 +45,19 @@ export function CustomerLedgerModal({ customer, onClose }: CustomerLedgerModalPr
   return (
     <>
       <div
-        className="fixed inset-0 z-50 bg-slate-950/50 backdrop-blur-[2px] flex items-center justify-center p-4 animate-in fade-in-0 duration-150"
+        className={`fixed inset-0 z-50 bg-slate-950/50 backdrop-blur-[2px] flex items-center justify-center p-4 duration-150 ${closing ? 'animate-out fade-out-0' : 'animate-in fade-in-0'}`}
         onClick={(e) => {
-          if (e.target === e.currentTarget) onClose();
+          if (e.target === e.currentTarget) requestClose();
         }}
       >
-        <div className="bg-white rounded-xl shadow-soft-lg w-full max-w-2xl max-h-[90vh] flex flex-col animate-in fade-in-0 zoom-in-95 duration-200">
+        <div className={`bg-white rounded-xl shadow-soft-lg w-full max-w-2xl max-h-[90vh] flex flex-col duration-200 ${closing ? 'animate-out fade-out-0 zoom-out-95' : 'animate-in fade-in-0 zoom-in-95'}`}>
           {/* Header */}
           <div className="flex items-center justify-between px-6 py-4 border-b">
             <div>
               <h3 className="font-bold text-lg">{customer.name}</h3>
               <p className="text-xs text-muted-foreground">{customer.phone}</p>
             </div>
-            <Button variant="ghost" size="icon" onClick={onClose}>
+            <Button variant="ghost" size="icon" onClick={requestClose}>
               <X className="h-4 w-4" />
             </Button>
           </div>
@@ -95,7 +97,7 @@ export function CustomerLedgerModal({ customer, onClose }: CustomerLedgerModalPr
                       <th className="text-right py-2 font-medium"></th>
                     </tr>
                   </thead>
-                  <tbody>
+                  <tbody className="stagger-children">
                     {bills!.map((bill) => (
                       <tr key={bill.id} className="border-b last:border-b-0 hover:bg-slate-50">
                         <td className="py-2.5 font-mono text-blue-600 font-medium">{bill.billNumber}</td>

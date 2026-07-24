@@ -14,9 +14,14 @@ export class BillService {
 
     const year = new Date().getFullYear();
 
+    // Ordered by billNumber (the actual sequence), not id — id is normally
+    // in lockstep with the sequence, but the two are only guaranteed to
+    // match by convention, not by a real constraint. billNumber's sequence
+    // is zero-padded to a fixed width, so a plain string sort already sorts
+    // numerically (up to 9999/year).
     const lastBill = await this.prisma.bill.findFirst({
       where: { billNumber: { startsWith: `${prefix}-${year}-` } },
-      orderBy: { id: 'desc' },
+      orderBy: { billNumber: 'desc' },
     });
 
     let seq = 1;
@@ -86,10 +91,11 @@ export class BillService {
     const roundOffAmount = input.roundOffAmount ?? 0;
     const finalTotal = grandTotal - discountAmount + roundOffAmount;
 
-    // A zero-total bill is almost always a mistake (e.g. a forgotten line
-    // item). Reject loudly so the user can fix it.
-    if (finalTotal <= 0) {
-      throw new Error('Cannot save a bill with a total of 0. Add at least one item with a price.');
+    // A zero total is a legitimate complimentary bill or a 100%-discounted
+    // one — only a NEGATIVE total (discount bigger than the bill itself) is
+    // actually invalid.
+    if (finalTotal < 0) {
+      throw new Error('Cannot save a bill with a negative total — the discount exceeds the bill amount.');
     }
 
     // Bill numbers are assigned read-then-write, so two simultaneous saves
@@ -160,8 +166,8 @@ export class BillService {
     const roundOffAmount = input.roundOffAmount ?? 0;
     const finalTotal = grandTotal - discountAmount + roundOffAmount;
 
-    if (finalTotal <= 0) {
-      throw new Error('Cannot save a bill with a total of 0. Add at least one item with a price.');
+    if (finalTotal < 0) {
+      throw new Error('Cannot save a bill with a negative total — the discount exceeds the bill amount.');
     }
 
     return this.prisma.$transaction(async (tx) => {

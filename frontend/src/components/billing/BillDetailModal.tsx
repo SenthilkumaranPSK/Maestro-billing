@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { LayoutToggle, type BillLayout } from '@/components/billing/LayoutToggle';
 import { formatCurrency, billStatusVariant, type Bill, type Settings, type BillStatus } from '@/types';
 import { formatDate } from '@/lib/utils';
+import { useClosingTransition } from '@/hooks/use-closing-transition';
 
 // pdf-lib is heavy (~400KB) — loaded on demand, same pattern as BillingPage/History.
 const loadPdfLib = () => import('@/lib/pdf');
@@ -21,6 +22,7 @@ interface BillDetailModalProps {
 
 export function BillDetailModal({ bill, settings, onClose, onEdit }: BillDetailModalProps) {
   const [layout, setLayout] = useState<BillLayout>('thermal');
+  const { closing, requestClose } = useClosingTransition(onClose);
 
   const handlePrint = async () => {
     if (layout === 'a4') {
@@ -45,23 +47,23 @@ export function BillDetailModal({ bill, settings, onClose, onEdit }: BillDetailM
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        onClose();
+        requestClose();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onClose]);
+  }, [requestClose]);
 
   return (
       <div
-        className="fixed inset-0 z-50 bg-slate-950/50 backdrop-blur-[2px] flex items-center justify-center p-4 animate-in fade-in-0 duration-150"
+        className={`fixed inset-0 z-50 bg-slate-950/50 backdrop-blur-[2px] flex items-center justify-center p-4 duration-150 ${closing ? 'animate-out fade-out-0' : 'animate-in fade-in-0'}`}
         onClick={(e) => {
           if (e.target === e.currentTarget) {
-            onClose();
+            requestClose();
           }
         }}
       >
-        <div className="bg-white rounded-xl shadow-soft-lg w-full max-w-2xl max-h-[90vh] flex flex-col animate-in fade-in-0 zoom-in-95 duration-200">
+        <div className={`bg-white rounded-xl shadow-soft-lg w-full max-w-2xl max-h-[90vh] flex flex-col duration-200 ${closing ? 'animate-out fade-out-0 zoom-out-95' : 'animate-in fade-in-0 zoom-in-95'}`}>
           {/* Header */}
           <div className="flex items-center justify-between px-6 py-4 border-b">
             <div className="flex items-center gap-3">
@@ -84,7 +86,7 @@ export function BillDetailModal({ bill, settings, onClose, onEdit }: BillDetailM
               <Button variant="outline" size="sm" onClick={handleDownload}>
                 <FileText className="h-4 w-4 mr-1" /> PDF
               </Button>
-              <Button variant="ghost" size="icon" onClick={onClose}>
+              <Button variant="ghost" size="icon" onClick={requestClose}>
                 <X className="h-4 w-4" />
               </Button>
             </div>
@@ -115,7 +117,7 @@ export function BillDetailModal({ bill, settings, onClose, onEdit }: BillDetailM
                     <th className="text-right py-2 font-medium">Total</th>
                   </tr>
                 </thead>
-                <tbody>
+                <tbody className="stagger-children">
                   {bill.items.map((item, i) => (
                     <tr key={item.id} className="border-b">
                       <td className="py-2 text-muted-foreground">{i + 1}</td>

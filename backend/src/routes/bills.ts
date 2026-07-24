@@ -70,7 +70,11 @@ export async function billRoutes(fastify: FastifyInstance) {
       prisma.bill.count({ where }),
     ]);
 
-    return reply.send({ success: true, data: bills, meta: { total, page, limit } });
+    // Same "total > returned rows" comparison the report pages already do
+    // client-side to show their truncation warning — exposed here too so a
+    // caller doesn't have to derive it itself.
+    const capped = total > bills.length;
+    return reply.send({ success: true, data: bills, meta: { total, page, limit, capped } });
   });
 
   fastify.get('/:id', async (request, reply) => {
@@ -85,7 +89,16 @@ export async function billRoutes(fastify: FastifyInstance) {
 
   fastify.post('/', { preHandler: requireAppHeader }, async (request, reply) => {
     const body = createBillSchema.parse(request.body);
-    const bill = await billService.createBill(body);
+    let bill;
+    try {
+      bill = await billService.createBill(body);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Create failed';
+      if (msg.includes('negative total')) {
+        return reply.status(400).send({ success: false, error: msg });
+      }
+      throw err;
+    }
 
     // The bill is already committed at this point — a failure writing the
     // audit log must never 500 the request (the operator would see "Error
@@ -117,7 +130,7 @@ export async function billRoutes(fastify: FastifyInstance) {
       bill = await billService.updateBill(id, body);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Update failed';
-      if (msg.includes('Cancelled') || msg.includes('not found') || msg.includes('total of 0') || msg.includes('recorded payments')) {
+      if (msg.includes('Cancelled') || msg.includes('not found') || msg.includes('negative total') || msg.includes('recorded payments')) {
         return reply.status(400).send({ success: false, error: msg });
       }
       throw err;
@@ -145,6 +158,12 @@ export async function billRoutes(fastify: FastifyInstance) {
   fastify.delete('/:id', { preHandler: requireAppHeader }, async (request, reply) => {
     const id = parseId((request.params as { id: string }).id);
     if (!id) return reply.status(400).send({ success: false, error: 'Invalid bill id' });
+
+    const existing = await prisma.bill.findUnique({ where: { id, deletedAt: null } });
+    if (!existing) return reply.status(404).send({ success: false, error: 'Bill not found' });
+    if (existing.status === 'CANCELLED') {
+      return reply.status(400).send({ success: false, error: 'Bill is already cancelled' });
+    }
 
     // Mark CANCELLED but keep the bill visible in history (audit trail).
     // Revenue and GST figures exclude CANCELLED bills on the frontend.

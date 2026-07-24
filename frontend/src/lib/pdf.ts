@@ -183,10 +183,23 @@ export async function printBillPDF(bill: Bill, settings: Partial<Settings>) {
   iframe.src = url;
   document.body.appendChild(iframe);
   iframe.onload = () => {
-    iframe.contentWindow?.print();
-    setTimeout(() => {
-      document.body.removeChild(iframe);
+    let cleaned = false;
+    const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
+      if (iframe.parentNode) document.body.removeChild(iframe);
       URL.revokeObjectURL(url);
-    }, 2000);
+    };
+    // afterprint fires once the print dialog is actually dismissed (printed
+    // or cancelled). A fixed short timer here used to destroy this iframe
+    // (and revoke its blob: URL) out from under a print dialog the operator
+    // was still interacting with — e.g. switching the destination printer,
+    // which takes a few seconds while the preview re-renders — which could
+    // take the whole print flow (and in some cases the window) down mid
+    // interaction. The timeout below is only a fallback in case afterprint
+    // never fires (not guaranteed on every platform/embedder).
+    iframe.contentWindow?.addEventListener('afterprint', cleanup);
+    iframe.contentWindow?.print();
+    setTimeout(cleanup, 60_000);
   };
 }

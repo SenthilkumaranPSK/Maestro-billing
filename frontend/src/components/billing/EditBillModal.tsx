@@ -13,9 +13,10 @@ import { ServiceDescriptionInput } from '@/components/billing/ServiceDescription
 import { billsApi } from '@/api/bills';
 import { customersApi } from '@/api/customers';
 import { useToast } from '@/hooks/use-toast';
+import { useClosingTransition } from '@/hooks/use-closing-transition';
 import { computeLineTotals } from '@/lib/billMath';
 import type { Bill, BillItemForm } from '@/types';
-import { paisaToRupee, rupeeToPaisa } from '@/types';
+import { paisaToRupee, rupeeToPaisa, formatCurrency } from '@/types';
 
 const newEmptyItem = (): BillItemForm => ({
   _id: crypto.randomUUID(),
@@ -35,6 +36,7 @@ interface EditBillModalProps {
 export function EditBillModal({ bill, onClose, onSaved }: EditBillModalProps) {
   const { toast } = useToast();
   const qc = useQueryClient();
+  const { closing, requestClose } = useClosingTransition(onClose);
 
   const [customer, setCustomer] = useState<CustomerInfo>({
     id: bill.customer?.id,
@@ -100,11 +102,14 @@ export function EditBillModal({ bill, onClose, onSaved }: EditBillModalProps) {
       return;
     }
 
-    const unpriced = validItems.find((i) => i.unitPrice <= 0);
+    // A negative price can't come from the product list (prices there are
+    // validated nonnegative) — this only catches a stray manual edge case.
+    // 0 is allowed: that's how a complimentary/free line item gets billed.
+    const unpriced = validItems.find((i) => i.unitPrice < 0);
     if (unpriced) {
       toast({
-        title: 'Item has no price',
-        description: `"${unpriced.productName}" — select it from the product list so its price fills in.`,
+        title: 'Item has an invalid price',
+        description: `"${unpriced.productName}" has a negative price — fix it before saving.`,
         variant: 'destructive',
       });
       return;
@@ -153,10 +158,10 @@ export function EditBillModal({ bill, onClose, onSaved }: EditBillModalProps) {
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-slate-950/50 backdrop-blur-[2px] flex items-center justify-center p-4 animate-in fade-in-0 duration-150"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      className={`fixed inset-0 z-50 bg-slate-950/50 backdrop-blur-[2px] flex items-center justify-center p-4 duration-150 ${closing ? 'animate-out fade-out-0' : 'animate-in fade-in-0'}`}
+      onClick={(e) => { if (e.target === e.currentTarget) requestClose(); }}
     >
-      <div className="bg-white rounded-xl shadow-soft-lg w-full max-w-5xl max-h-[95vh] flex flex-col animate-in fade-in-0 zoom-in-95 duration-200">
+      <div className={`bg-white rounded-xl shadow-soft-lg w-full max-w-5xl max-h-[95vh] flex flex-col duration-200 ${closing ? 'animate-out fade-out-0 zoom-out-95' : 'animate-in fade-in-0 zoom-in-95'}`}>
 
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b shrink-0">
@@ -166,7 +171,7 @@ export function EditBillModal({ bill, onClose, onSaved }: EditBillModalProps) {
           </div>
           <div className="flex items-center gap-2">
             <LayoutToggle value={layout} onChange={setLayout} />
-            <Button variant="ghost" size="icon" onClick={onClose}><X className="h-4 w-4" /></Button>
+            <Button variant="ghost" size="icon" onClick={requestClose}><X className="h-4 w-4" /></Button>
           </div>
         </div>
 
@@ -257,6 +262,7 @@ export function EditBillModal({ bill, onClose, onSaved }: EditBillModalProps) {
                             index={idx}
                             item={item}
                             showHsnSac={layout === 'a4'}
+                            gstInclusive={gstInclusive}
                             onChange={(u) => setItems((p) => p.map((i, j) => (j === idx ? u : i)))}
                             onRemove={() => setItems((p) => p.filter((_, j) => j !== idx))}
                             includeInactive
@@ -309,7 +315,7 @@ export function EditBillModal({ bill, onClose, onSaved }: EditBillModalProps) {
                   <div className="border-t pt-2.5 mt-1">
                     <div className="flex justify-between items-center">
                       <span className="font-semibold text-slate-700">Grand Total</span>
-                      <span className="text-xl font-bold text-brand-700 tabular-nums">₹{paisaToRupee(grandTotalP)}</span>
+                      <span className="text-xl font-bold text-brand-700 tabular-nums">{formatCurrency(grandTotalP)}</span>
                     </div>
                   </div>
                 </CardContent>
@@ -320,7 +326,7 @@ export function EditBillModal({ bill, onClose, onSaved }: EditBillModalProps) {
 
         {/* Footer */}
         <div className="flex justify-end gap-3 px-6 py-4 border-t shrink-0">
-          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button variant="outline" onClick={requestClose}>Cancel</Button>
           <Button
             onClick={handleSave}
             disabled={updateMutation.isPending}

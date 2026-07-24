@@ -388,6 +388,21 @@ function setupBackupDownloads() {
   });
 }
 
+// A crash in a non-renderer child process (GPU, print backend/spooler
+// service, network service, etc.) doesn't fire render-process-gone above —
+// that's renderer-only. Printing in particular can spin up its own
+// out-of-process print-compositor/backend service, and certain printer
+// drivers are known to crash it when print settings change mid-dialog (e.g.
+// switching the destination printer while the preview re-renders). Without
+// this handler such a crash was silently unhandled — just logging it here
+// stops it from being a mystery "the app vanished" report with no trace,
+// and Chromium already recovers most of these services on its own; only the
+// GPU process taking the renderer down with it would still hit
+// render-process-gone separately.
+app.on('child-process-gone', (_e, details) => {
+  console.error(`Child process gone: type=${details.type} reason=${details.reason} name=${details.name ?? ''}`);
+});
+
 app.whenReady().then(() => {
   try {
     startBackend();

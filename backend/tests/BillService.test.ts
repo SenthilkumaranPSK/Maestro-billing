@@ -4,7 +4,7 @@
  * Covers:
  *   - computeItemTotals math (paise arithmetic, GST rounding, multiple items)
  *   - createBill happy path (always PAID, no payment rows)
- *   - createBill / updateBill zero-total reject
+ *   - createBill / updateBill allow a zero total (complimentary bill), reject negative
  *   - updateBill allowed on PAID, blocked on CANCELLED
  *   - discount + round-off math flows through to grandTotal
  */
@@ -75,17 +75,15 @@ test('createBill: bill is always PAID, no payment rows', async () => {
   assert.equal(bill.items.length, 1);
 });
 
-test('createBill: REJECTS zero-total bill', async () => {
-  await assert.rejects(
-    () =>
-      service.createBill({
-        billDate: '2026-07-11T10:00:00.000Z',
-        items: [
-          { productName: 'Freebie', unit: 'piece', qty: 1, unitPrice: 0, gstRate: 0 },
-        ],
-      }),
-    /total of 0/,
-  );
+test('createBill: allows a zero-total (complimentary) bill', async () => {
+  const bill = await service.createBill({
+    billDate: '2026-07-11T10:00:00.000Z',
+    items: [
+      { productName: 'Freebie', unit: 'piece', qty: 1, unitPrice: 0, gstRate: 0 },
+    ],
+  });
+  assert.equal(bill.grandTotal, 0);
+  assert.equal(bill.status, 'PAID');
 });
 
 test('createBill: discount + round-off flow to grandTotal', async () => {
@@ -111,7 +109,7 @@ test('createBill: REJECTS negative-total bill (discount > subtotal)', async () =
         ],
         discountAmount: 500, // exceeds subtotal
       }),
-    /total of 0/,
+    /negative total/,
   );
 });
 
@@ -134,23 +132,20 @@ test('updateBill: editing a PAID bill succeeds and recalculates totals', async (
   assert.equal(updated.items[0].productName, 'Y');
 });
 
-test('updateBill: REJECTS zero-total on edit', async () => {
+test('updateBill: allows editing a bill down to a zero (complimentary) total', async () => {
   const bill = await service.createBill({
     billDate: '2026-07-11T10:00:00.000Z',
     items: [
       { productName: 'X', unit: 'piece', qty: 1, unitPrice: 1000, gstRate: 0 },
     ],
   });
-  await assert.rejects(
-    () =>
-      service.updateBill(bill.id, {
-        billDate: '2026-07-11T10:00:00.000Z',
-        items: [
-          { productName: 'Y', unit: 'piece', qty: 1, unitPrice: 0, gstRate: 0 },
-        ],
-      }),
-    /total of 0/,
-  );
+  const updated = await service.updateBill(bill.id, {
+    billDate: '2026-07-11T10:00:00.000Z',
+    items: [
+      { productName: 'Y', unit: 'piece', qty: 1, unitPrice: 0, gstRate: 0 },
+    ],
+  });
+  assert.equal(updated.grandTotal, 0);
 });
 
 test('updateBill: REJECTS editing a CANCELLED bill', async () => {

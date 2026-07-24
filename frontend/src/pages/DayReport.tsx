@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { billsApi } from '@/api/bills';
+import { settingsApi } from '@/api/settings';
 import { formatCurrency } from '@/types';
 import { todayISO } from '@/lib/utils';
 
@@ -40,6 +41,13 @@ export default function DayReportPage() {
     queryKey: ['bills', 'day', date],
     queryFn: () => billsApi.list({ from: date, to: date, limit: 1000 }),
   });
+
+  const { data: settings } = useQuery({
+    queryKey: ['settings'],
+    queryFn: settingsApi.get,
+  });
+  const studioName = (settings?.studio?.studio_owner || settings?.studio?.studio_name || 'Studio').toUpperCase();
+  const studioAddressLines = (settings?.studio?.studio_address ?? '').split('\n').filter(Boolean);
 
   // Cancelled bills are excluded from the day's revenue figures.
   const bills = (billsData?.data ?? []).filter((b) => b.status !== 'CANCELLED');
@@ -88,9 +96,10 @@ export default function DayReportPage() {
       <div ref={printRef} className="space-y-4">
         {/* Print header */}
         <div className="hidden print:block text-center pb-4 border-b-2 border-black">
-          <p className="font-bold text-lg">THE MAESTRO STUDIO'S</p>
-          <p className="text-sm">Brindavan Road, Fairlands</p>
-          <p className="text-sm">Salem - 636 016</p>
+          <p className="font-bold text-lg">{studioName}</p>
+          {studioAddressLines.map((line, i) => (
+            <p key={i} className="text-sm">{line}</p>
+          ))}
           <p className="font-semibold mt-2">DAY CLOSING REPORT</p>
           <p className="text-sm">{displayDate}</p>
         </div>
@@ -140,7 +149,7 @@ export default function DayReportPage() {
                     <th className="text-right py-2 px-4 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Amount</th>
                   </tr>
                 </thead>
-                <tbody>
+                <tbody className="stagger-children">
                   {bills.map((bill) => (
                     <tr key={bill.id} className="border-b last:border-b-0">
                       <td className="py-2.5 px-4 text-sm font-medium">{bill.billNumber}</td>

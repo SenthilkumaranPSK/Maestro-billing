@@ -11,19 +11,61 @@ export class BackupError extends Error {
 }
 
 const MIN_BACKUP_BYTES = 1024; // refuse to keep a backup smaller than 1 KB
+const BACKUP_DIR_SETTING_KEY = 'backup_dir';
 
 // Backups deliberately live off the same drive as the app/database, so a
 // failing C: drive (or a botched install/uninstall) can't take the database
 // AND its safety net down together. D:\Billing is tried first, then
 // E:\Billing, for whichever drive actually exists on this PC; a single-drive
 // PC (no D: or E:) falls back to the old sibling-of-the-database folder.
+// An operator-configured location (Settings → Database) takes priority over
+// all of this — see the `customBackupDir` constructor param.
 const PREFERRED_BACKUP_DIRS = ['D:\\Billing', 'E:\\Billing'];
+
+// Every call site that constructs a BackupService needs to resolve the same
+// operator-configured location first, or different requests (list/create/
+// download/restore) could each land on a different folder. Centralized here
+// so that can never drift.
+export async function getConfiguredBackupDir(prisma: PrismaClient): Promise<string | undefined> {
+  const setting = await prisma.setting.findUnique({ where: { key: BACKUP_DIR_SETTING_KEY } });
+  return setting?.value?.trim() || undefined;
+}
+
+export async function setConfiguredBackupDir(prisma: PrismaClient, dir: string): Promise<void> {
+  const trimmed = dir.trim();
+  if (trimmed) assertBackupDirUsable(trimmed);
+  await prisma.setting.upsert({
+    where: { key: BACKUP_DIR_SETTING_KEY },
+    create: { key: BACKUP_DIR_SETTING_KEY, value: trimmed, group: 'backup' },
+    update: { value: trimmed },
+  });
+}
+
+// Confirms a path can actually be used as a backup location — creates it if
+// missing, then proves it's genuinely writable (a directory can already
+// exist but be read-only, which a bare existence check wouldn't catch).
+// Used when the operator sets a custom location, so a bad path is rejected
+// immediately instead of silently failing on the next automatic backup.
+export function assertBackupDirUsable(dir: string): void {
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    const probe = path.join(dir, `.write-test-${Date.now()}`);
+    fs.writeFileSync(probe, '');
+    fs.unlinkSync(probe);
+  } catch (err) {
+    throw new BackupError(
+      `Can't use "${dir}" as a backup location: ${err instanceof Error ? err.message : String(err)}. ` +
+        'Check the path exists (or can be created) and is writable.',
+    );
+  }
+}
 
 export class BackupService {
   private readonly dbPath: string;
   private readonly backupDir: string;
+  readonly isCustomBackupDir: boolean;
 
-  constructor() {
+  constructor(customBackupDir?: string) {
     const dbUrl = process.env.DATABASE_URL ?? 'file:../../database/studio.db';
     const filePath = dbUrl.replace(/^file:/, '');
     this.dbPath = path.isAbsolute(filePath)
@@ -36,7 +78,14 @@ export class BackupService {
       );
     }
 
-    this.backupDir = BackupService.resolveBackupDir(this.dbPath);
+    const trimmedCustom = customBackupDir?.trim();
+    if (trimmedCustom) {
+      this.backupDir = path.resolve(trimmedCustom);
+      this.isCustomBackupDir = true;
+    } else {
+      this.backupDir = BackupService.resolveBackupDir(this.dbPath);
+      this.isCustomBackupDir = false;
+    }
   }
 
   /**
@@ -75,8 +124,19 @@ export class BackupService {
     // from when browsing the folder directly (not just in the app's list).
     const monthFolder = timestamp.slice(0, 7);
     const monthDir = path.join(this.backupDir, monthFolder);
-    if (!fs.existsSync(monthDir)) {
-      fs.mkdirSync(monthDir, { recursive: true });
+    try {
+      if (!fs.existsSync(monthDir)) {
+        fs.mkdirSync(monthDir, { recursive: true });
+      }
+    } catch (err) {
+      // Covers a configured/detected drive that's no longer reachable (a
+      // USB drive unplugged, a mapped network drive disconnected) — without
+      // this, the caller would see a raw Node ENOENT/EPERM instead of a
+      // clear, actionable message.
+      throw new BackupError(
+        `Backup aborted — could not access the backup location at ${this.backupDir}: ` +
+          `${err instanceof Error ? err.message : String(err)}. Check that it's still connected and writable.`,
+      );
     }
 
     const backupFileName = `studio_${timestamp}.db`;
@@ -247,11 +307,19 @@ export class BackupService {
     return results.sort((a, b) => baseName(b.name).localeCompare(baseName(a.name)));
   }
 
+  // Called as the last step of a backup that has ALREADY succeeded — a
+  // pruning failure (a locked/permission-denied old file) must never
+  // propagate and make the caller think the fresh backup itself failed.
+  // Best-effort: log and move on, don't abort the rest of the cleanup either.
   private pruneOldBackups(keepCount: number): void {
     const files = this.list();
     const toDelete = files.slice(keepCount);
     for (const f of toDelete) {
-      fs.unlinkSync(path.join(this.backupDir, f.name));
+      try {
+        fs.unlinkSync(path.join(this.backupDir, f.name));
+      } catch (err) {
+        console.warn(`Backup prune: could not delete old backup ${f.name}:`, err);
+      }
     }
     // Clean up any month folder left empty by the deletions above so old
     // backups don't leave a trail of empty dated folders behind forever.
@@ -262,7 +330,11 @@ export class BackupService {
     );
     for (const dir of touchedMonthDirs) {
       if (fs.existsSync(dir) && fs.readdirSync(dir).length === 0) {
-        fs.rmdirSync(dir);
+        try {
+          fs.rmdirSync(dir);
+        } catch (err) {
+          console.warn(`Backup prune: could not remove empty folder ${dir}:`, err);
+        }
       }
     }
   }

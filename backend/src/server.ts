@@ -18,7 +18,7 @@ import { printerRoutes } from './routes/printer';
 import { reportRoutes } from './routes/reports';
 import { errorHandler } from './middleware/errorHandler';
 import { WhatsAppService } from './services/WhatsAppService';
-import { BackupService } from './services/BackupService';
+import { BackupService, getConfiguredBackupDir } from './services/BackupService';
 import { ReportService, previousMonthYm } from './services/ReportService';
 
 const prisma = new PrismaClient();
@@ -126,7 +126,15 @@ async function main() {
       const pathname = request.url.split('?')[0] ?? '';
       const looksLikeFile = /\.[a-zA-Z0-9]+$/.test(pathname);
       if (request.method === 'GET' && !pathname.startsWith('/api') && !looksLikeFile) {
-        return reply.sendFile('index.html');
+        // Not reply.sendFile() — that relies on @fastify/static's ambient
+        // type augmentation of FastifyReply resolving correctly, which is
+        // fragile across npm workspace hoisting layouts (its declared
+        // `import ... from 'fastify'` can fail to resolve to the same
+        // `fastify` package this file's own types come from, silently
+        // dropping the augmentation). A plain read+send has no such
+        // dependency and is exactly as correct for a small, rarely-served
+        // SPA shell file.
+        return reply.type('text/html').send(fs.readFileSync(path.join(frontendDist, 'index.html')));
       }
       return reply.status(404).send({ success: false, error: 'Not found' });
     });
@@ -188,7 +196,8 @@ async function main() {
   // 24 hours while the server stays up. The operator never has to remember.
   const autoBackup = async () => {
     try {
-      const svc = new BackupService();
+      const customDir = await getConfiguredBackupDir(prisma);
+      const svc = new BackupService(customDir);
       // Check by filename (it embeds the timestamp) — file mtime is
       // unreliable on Windows because copies preserve source timestamps.
       const today = new Date().toISOString().slice(0, 10);

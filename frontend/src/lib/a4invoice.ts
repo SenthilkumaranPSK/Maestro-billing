@@ -246,9 +246,15 @@ export async function generateA4InvoicePDF(bill: Bill, settings: Partial<Setting
   const tableHeaderBottom = tableTop - tableHeaderH;
 
   text(cols[0]!.label, cols[0]!.x + 8, tableTop - 15, { size: 9.5, font: bold });
-  for (const c of cols.slice(1)) {
+  for (const c of cols.slice(1, -1)) {
     text(c.label, c.x, tableTop - 15, { size: 9, font: bold, align: 'center', maxWidth: c.w });
   }
+  // AMOUNT is the one column whose row data is right-aligned (money reads
+  // right-to-left for digit-place comparison), not centered like Qty/Price/
+  // HSN — its header must use the same align+maxWidth as the row values
+  // below (see the item loop), or the header centers over the column while
+  // the actual figures hug the right edge, landing ~10pt apart.
+  text(cols[4]!.label, cols[4]!.x, tableTop - 15, { size: 9, font: bold, align: 'right', maxWidth: cols[4]!.w - 8 });
   hline(tableHeaderBottom);
 
   // Totals and bank/signature blocks are anchored to fixed positions from the
@@ -421,10 +427,23 @@ export async function printA4InvoicePDF(bill: Bill, settings: Partial<Settings>)
   iframe.src = url;
   document.body.appendChild(iframe);
   iframe.onload = () => {
-    iframe.contentWindow?.print();
-    setTimeout(() => {
-      document.body.removeChild(iframe);
+    let cleaned = false;
+    const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
+      if (iframe.parentNode) document.body.removeChild(iframe);
       URL.revokeObjectURL(url);
-    }, 2000);
+    };
+    // afterprint fires once the print dialog is actually dismissed (printed
+    // or cancelled). A fixed short timer here used to destroy this iframe
+    // (and revoke its blob: URL) out from under a print dialog the operator
+    // was still interacting with — e.g. switching the destination printer,
+    // which takes a few seconds while the preview re-renders — which could
+    // take the whole print flow (and in some cases the window) down mid
+    // interaction. The timeout below is only a fallback in case afterprint
+    // never fires (not guaranteed on every platform/embedder).
+    iframe.contentWindow?.addEventListener('afterprint', cleanup);
+    iframe.contentWindow?.print();
+    setTimeout(cleanup, 60_000);
   };
 }

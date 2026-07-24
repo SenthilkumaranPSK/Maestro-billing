@@ -17,6 +17,8 @@
  *   - Missing DB file throws a clear error
  *   - Absolute path in DATABASE_URL is used as-is (no cwd prefix)
  *   - backup() copies the file to backups/ and prunes old ones
+ *   - A custom backup dir (operator-configured location) is used and flagged
+ *   - assertBackupDirUsable / getConfiguredBackupDir / setConfiguredBackupDir
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -242,4 +244,101 @@ test('BackupService: relative DATABASE_URL is resolved against process.cwd()', a
       }
     } catch { /* ignore */ }
   }
+});
+
+test('BackupService: a custom backup dir passed to the constructor is used and flagged', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'studio-backup-custom-'));
+  const dbFile = join(dir, 'mydb.db');
+  copyFileSync(TEMPLATE_DB, dbFile);
+  const customDir = join(dir, 'my-custom-location');
+
+  process.env.DATABASE_URL = `file:${dbFile}`;
+  delete process.env.BACKUP_DIR; // make sure the env-var escape hatch isn't masking the constructor param
+  const { BackupService } = await import(`../src/services/BackupService.ts?cb=${Date.now()}-${Math.random()}-custom`);
+
+  const svc = new BackupService(customDir);
+  assert.equal(svc.isCustomBackupDir, true);
+  assert.equal(svc.resolvedBackupDir, customDir);
+
+  const backupPath = await svc.backup();
+  assert.ok(backupPath.startsWith(customDir), `expected backup under ${customDir}, got ${backupPath}`);
+
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('BackupService: no custom dir passed falls back to auto-detection, not flagged as custom', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'studio-backup-nocustom-'));
+  const dbFile = join(dir, 'mydb.db');
+  copyFileSync(TEMPLATE_DB, dbFile);
+
+  process.env.DATABASE_URL = `file:${dbFile}`;
+  process.env.BACKUP_DIR = join(dir, 'backups');
+  const { BackupService } = await import(`../src/services/BackupService.ts?cb=${Date.now()}-${Math.random()}-nocustom`);
+
+  const svc = new BackupService();
+  assert.equal(svc.isCustomBackupDir, false);
+
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('assertBackupDirUsable: accepts a creatable, writable path', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'studio-backup-assert-ok-'));
+  const target = join(dir, 'nested', 'location');
+  const { assertBackupDirUsable } = await import(`../src/services/BackupService.ts?cb=${Date.now()}-${Math.random()}-assertok`);
+
+  assert.doesNotThrow(() => assertBackupDirUsable(target));
+  assert.ok(existsSync(target), 'the path should have been created');
+
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('assertBackupDirUsable: rejects a path under a drive letter that does not exist', async () => {
+  const { assertBackupDirUsable, BackupError } = await import(`../src/services/BackupService.ts?cb=${Date.now()}-${Math.random()}-assertbad`);
+
+  // Z: essentially never exists on a normal dev/CI machine — a stand-in for
+  // "a USB drive that isn't actually plugged in".
+  assert.throws(() => assertBackupDirUsable('Z:\\definitely-not-a-real-drive\\Billing'), BackupError);
+});
+
+test('getConfiguredBackupDir / setConfiguredBackupDir: round-trips through the Setting table', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'studio-backup-setting-'));
+  const dbFile = join(dir, 'setting.db');
+  copyFileSync(TEMPLATE_DB, dbFile);
+
+  const { PrismaClient } = await import('@prisma/client');
+  const prisma = new PrismaClient({ datasources: { db: { url: `file:${dbFile}` } } });
+  const { getConfiguredBackupDir, setConfiguredBackupDir } = await import(
+    `../src/services/BackupService.ts?cb=${Date.now()}-${Math.random()}-setting`
+  );
+
+  assert.equal(await getConfiguredBackupDir(prisma), undefined, 'unset by default');
+
+  const target = join(dir, 'chosen-location');
+  await setConfiguredBackupDir(prisma, target);
+  assert.equal(await getConfiguredBackupDir(prisma), target);
+
+  // Clearing with an empty string reverts to "unset" (auto-detection).
+  await setConfiguredBackupDir(prisma, '');
+  assert.equal(await getConfiguredBackupDir(prisma), undefined);
+
+  await prisma.$disconnect();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('setConfiguredBackupDir: rejects and does not persist an unusable path', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'studio-backup-setting-bad-'));
+  const dbFile = join(dir, 'setting.db');
+  copyFileSync(TEMPLATE_DB, dbFile);
+
+  const { PrismaClient } = await import('@prisma/client');
+  const prisma = new PrismaClient({ datasources: { db: { url: `file:${dbFile}` } } });
+  const { getConfiguredBackupDir, setConfiguredBackupDir } = await import(
+    `../src/services/BackupService.ts?cb=${Date.now()}-${Math.random()}-settingbad`
+  );
+
+  await assert.rejects(() => setConfiguredBackupDir(prisma, 'Z:\\definitely-not-a-real-drive\\Billing'));
+  assert.equal(await getConfiguredBackupDir(prisma), undefined, 'the bad path must not have been saved');
+
+  await prisma.$disconnect();
+  rmSync(dir, { recursive: true, force: true });
 });

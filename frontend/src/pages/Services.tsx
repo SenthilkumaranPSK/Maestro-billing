@@ -85,7 +85,7 @@ export default function ServicesPage() {
                 ))}
               </tr>
             </thead>
-            <tbody>
+            <tbody className="stagger-children">
               {isLoading && <tr><td colSpan={3} className="py-10 text-center text-sm text-muted-foreground">Loading…</td></tr>}
               {!isLoading && services?.length === 0 && <tr><td colSpan={3} className="py-10 text-center text-sm text-muted-foreground">No services found</td></tr>}
               {services?.map((s) => (

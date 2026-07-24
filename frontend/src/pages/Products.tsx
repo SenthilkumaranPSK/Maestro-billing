@@ -93,7 +93,7 @@ export default function ProductsPage() {
                   ))}
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="stagger-children">
                 {isLoading && <tr><td colSpan={7} className="py-10 text-center text-sm text-muted-foreground">Loading…</td></tr>}
                 {!isLoading && products?.length === 0 && <tr><td colSpan={7} className="py-10 text-center text-sm text-muted-foreground">No products found</td></tr>}
                 {products?.map((p) => (

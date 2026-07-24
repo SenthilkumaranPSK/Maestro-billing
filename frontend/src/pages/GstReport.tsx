@@ -199,7 +199,7 @@ export default function GstReportPage() {
                   <th className="text-right py-2 px-4 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Total Tax</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="stagger-children">
                 {rows.map((r) => (
                   <tr key={r.rate} className="border-b last:border-b-0">
                     <td className="py-2.5 px-4 text-sm font-medium">{r.rate}%</td>

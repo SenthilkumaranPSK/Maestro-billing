@@ -74,6 +74,8 @@ export async function customerRoutes(fastify: FastifyInstance) {
   fastify.put('/:id', { preHandler: requireAppHeader }, async (request, reply) => {
     const id = parseId((request.params as { id: string }).id);
     if (!id) return reply.status(400).send({ success: false, error: 'Invalid customer id' });
+    const existing = await prisma.customer.findFirst({ where: { id, deletedAt: null } });
+    if (!existing) return reply.status(404).send({ success: false, error: 'Customer not found' });
     const body = customerSchema.parse(request.body);
     const customer = await prisma.customer.update({
       where: { id },

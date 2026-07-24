@@ -223,7 +223,7 @@ export class ReportService {
 
     y -= 28;
     page.drawText(
-      'Note: taxable value is before discount. Figures cover all non-cancelled bills. Verify with your CA before filing.',
+      'Note: taxable value is before discount (Total Discount is shown separately above). Figures cover all non-cancelled bills. Verify with your CA before filing.',
       { x: marginX, y, size: 8, font, color: GRAY },
     );
     y -= 12;

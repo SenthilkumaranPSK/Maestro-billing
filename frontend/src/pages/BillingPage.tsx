@@ -188,25 +188,25 @@ export default function BillingPage() {
       return;
     }
 
-    // Prices only come from the product list now — a hand-typed name has no
-    // price and the backend would reject the whole bill. Fail with a message
-    // that says exactly which row to fix.
-    const unpriced = validItems.find((i) => i.unitPrice <= 0);
+    // A negative price can't come from the product list (prices there are
+    // validated nonnegative) — this only catches a stray manual edge case.
+    // 0 is allowed: that's how a complimentary/free line item gets billed.
+    const unpriced = validItems.find((i) => i.unitPrice < 0);
     if (unpriced) {
       toast({
-        title: 'Item has no price',
-        description: `"${unpriced.productName}" — select it from the product list so its price fills in.`,
+        title: 'Item has an invalid price',
+        description: `"${unpriced.productName}" has a negative price — fix it before saving.`,
         variant: 'destructive',
       });
       return;
     }
 
-    // Reject zero-total bills client-side. The server enforces the same rule,
-    // but failing fast here avoids a round-trip and gives a clearer message.
-    if (grandTotalP === 0) {
+    // Reject negative-total bills client-side (matches the server's rule) —
+    // a total of exactly 0 is a legitimate complimentary bill.
+    if (grandTotalP < 0) {
       toast({
-        title: 'Zero total not allowed',
-        description: 'Add at least one item with a price.',
+        title: 'Negative total not allowed',
+        description: 'The discount exceeds the bill amount.',
         variant: 'destructive',
       });
       return;
@@ -527,6 +527,7 @@ export default function BillingPage() {
                         index={idx}
                         item={item}
                         showHsnSac={layout === 'a4'}
+                        gstInclusive={gstInclusive}
                         onChange={(updated) =>
                           setItems((prev) => prev.map((i, j) => (j === idx ? updated : i)))
                         }
@@ -583,7 +584,7 @@ export default function BillingPage() {
               <div className="border-t pt-2.5 mt-1">
                 <div className="flex justify-between items-center">
                   <span className="font-semibold text-slate-700">Grand Total</span>
-                  <span className="text-xl font-bold text-brand-700 tabular-nums">₹{paisaToRupee(grandTotalP)}</span>
+                  <span className="text-xl font-bold text-brand-700 tabular-nums">{formatCurrency(grandTotalP)}</span>
                 </div>
               </div>
             </CardContent>

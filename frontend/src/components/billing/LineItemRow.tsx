@@ -5,7 +5,8 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { productsApi } from '@/api/products';
 import type { BillItemForm } from '@/types';
-import { paisaToRupee, rupeeToPaisa } from '@/types';
+import { paisaToRupee } from '@/types';
+import { computeItemLineTotal } from '@/lib/billMath';
 
 interface LineItemRowProps {
   index: number;
@@ -23,9 +24,16 @@ interface LineItemRowProps {
   onRequestNewRow?: () => void;
   /** Show an editable HSN/SAC column — A4 invoice layout only. */
   showHsnSac?: boolean;
+  /**
+   * Whether the entered price is the all-in (tax-included) price or the
+   * pre-tax base — changes which of Actual Amount / Total this row's own
+   * price represents. Without this, the row always displayed as if
+   * exclusive regardless of the bill's actual GST mode.
+   */
+  gstInclusive?: boolean;
 }
 
-export function LineItemRow({ index, item, onChange, onRemove, includeInactive = false, onRequestNewRow, showHsnSac = false }: LineItemRowProps) {
+export function LineItemRow({ index, item, onChange, onRemove, includeInactive = false, onRequestNewRow, showHsnSac = false, gstInclusive = false }: LineItemRowProps) {
   const [productSearch, setProductSearch] = useState(item.productName);
   const [showDropdown, setShowDropdown] = useState(false);
   const ref = useRef<HTMLTableCellElement>(null);
@@ -63,11 +71,16 @@ export function LineItemRow({ index, item, onChange, onRemove, includeInactive =
   // Integer-paise rounding, matching the backend's BillService.computeItemTotals
   // exactly — otherwise a fractional qty/price can show a row total here that
   // differs by a paisa or two from what the bill actually saves and charges.
-  const lineTotalP = Math.round(item.qty * rupeeToPaisa(item.unitPrice));
-  const gstAmtP = Math.round((lineTotalP * item.gstRate) / 100);
-  const lineTotal = paisaToRupee(lineTotalP);
-  const gstAmt = paisaToRupee(gstAmtP);
-  const totalWithGst = paisaToRupee(lineTotalP + gstAmtP);
+  // gstInclusive changes which side of the split the entered price lands on:
+  // exclusive treats it as the base (GST added on top); inclusive treats it
+  // as the final price (GST backed out of it instead).
+  const { subTotalP, gstAmountP, totalP } = computeItemLineTotal(
+    { qty: item.qty, unitPrice: item.unitPrice, gstRate: item.gstRate },
+    gstInclusive,
+  );
+  const actualAmount = paisaToRupee(subTotalP);
+  const gstAmt = paisaToRupee(gstAmountP);
+  const totalWithGst = paisaToRupee(totalP);
 
   return (
     <tr className="border-b group animate-in fade-in slide-in-from-top-1 duration-200">
@@ -168,7 +181,7 @@ export function LineItemRow({ index, item, onChange, onRemove, includeInactive =
         <div>
           <p className="text-sm font-medium tabular-nums">₹{totalWithGst.toFixed(2)}</p>
           {item.gstRate > 0 && (
-            <p className="text-xs text-muted-foreground">₹{lineTotal.toFixed(2)} + GST</p>
+            <p className="text-xs text-muted-foreground">₹{actualAmount.toFixed(2)} + ₹{gstAmt.toFixed(2)} GST</p>
           )}
         </div>
       </td>

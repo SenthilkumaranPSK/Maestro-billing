@@ -108,6 +108,10 @@ model Bill {
   items          BillItem[]
   payments       Payment[]
 
+  // Day/Month/GST reports and history filtering all query by billDate range;
+  // the customer ledger queries by customerId — neither had an index.
+  @@index([billDate])
+  @@index([customerId])
   @@map("bills")
 }
 

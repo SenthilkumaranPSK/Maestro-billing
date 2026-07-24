@@ -1,18 +1,28 @@
 import { FastifyInstance } from 'fastify';
 import fs from 'fs';
 import path from 'path';
-import { BackupService, BackupError } from '../services/BackupService';
+import {
+  BackupService,
+  BackupError,
+  getConfiguredBackupDir,
+  setConfiguredBackupDir,
+} from '../services/BackupService';
 import { requireAppHeader } from '../middleware/requireAppHeader';
 
 export async function backupRoutes(fastify: FastifyInstance) {
   // GET /api/v1/backups — list available backup files
   fastify.get('/', { preHandler: requireAppHeader }, async (_req, reply) => {
     try {
-      const svc = new BackupService();
+      const customDir = await getConfiguredBackupDir(fastify.prisma);
+      const svc = new BackupService(customDir);
       return reply.send({
         success: true,
         data: svc.list(),
-        meta: { onSeparateDrive: svc.onSeparateDrive, backupDir: svc.resolvedBackupDir },
+        meta: {
+          onSeparateDrive: svc.onSeparateDrive,
+          backupDir: svc.resolvedBackupDir,
+          isCustomBackupDir: svc.isCustomBackupDir,
+        },
       });
     } catch (err) {
       if (err instanceof BackupError) {
@@ -20,6 +30,31 @@ export async function backupRoutes(fastify: FastifyInstance) {
       }
       throw err;
     }
+  });
+
+  // GET /api/v1/backups/location — the operator-configured backup folder,
+  // if one has been set (Settings → Database → Backup Location).
+  fastify.get('/location', { preHandler: requireAppHeader }, async (_req, reply) => {
+    const dir = await getConfiguredBackupDir(fastify.prisma);
+    return reply.send({ success: true, data: { path: dir ?? null } });
+  });
+
+  // PUT /api/v1/backups/location — set a custom backup folder, or clear it
+  // (empty/omitted path) to revert to automatic D:\Billing / E:\Billing /
+  // same-drive-fallback detection. Validated before saving — a bad path
+  // (unwritable, unreachable) is rejected immediately rather than only
+  // surfacing on the next automatic backup.
+  fastify.put<{ Body: { path?: string } }>('/location', { preHandler: requireAppHeader }, async (request, reply) => {
+    const raw = (request.body?.path ?? '').trim();
+    try {
+      await setConfiguredBackupDir(fastify.prisma, raw);
+    } catch (err) {
+      if (err instanceof BackupError) {
+        return reply.status(400).send({ success: false, error: err.message });
+      }
+      throw err;
+    }
+    return reply.send({ success: true, data: { path: raw || null } });
   });
 
   // GET /api/v1/backups/:file/download — stream a backup file as an
@@ -33,7 +68,8 @@ export async function backupRoutes(fastify: FastifyInstance) {
   // from another origin if HOST is ever changed from the 127.0.0.1 default.
   fastify.get<{ Params: { file: string } }>('/:file/download', async (request, reply) => {
     try {
-      const svc = new BackupService();
+      const customDir = await getConfiguredBackupDir(fastify.prisma);
+      const svc = new BackupService(customDir);
       const filePath = svc.resolveBackupPath(request.params.file);
       const name = path.basename(filePath);
       reply.header('Content-Disposition', `attachment; filename="${name}"`);
@@ -64,7 +100,8 @@ export async function backupRoutes(fastify: FastifyInstance) {
   // POST /api/v1/backups — create a new backup
   fastify.post('/', { preHandler: requireAppHeader }, async (_req, reply) => {
     try {
-      const svc = new BackupService();
+      const customDir = await getConfiguredBackupDir(fastify.prisma);
+      const svc = new BackupService(customDir);
       const filePath = await svc.backup();
       // Relative to backupDir (e.g. "2026-07/studio_....db"), not just the
       // bare filename — resolveBackupPath() needs the month-folder prefix
@@ -91,7 +128,8 @@ export async function backupRoutes(fastify: FastifyInstance) {
 
     const { file } = request.params;
     try {
-      const svc = new BackupService();
+      const customDir = await getConfiguredBackupDir(fastify.prisma);
+      const svc = new BackupService(customDir);
       // Snapshot the current DB first so a mistaken restore is undoable.
       await svc.backup();
       // Close our SQLite handle so Windows lets us replace the file (and no

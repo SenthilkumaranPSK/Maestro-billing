@@ -171,7 +171,7 @@ export default function HistoryPage() {
                   ))}
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="stagger-children">
                 {isLoading && (
                   <tr>
                     <td colSpan={7} className="py-10 text-center text-muted-foreground text-sm">Loading…</td>

@@ -123,7 +123,7 @@ export default function DashboardPage() {
                   ))}
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="stagger-children">
                 {recentBills.map((bill) => (
                   <tr key={bill.id} className="border-b last:border-b-0 hover:bg-slate-50 transition-colors">
                     <td className="py-3 px-4 font-mono text-sm font-semibold text-blue-600">{bill.billNumber}</td>

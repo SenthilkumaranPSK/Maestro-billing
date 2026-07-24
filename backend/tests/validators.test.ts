@@ -124,7 +124,7 @@ test('productSchema rejects a 21-char unit', () => {
   assert.equal(result.success, false);
 });
 
-test('billItemSchema requires productName, qty > 0, unitPrice > 0', () => {
+test('billItemSchema requires productName, qty > 0, unitPrice >= 0', () => {
   const result = billItemSchema.safeParse({
     productName: '',
     unit: 'piece',
@@ -133,8 +133,19 @@ test('billItemSchema requires productName, qty > 0, unitPrice > 0', () => {
     gstRate: 18,
   });
   assert.equal(result.success, false);
-  // 3 different errors: min(1) on name, positive() on qty, positive() on unitPrice
+  // 3 different errors: min(1) on name, positive() on qty, nonnegative() on unitPrice
   if (!result.success) assert.ok(result.error.issues.length >= 3);
+});
+
+test('billItemSchema accepts a zero-priced (complimentary) item', () => {
+  const result = billItemSchema.safeParse({
+    productName: 'Complimentary Print',
+    unit: 'piece',
+    qty: 1,
+    unitPrice: 0,
+    gstRate: 0,
+  });
+  assert.equal(result.success, true);
 });
 
 test('createBillSchema requires at least one item', () => {

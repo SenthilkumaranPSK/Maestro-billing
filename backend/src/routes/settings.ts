@@ -1,6 +1,6 @@
 ﻿import { FastifyInstance } from 'fastify';
 import { settingSchema, bulkSettingsSchema } from '../utils/validators';
-import { BackupService, BackupError } from '../services/BackupService';
+import { BackupService, BackupError, getConfiguredBackupDir } from '../services/BackupService';
 import { requireAppHeader } from '../middleware/requireAppHeader';
 
 export async function settingsRoutes(fastify: FastifyInstance) {
@@ -55,7 +55,8 @@ export async function settingsRoutes(fastify: FastifyInstance) {
     try {
       // Instantiated lazily — the constructor throws if the DB file is missing,
       // and doing that at route-registration time would crash the whole server.
-      const backupPath = await new BackupService().backup();
+      const customDir = await getConfiguredBackupDir(prisma);
+      const backupPath = await new BackupService(customDir).backup();
       return reply.send({ success: true, data: { path: backupPath } });
     } catch (err) {
       fastify.log.error({ err }, 'Manual backup failed');

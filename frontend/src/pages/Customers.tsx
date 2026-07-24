@@ -112,7 +112,7 @@ export default function CustomersPage() {
                 ))}
               </tr>
             </thead>
-            <tbody>
+            <tbody className="stagger-children">
               {isLoading && <tr><td colSpan={5} className="py-10 text-center text-sm text-muted-foreground">Loading…</td></tr>}
               {!isLoading && data?.data.length === 0 && <tr><td colSpan={5} className="py-10 text-center text-sm text-muted-foreground">No customers found</td></tr>}
               {data?.data.map((c) => (

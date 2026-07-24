@@ -1,7 +1,9 @@
-import { Smartphone, RotateCcw, FileBarChart2, Percent, ChevronRight, Save, AlertTriangle } from 'lucide-react';
+import { useState } from 'react';
+import { Smartphone, RotateCcw, FileBarChart2, Percent, ChevronRight, Save, AlertTriangle, FolderCog } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { whatsappApi } from '@/api/whatsapp';
 import { backupsApi } from '@/api/backups';
@@ -27,6 +29,34 @@ export default function SettingsPage() {
     queryFn: backupsApi.list,
   });
   const backups = backupData?.backups;
+
+  const [editingLocation, setEditingLocation] = useState(false);
+  const [locationInput, setLocationInput] = useState('');
+
+  const setLocationMutation = useMutation({
+    mutationFn: (path: string) => backupsApi.setLocation(path),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['backups'] });
+      setEditingLocation(false);
+      toast({ title: 'Backup location updated', variant: 'success' });
+    },
+    onError: (err: Error) => {
+      toast({ title: 'Could not set backup location', description: err.message, variant: 'destructive' });
+    },
+  });
+
+  const handleEditLocation = () => {
+    setLocationInput(backupData?.isCustomBackupDir ? backupData.backupDir : '');
+    setEditingLocation(true);
+  };
+
+  const handleSaveLocation = () => {
+    if (!locationInput.trim()) {
+      toast({ title: 'Enter a folder path', variant: 'destructive' });
+      return;
+    }
+    setLocationMutation.mutate(locationInput.trim());
+  };
 
   const restoreMutation = useMutation({
     mutationFn: backupsApi.restore,
@@ -124,31 +154,85 @@ export default function SettingsPage() {
         <CardContent>
           <p className="text-xs text-muted-foreground mb-3">
             A backup is taken automatically every morning, the first time the app is opened that
-            day — there's no manual "backup now" button, it's all automatic. The last 30 are kept
-            in <code className="bg-slate-100 px-1 rounded">D:\Billing</code> (or{' '}
+            day — there's no manual "backup now" button, it's all automatic. The last 30 are kept,
+            by default on{' '}
+            <code className="bg-slate-100 px-1 rounded">D:\Billing</code> (or{' '}
             <code className="bg-slate-100 px-1 rounded">E:\Billing</code> if D: isn't available) —
-            a separate drive from wherever the app and its live database live, on purpose.
-            Restoring rolls the whole database back to that moment. Use{' '}
+            a separate drive from wherever the app and its live database live, on purpose. Set a
+            location of your own below if you'd rather use a specific drive or folder. Restoring
+            rolls the whole database back to that moment. Use{' '}
             <span className="font-medium text-slate-700">Save a Copy</span> to save any backup to a
             location of your choice — a USB drive, Desktop, cloud-synced folder, wherever.
           </p>
+
+          <div className="mb-3 rounded-lg border border-slate-200 px-3 py-2.5">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0 flex items-center gap-2">
+                <FolderCog className="h-4 w-4 text-slate-400 shrink-0" />
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold text-slate-700">
+                    Backup Location{' '}
+                    {backupData?.isCustomBackupDir && (
+                      <span className="font-normal text-brand-700">(custom)</span>
+                    )}
+                  </p>
+                  <p className="text-xs text-muted-foreground font-mono truncate">
+                    {backupData?.backupDir ?? '—'}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                {backupData?.isCustomBackupDir && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setLocationMutation.mutate('')}
+                    disabled={setLocationMutation.isPending}
+                  >
+                    Use Automatic
+                  </Button>
+                )}
+                <Button variant="outline" size="sm" onClick={handleEditLocation}>
+                  Change
+                </Button>
+              </div>
+            </div>
+            {editingLocation && (
+              <div className="flex items-center gap-2 mt-2.5">
+                <Input
+                  value={locationInput}
+                  onChange={(e) => setLocationInput(e.target.value)}
+                  placeholder="e.g. D:\Billing or \\NAS\Backups"
+                  className="h-8 text-sm"
+                  autoFocus
+                />
+                <Button size="sm" onClick={handleSaveLocation} disabled={setLocationMutation.isPending}>
+                  Save
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => setEditingLocation(false)}>
+                  Cancel
+                </Button>
+              </div>
+            )}
+          </div>
+
           {backupData && !backupData.onSeparateDrive && (
             <div className="flex items-start gap-2.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5 mb-3">
               <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
               <p className="text-xs text-amber-800">
                 <span className="font-semibold">No second drive found</span> — backups are currently
                 stored on the same drive as the live database ({backupData.backupDir}), so a failed,
-                stolen, or wiped drive would take out both together. Connect a D: or E: drive so
-                backups move there automatically, or regularly use{' '}
-                <span className="font-medium">Save a Copy</span> below to put one on a USB drive or a
-                cloud-synced folder.
+                stolen, or wiped drive would take out both together. Connect a D: or E: drive, or set
+                a Backup Location above pointing at a different drive or network folder, or regularly
+                use <span className="font-medium">Save a Copy</span> below to put one on a USB drive
+                or a cloud-synced folder.
               </p>
             </div>
           )}
           {(backups?.length ?? 0) === 0 ? (
             <p className="text-sm text-muted-foreground py-3 text-center">No backups yet.</p>
           ) : (
-            <div className="border rounded-lg divide-y max-h-64 overflow-y-auto">
+            <div className="border rounded-lg divide-y max-h-64 overflow-y-auto stagger-children">
               {backups!.map((b) => (
                 <div key={b.name} className="flex items-center justify-between px-3 py-2">
                   <div className="min-w-0">

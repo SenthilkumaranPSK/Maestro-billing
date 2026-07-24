@@ -52,7 +52,7 @@ export const productSchema = z.object({
   name: z.string().min(1, 'Product name is required').max(200, 'Product name too long'),
   description: z.string().max(2000, 'Description too long').nullable().optional(),
   unit: z.string().min(1).max(20),
-  unitPrice: z.number().int().positive('Price must be positive'),
+  unitPrice: z.number().int().nonnegative('Price cannot be negative'),
   gstRate: z.number().min(0).max(100),
   hsnSac: z.string().max(20, 'HSN/SAC too long').nullable().optional(),
   isActive: z.boolean().optional(),
@@ -72,7 +72,9 @@ export const billItemSchema = z.object({
   hsnSac: z.string().max(20, 'HSN/SAC too long').nullable().optional(),
   unit: z.string().min(1).max(20),
   qty: z.number().positive(),
-  unitPrice: z.number().int().positive(),
+  // nonnegative, not positive — a 0-price line item is how a complimentary/
+  // free item (or a 100%-discounted one) gets billed.
+  unitPrice: z.number().int().nonnegative(),
   gstRate: z.number().min(0).max(100),
 });
 
@@ -86,7 +88,11 @@ export const createBillSchema = z.object({
   items: z.array(billItemSchema).min(1, 'At least one item required'),
   notes: z.string().max(2000, 'Notes too long').optional(),
   discountAmount: z.number().int().min(0).optional(),
-  roundOffAmount: z.number().int().optional(),
+  // Rounding to the nearest rupee can never require more than 99 paise of
+  // adjustment either way — bounding it catches a garbage/malicious value
+  // (e.g. -999999) that would otherwise silently produce a wildly wrong
+  // grandTotal, since the server just adds it in without recomputing it.
+  roundOffAmount: z.number().int().min(-99).max(99).optional(),
   serviceDescription: z.string().max(500, 'Service description too long').optional(),
   serviceFrom: z.string().refine(isValidDateString, 'Invalid service-from date').optional(),
   serviceTo: z.string().refine(isValidDateString, 'Invalid service-to date').optional(),
@@ -113,7 +119,13 @@ export function parseId(raw: string | undefined): number | null {
   return Number.isSafeInteger(n) && n > 0 ? n : null;
 }
 
-/** NaN-safe positive integer with a default and an optional cap (page/limit). */
+/**
+ * NaN-safe positive integer with a default and an optional cap (page/limit).
+ * `0` and negative values fall back to `def` rather than being rejected —
+ * there's no way to distinguish "caller explicitly wants 0 results" from
+ * "caller omitted/mistyped the param", so this treats both as "use the
+ * default" instead of erroring.
+ */
 export function parseIntParam(raw: string | undefined, def: number, max?: number): number {
   const n = parseInt(raw ?? '', 10);
   if (isNaN(n) || n < 1) return def;

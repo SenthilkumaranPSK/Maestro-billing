@@ -147,6 +147,12 @@ export interface PaginatedResponse<T> {
     total: number;
     page: number;
     limit: number;
+    // Only set by /bills — true when total exceeds what this response
+    // actually returned (e.g. a report requesting "everything" via a large
+    // limit hit the server's hard cap). Existing pages already compute this
+    // themselves (total > data.length); this is the same signal, exposed by
+    // the API directly.
+    capped?: boolean;
   };
 }
 

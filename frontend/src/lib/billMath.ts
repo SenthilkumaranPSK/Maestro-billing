@@ -6,10 +6,40 @@ export interface LineTotalsInput {
   gstRate: number;
 }
 
+export interface ItemLineTotal {
+  subTotalP: number; // the taxable base ("Actual Amount"), in paise
+  gstAmountP: number; // in paise
+  totalP: number; // subTotalP + gstAmountP, in paise
+}
+
 /**
- * Mirrors BillService.computeItemTotals on the backend exactly (same
- * per-item rounding, same inclusive/exclusive branch) so the on-screen
- * preview always matches what actually gets saved, to the paisa.
+ * Per-item GST split — mirrors BillService.computeItemTotals's per-item
+ * branch on the backend exactly (same rounding, same inclusive/exclusive
+ * logic): exclusive treats the entered amount as the pre-tax base and adds
+ * GST on top; inclusive treats it as the final all-in price and backs the
+ * base out of it instead, so the entered amount is always what the row's
+ * own "Total" shows in inclusive mode. Shared by computeLineTotals (the
+ * bill-level aggregate) and any per-row display so neither can drift from
+ * the other, to the paisa.
+ */
+export function computeItemLineTotal(item: LineTotalsInput, gstInclusive: boolean): ItemLineTotal {
+  const enteredTotalP = Math.round(item.qty * rupeeToPaisa(item.unitPrice));
+  let subTotalP: number;
+  let gstAmountP: number;
+
+  if (gstInclusive && item.gstRate > 0) {
+    subTotalP = Math.round((enteredTotalP * 100) / (100 + item.gstRate));
+    gstAmountP = enteredTotalP - subTotalP;
+  } else {
+    subTotalP = enteredTotalP;
+    gstAmountP = Math.round((subTotalP * item.gstRate) / 100);
+  }
+
+  return { subTotalP, gstAmountP, totalP: subTotalP + gstAmountP };
+}
+
+/**
+ * Bill-level aggregate — sums computeItemLineTotal across every item.
  */
 export function computeLineTotals(
   items: LineTotalsInput[],
@@ -19,20 +49,9 @@ export function computeLineTotals(
   let gstTotalP = 0;
 
   for (const item of items) {
-    const enteredTotalP = Math.round(item.qty * rupeeToPaisa(item.unitPrice));
-    let itemSubTotalP: number;
-    let gstAmountP: number;
-
-    if (gstInclusive && item.gstRate > 0) {
-      itemSubTotalP = Math.round((enteredTotalP * 100) / (100 + item.gstRate));
-      gstAmountP = enteredTotalP - itemSubTotalP;
-    } else {
-      itemSubTotalP = enteredTotalP;
-      gstAmountP = Math.round((itemSubTotalP * item.gstRate) / 100);
-    }
-
-    subTotalP += itemSubTotalP;
-    gstTotalP += gstAmountP;
+    const r = computeItemLineTotal(item, gstInclusive);
+    subTotalP += r.subTotalP;
+    gstTotalP += r.gstAmountP;
   }
 
   return { subTotalP, gstTotalP };
