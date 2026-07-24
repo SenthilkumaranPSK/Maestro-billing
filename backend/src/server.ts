@@ -170,15 +170,31 @@ async function main() {
 
   // ── Graceful shutdown ────────────────────────────────────────────────────
   let shuttingDown = false;
+  // autoBackup/autoMonthlyReport below are deferred a few seconds past boot
+  // and re-run daily via setInterval — both scheduled independently of this
+  // handler. Without tracking them, a quit landing in that window could hit
+  // process.exit() while one was mid-write (fs.copyFileSync / PDF
+  // generation), leaving a truncated backup or report file behind — worse
+  // than not having one, since a truncated .db still looks like a valid
+  // backup in the list until someone tries to restore it. Cleared/awaited
+  // here the same way WhatsAppService already tracks its own init timer.
+  let backupTimer: NodeJS.Timeout | undefined;
+  let reportTimer: NodeJS.Timeout | undefined;
+  let backupInFlight: Promise<void> | null = null;
+  let reportInFlight: Promise<void> | null = null;
   async function closeHandler(signal: string) {
     if (shuttingDown) return; // a second Ctrl+C must not re-enter close()
     shuttingDown = true;
     app.log.info(`Received ${signal}, shutting down…`);
+    clearTimeout(backupTimer);
+    clearTimeout(reportTimer);
     // Failsafe: if close hangs (e.g. WhatsApp's Chrome refusing to die),
     // force-exit after 10s rather than leaving a zombie process.
     const failsafe = setTimeout(() => process.exit(1), 10_000);
     failsafe.unref();
     await whatsapp.shutdown().catch(() => {});
+    await (backupInFlight ?? Promise.resolve()).catch(() => {});
+    await (reportInFlight ?? Promise.resolve()).catch(() => {});
     await app.close();
     await prisma.$disconnect();
     process.exit(0);
@@ -212,11 +228,15 @@ async function main() {
       app.log.error({ err }, 'Auto-backup failed');
     }
   };
+  const runAutoBackup = () => {
+    if (shuttingDown) return;
+    backupInFlight = autoBackup().finally(() => { backupInFlight = null; });
+  };
   // Deferred a few seconds so this doesn't compete with the frontend's very
   // first load for CPU/DB access right as the app opens — the daily cadence
   // doesn't care about a few seconds' difference in when the check runs.
-  setTimeout(() => void autoBackup(), 4000);
-  setInterval(autoBackup, 24 * 60 * 60 * 1000).unref();
+  backupTimer = setTimeout(runAutoBackup, 4000);
+  setInterval(runAutoBackup, 24 * 60 * 60 * 1000).unref();
 
   // ── Automatic monthly GST report ────────────────────────────────────────
   // Once a calendar month has fully closed, generate its GST summary PDF
@@ -235,10 +255,14 @@ async function main() {
       app.log.error({ err }, 'Automatic monthly report generation failed');
     }
   };
+  const runAutoMonthlyReport = () => {
+    if (shuttingDown) return;
+    reportInFlight = autoMonthlyReport().finally(() => { reportInFlight = null; });
+  };
   // Same reasoning as autoBackup above — staggered slightly later so the
   // two deferred startup jobs don't land in the same instant either.
-  setTimeout(() => void autoMonthlyReport(), 7000);
-  setInterval(autoMonthlyReport, 24 * 60 * 60 * 1000).unref();
+  reportTimer = setTimeout(runAutoMonthlyReport, 7000);
+  setInterval(runAutoMonthlyReport, 24 * 60 * 60 * 1000).unref();
 }
 
 main().catch((err) => {
