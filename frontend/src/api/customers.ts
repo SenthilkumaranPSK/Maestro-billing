@@ -1,5 +1,5 @@
 import { api } from './client';
-import type { Customer, ApiResponse, PaginatedResponse } from '@/types';
+import type { Bill, Customer, ApiResponse, PaginatedResponse } from '@/types';
 
 export const customersApi = {
   list: (params?: { search?: string; page?: number; limit?: number }) =>
@@ -17,5 +17,5 @@ export const customersApi = {
   delete: (id: number) => api.delete(`/customers/${id}`),
 
   getBills: (id: number) =>
-    api.get(`/customers/${id}/bills`).then((r) => r.data.data),
+    api.get<ApiResponse<Bill[]>>(`/customers/${id}/bills`).then((r) => r.data.data),
 };

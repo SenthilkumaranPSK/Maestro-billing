@@ -3,6 +3,7 @@ import { Sidebar } from './Sidebar';
 import { Header } from './Header';
 
 const titles: Record<string, string> = {
+  '/dashboard':  'Dashboard',
   '/billing':    'New Bill',
   '/customers':  'Customers',
   '/products':   'Products',

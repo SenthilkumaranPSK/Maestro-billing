@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AppShell } from '@/components/layout/AppShell';
 import { Toaster } from '@/components/ui/toaster';
+import DashboardPage from '@/pages/Dashboard';
 import BillingPage from '@/pages/BillingPage';
 import CustomersPage from '@/pages/Customers';
 import ProductsPage from '@/pages/Products';
@@ -25,7 +26,8 @@ export default function App() {
         <Toaster />
         <Routes>
           <Route path="/" element={<AppShell />}>
-            <Route index element={<Navigate to="/billing" replace />} />
+            <Route index element={<Navigate to="/dashboard" replace />} />
+            <Route path="dashboard" element={<DashboardPage />} />
             <Route path="billing" element={<BillingPage />} />
             <Route path="customers" element={<CustomersPage />} />
             <Route path="products" element={<ProductsPage />} />
@@ -36,7 +38,7 @@ export default function App() {
             <Route path="gst-report" element={<GstReportPage />} />
             <Route path="settings" element={<SettingsPage />} />
           </Route>
-          <Route path="*" element={<Navigate to="/billing" replace />} />
+          <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>
       </BrowserRouter>
     </QueryClientProvider>

@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { CustomerLedgerModal } from '@/components/customers/CustomerLedgerModal';
 import { customersApi } from '@/api/customers';
 import { useToast } from '@/hooks/use-toast';
 import type { Customer } from '@/types';
@@ -20,6 +21,7 @@ export default function CustomersPage() {
   const [page, setPage] = useState(1);
   const [editing, setEditing] = useState<Partial<Customer> | null>(null);
   const [isNew, setIsNew] = useState(false);
+  const [ledgerCustomer, setLedgerCustomer] = useState<Customer | null>(null);
   const [searchParams, setSearchParams] = useSearchParams();
   // ?id= comes from the History page (clicking a customer name). When present,
   // we highlight and scroll to the matching row for 2s, then strip the param
@@ -123,7 +125,16 @@ export default function CustomersPage() {
                       : 'hover:bg-slate-50'
                   }`}
                 >
-                  <td className="py-3 px-4 font-medium text-sm">{c.name}</td>
+                  <td className="py-3 px-4 font-medium text-sm">
+                    <button
+                      type="button"
+                      className="text-blue-600 hover:underline text-left"
+                      onClick={() => setLedgerCustomer(c)}
+                      title="View bill history"
+                    >
+                      {c.name}
+                    </button>
+                  </td>
                   <td className="py-3 px-4 text-sm">{c.phone}</td>
                   <td className="py-3 px-4 text-sm text-muted-foreground">{c.email ?? '—'}</td>
                   <td className="py-3 px-4 text-sm text-muted-foreground font-mono">{c.gstin ?? '—'}</td>
@@ -205,6 +216,10 @@ export default function CustomersPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {ledgerCustomer && (
+        <CustomerLedgerModal customer={ledgerCustomer} onClose={() => setLedgerCustomer(null)} />
+      )}
     </div>
   );
 }

@@ -1,10 +1,11 @@
 import { NavLink } from 'react-router-dom';
 import {
-  Receipt, Users, Package, ListChecks, History, Settings,
+  LayoutDashboard, Receipt, Users, Package, ListChecks, History, Settings,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const nav = [
+  { to: '/dashboard',  icon: LayoutDashboard,  label: 'Dashboard' },
   { to: '/billing',    icon: Receipt,          label: 'New Bill' },
   { to: '/customers',  icon: Users,            label: 'Customers' },
   { to: '/products',   icon: Package,          label: 'Products' },
