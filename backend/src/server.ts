@@ -212,7 +212,10 @@ async function main() {
       app.log.error({ err }, 'Auto-backup failed');
     }
   };
-  void autoBackup();
+  // Deferred a few seconds so this doesn't compete with the frontend's very
+  // first load for CPU/DB access right as the app opens — the daily cadence
+  // doesn't care about a few seconds' difference in when the check runs.
+  setTimeout(() => void autoBackup(), 4000);
   setInterval(autoBackup, 24 * 60 * 60 * 1000).unref();
 
   // ── Automatic monthly GST report ────────────────────────────────────────
@@ -232,7 +235,9 @@ async function main() {
       app.log.error({ err }, 'Automatic monthly report generation failed');
     }
   };
-  void autoMonthlyReport();
+  // Same reasoning as autoBackup above — staggered slightly later so the
+  // two deferred startup jobs don't land in the same instant either.
+  setTimeout(() => void autoMonthlyReport(), 7000);
   setInterval(autoMonthlyReport, 24 * 60 * 60 * 1000).unref();
 }
 

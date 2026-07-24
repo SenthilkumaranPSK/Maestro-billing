@@ -57,6 +57,17 @@ function findBrowserPath(): string | null {
 
 export type WhatsAppStatus = 'DISCONNECTED' | 'CONNECTING' | 'QR_READY' | 'CONNECTED';
 
+// This launches a second, complete Chrome/Edge instance to drive WhatsApp
+// Web — genuinely heavy to cold-start (a real browser engine loading a
+// JS-heavy web app), on top of Electron's own Chromium UI. Starting it
+// synchronously in the constructor used to mean it began at module load,
+// before the server even started listening — competing directly with
+// Electron's window creation and the frontend's first paint for CPU at
+// exactly the moment "opening the app" is most latency-sensitive. WhatsApp
+// reconnection/session-resume already takes 10-30s+ on its own, so a short
+// delay here costs nothing real while letting the UI become interactive first.
+const WHATSAPP_INIT_DELAY_MS = 5000;
+
 export class WhatsAppService {
   client: Client | null = null;
   private status: WhatsAppStatus = 'DISCONNECTED';
@@ -74,7 +85,7 @@ export class WhatsAppService {
   private initPromise: Promise<void> | null = null;
 
   constructor() {
-    this.initialize();
+    setTimeout(() => this.initialize(), WHATSAPP_INIT_DELAY_MS);
   }
 
   private initialize(): Promise<void> {
