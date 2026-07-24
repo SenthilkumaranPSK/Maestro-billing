@@ -260,8 +260,20 @@ function createWindow() {
   // If the server passed its health check but then dies before the page
   // finishes loading (crash in the brief gap between the two), the window
   // would otherwise sit blank with no clue why. Offer a retry instead.
-  mainWindow.webContents.on('did-fail-load', (_e, errorCode, errorDescription) => {
+  //
+  // did-fail-load fires for ANY failed load in this webContents, not just
+  // the top-level page — including the hidden <iframe src="blob:...">
+  // printing uses (lib/pdf.ts printBillPDF). Without the isMainFrame check,
+  // a print action that failed to load its iframe (e.g. blocked by CSP)
+  // triggered this exact "app failed to load" dialog, and clicking through
+  // it either reloaded the whole app (losing the in-progress bill) or quit
+  // it outright — a print hiccup should never be able to take the app down.
+  mainWindow.webContents.on('did-fail-load', (_e, errorCode, errorDescription, _url, isMainFrame) => {
     if (errorCode === -3) return; // ERR_ABORTED — normal on a redirect/reload, not a failure
+    if (!isMainFrame) {
+      console.error(`Sub-frame failed to load (ignored, not fatal): ${errorDescription}`);
+      return;
+    }
     dialog
       .showMessageBox(mainWindow, {
         type: 'error',
