@@ -1,8 +1,37 @@
 import { PDFDocument, PDFFont, rgb, StandardFonts } from 'pdf-lib';
+import fontkit from '@pdf-lib/fontkit';
 import type { Bill, Settings } from '@/types';
 import { paisaToRupee } from '@/types';
 import { amountInWordsINR } from '@/lib/amountInWords';
 import { bytesToBase64 } from '@/lib/pdf';
+
+// The studio's brand font (AvantGarde Bk BT — "Book" for body text, "Demi"
+// for headers/emphasis). Fetched once per session, same caching pattern as
+// the logo in lib/pdf.ts. Falls back to Helvetica if the files are ever
+// missing so invoice generation never hard-fails on a fresh checkout.
+let avantGardeBookCache: ArrayBuffer | null | undefined;
+let avantGardeDemiCache: ArrayBuffer | null | undefined;
+async function fetchFontBytes(path: string): Promise<ArrayBuffer | null> {
+  try {
+    const response = await fetch(path);
+    if (response.ok) return await response.arrayBuffer();
+  } catch {
+    // fall through to null — caller falls back to a standard font
+  }
+  return null;
+}
+async function embedBrandFonts(doc: PDFDocument): Promise<{ regular: PDFFont; bold: PDFFont }> {
+  doc.registerFontkit(fontkit);
+  if (avantGardeBookCache === undefined) avantGardeBookCache = await fetchFontBytes('/fonts/AvantGarde-Book.ttf');
+  if (avantGardeDemiCache === undefined) avantGardeDemiCache = await fetchFontBytes('/fonts/AvantGarde-Demi.ttf');
+  const regular = avantGardeBookCache
+    ? await doc.embedFont(avantGardeBookCache)
+    : await doc.embedFont(StandardFonts.Helvetica);
+  const bold = avantGardeDemiCache
+    ? await doc.embedFont(avantGardeDemiCache)
+    : await doc.embedFont(StandardFonts.HelveticaBold);
+  return { regular, bold };
+}
 
 /**
  * "Service Bill" A4 invoice — a second, full-page layout alongside the
@@ -74,8 +103,7 @@ function formatRupees(paise: number): string {
 export async function generateA4InvoicePDF(bill: Bill, settings: Partial<Settings>): Promise<Uint8Array> {
   const studio = settings.studio;
   const doc = await PDFDocument.create();
-  const regular = await doc.embedFont(StandardFonts.Helvetica);
-  const bold = await doc.embedFont(StandardFonts.HelveticaBold);
+  const { regular, bold } = await embedBrandFonts(doc);
   const page = doc.addPage([PAGE_W, PAGE_H]);
 
   const left = MARGIN;

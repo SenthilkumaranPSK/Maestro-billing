@@ -37,8 +37,15 @@ async function fetchLogoBytes(): Promise<ArrayBuffer | null> {
   }
   return logoBytesCache;
 }
-const FONT_SIZE = 8;
-const LINE_HEIGHT = 8.5;
+// Slightly larger than the previous 8/8.5 so the printed block claims a bit
+// more of the paper's physical width, trimming a little of the blank margin
+// off both the left and right edges (a monospace block can only be trimmed
+// symmetrically by growing the text itself — there's no per-character
+// spacing control available here). Kept modest: on 58mm paper the idle
+// margin is already tight (see LEFT_SHIFT below), so this can't grow much
+// further without eating into the printer-cutoff compensation budget.
+const FONT_SIZE = 8.2;
+const LINE_HEIGHT = 8.7;
 const COURIER_CHAR_WIDTH = 0.6 * FONT_SIZE; // Courier glyphs are 0.6em wide
 
 export async function generateBillPDF(

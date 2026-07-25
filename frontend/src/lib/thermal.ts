@@ -78,6 +78,16 @@ function rpad(left: string, right: string, charWidth: number): string {
 }
 
 /**
+ * Right-align an entire "label  amount" string as one block, e.g. for
+ * CGST/SGST rows that sit clustered at the right edge instead of spanning
+ * the full line width like rpad(). Never truncates — a block wider than
+ * charWidth prints as-is (unpadded) rather than losing digits.
+ */
+function rightAlign(text: string, charWidth: number): string {
+  return text.length >= charWidth ? text : ' '.repeat(charWidth - text.length) + text;
+}
+
+/**
  * Three-column row: `left` at the start, `right` right-aligned at the end,
  * `mid` squeezed into the gap between them (used only for the Sub Total row's
  * total-quantity figure). Silently drops `mid` if there isn't room for all
@@ -193,10 +203,19 @@ export function buildReceiptPreview(bill: Bill, settings: Partial<Settings>): Th
     { text: dline, separator: true, center: true },
   );
 
-  // Customer + bill info as a two-column layout: name/GSTIN on the left,
-  // bill date/number right-aligned on the same lines. A long name or GSTIN
-  // must never be truncated with ".." just to fit next to the date/number —
-  // fall back to stacking them on their own line instead when they don't fit.
+  // When the customer has their own GSTIN (a B2B bill), the bill number gets
+  // its own centered line right under "Tax Bill" so Name can pair with Gstin
+  // instead. Otherwise it stays paired with Name on the right, as usual.
+  const hasCustomerGstin = !!bill.customer?.gstin;
+  if (hasCustomerGstin) {
+    lines.push({ text: `Bill Num : ${bill.billNumber}`, center: true });
+  }
+
+  // Customer + bill info as a two-column layout: name/mobile on the left,
+  // the customer's own GSTIN/the bill date right-aligned on the same
+  // lines. A long name or GSTIN must never be truncated with ".." just to
+  // fit next to them — fall back to stacking them on their own line instead
+  // when they don't fit.
   const pairOrStack = (leftText: string, rightText: string) => {
     if (leftText.length + rightText.length + 1 <= charWidth) {
       lines.push({ text: rpad(leftText, rightText, charWidth) });
@@ -212,15 +231,12 @@ export function buildReceiptPreview(bill: Bill, settings: Partial<Settings>): Th
   // attached at all.
   const isPlaceholderCustomer = bill.customer?.phone === '0000000000';
   const custName = !bill.customer || isPlaceholderCustomer ? 'Customer' : bill.customer.name;
-  pairOrStack(`Name : ${custName}`, `Bill Num : ${bill.billNumber}`);
+  // The customer's own GSTIN (not the studio's) prints beside their name when
+  // present; otherwise the bill number goes there instead, same as before
+  // GSTIN support was added.
+  pairOrStack(`Name : ${custName}`, hasCustomerGstin ? `Gstin : ${bill.customer!.gstin}` : `Bill Num : ${bill.billNumber}`);
   const showPhone = !!bill.customer?.phone && !isPlaceholderCustomer;
   pairOrStack(showPhone ? `Mobile : ${bill.customer!.phone}` : '', `Date : ${billDate}`);
-  // GSTIN is uncommon enough (most walk-in customers don't have one) that it
-  // only costs an extra line in the rarer case it's actually present, rather
-  // than always reserving a slot for it next to Mobile.
-  if (bill.customer?.gstin) {
-    lines.push({ text: `Gstin : ${bill.customer.gstin}` });
-  }
 
   // Item table header. Qty/Price/Amt sit in fixed-width columns on the right
   // (colFit below), with Product taking whatever's left — the same layout
@@ -282,9 +298,42 @@ export function buildReceiptPreview(bill: Bill, settings: Partial<Settings>): Th
     const qtyStr = colFit(`${item.qty} ${abbrUnit(item.unit)}`, QTY_W);
     const priceStr = colFit(formatAmt(baseUnitPrice), PRICE_W);
     const amtStr = colFit(formatAmt(baseAmt), AMT_W);
-    emitWrapped(lines, `${i + 1}  `, item.productName, charWidth, {
-      right: `${qtyStr}${priceStr}${amtStr}`,
+    const totalsBlock = `${qtyStr}${priceStr}${amtStr}`;
+
+    // Product name wraps on its own (like the customer name above) instead
+    // of going through emitWrapped's rpad-based truncation — a long name
+    // (e.g. "Passport Size Photo Print") must never be cut down to
+    // "Passport Siz..". The wrap width is reserved down to leave room for
+    // the Qty/Price/Amt block on whichever line ends up last, e.g.:
+    //   1  Baby Photo
+    //      Shoot (1 hr)      2 Ses   500.00  1,000.00
+    // rather than a name that only wraps once it's already too long to fit
+    // next to the totals.
+    // On narrow (58mm) paper the totals block alone eats most of the line,
+    // so reserving room for it would force almost every name into unreadable
+    // 3-4 char slivers — fall back to the old generous wrap + bail-the-totals-
+    // to-their-own-line behavior there instead.
+    const prefix = `${i + 1}  `;
+    const MIN_READABLE_NAME_LEN = 8;
+    const tightNameMaxLen = charWidth - totalsBlock.length - 1 - prefix.length;
+    const nameMaxLen = tightNameMaxLen >= MIN_READABLE_NAME_LEN
+      ? tightNameMaxLen
+      : Math.max(1, charWidth - prefix.length - 1);
+    // Continuation lines indent to line up under the product name's own
+    // start column, not column 0 (under "SN") — printing flush left there
+    // reads as if the row collapsed back into the item-number column.
+    const indent = ' '.repeat(prefix.length);
+    const nameChunks = splitText(item.productName, nameMaxLen);
+    nameChunks.forEach((chunk, ci) => {
+      lines.push({ text: ci === 0 ? `${prefix}${chunk}` : `${indent}${chunk}` });
     });
+
+    const lastLine = lines[lines.length - 1]!;
+    if (lastLine.text.length + totalsBlock.length + 1 <= charWidth) {
+      lastLine.text = rpad(lastLine.text, totalsBlock, charWidth);
+    } else {
+      lines.push({ text: rpad('', totalsBlock, charWidth) });
+    }
   });
 
   lines.push({ text: dline, separator: true, center: true });
@@ -309,19 +358,26 @@ export function buildReceiptPreview(bill: Bill, settings: Partial<Settings>): Th
     const gstRates = [...new Set(bill.items.filter((i) => i.gstRate > 0).map((i) => i.gstRate))];
     const halfRate = gstRates.length === 1 ? gstRates[0]! / 2 : null;
     const half = Math.floor(bill.gstAmount / 2);
-    lines.push({ text: rpad(halfRate !== null ? `CGST ${halfRate}%` : 'CGST', `Rs ${formatAmt(half)}`, charWidth) });
-    lines.push({ text: rpad(halfRate !== null ? `SGST ${halfRate}%` : 'SGST', `Rs ${formatAmt(bill.gstAmount - half)}`, charWidth) });
+    const cgstLabel = halfRate !== null ? `CGST ${halfRate}%` : 'CGST';
+    const sgstLabel = halfRate !== null ? `SGST ${halfRate}%` : 'SGST';
+    // Clustered together at the right edge (label + amount as one block),
+    // unlike the other total rows which span the full line width.
+    lines.push({ text: rightAlign(`${cgstLabel}  Rs ${formatAmt(half)}`, charWidth) });
+    lines.push({ text: rightAlign(`${sgstLabel}  Rs ${formatAmt(bill.gstAmount - half)}`, charWidth) });
   }
   if (bill.discountAmount > 0) {
     lines.push({ text: rpad('Discount', `-Rs ${formatAmt(bill.discountAmount)}`, charWidth) });
   }
-  // Always shown here — "Rs 0" when there's no rounding — to match the
-  // reference template's fixed Sub Total / CGST / SGST / Round Off / Grand
-  // Total rows (a blank amount next to the label read as broken/missing).
-  lines.push({ text: rpad('Round Off', roundOffAmt, charWidth) });
+  // Only shown when there's an actual round-off — most bills land on an
+  // exact rupee already, and a permanent "Round Off  Rs 0" row on every
+  // single receipt reads as noise rather than useful info.
+  if (roundOff !== 0) {
+    lines.push({ text: rpad('Round Off', roundOffAmt, charWidth) });
+  }
 
   lines.push({ text: dline, separator: true, center: true });
   lines.push({ text: rpad('Grand Total', `Rs ${formatAmt(bill.grandTotal)}`, charWidth), bold: true });
+  lines.push({ text: '' });
   lines.push({ text: footer, center: true, bold: true });
   lines.push({ text: '' });
   lines.push({ text: '' });

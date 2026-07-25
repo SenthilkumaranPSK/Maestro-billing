@@ -2,6 +2,25 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Studio brand font — AvantGarde Bk BT ("Book" for body text, "Demi" for
+   headings/emphasis). Matches the weight used in the thermal/A4 PDFs
+   (lib/pdf.ts, lib/a4invoice.ts) so the on-screen UI and printed bills look
+   like the same typeface. */
+@font-face {
+  font-family: 'AvantGarde';
+  src: url('/fonts/AvantGarde-Book.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'AvantGarde';
+  src: url('/fonts/AvantGarde-Demi.ttf') format('truetype');
+  font-weight: 600 700;
+  font-style: normal;
+  font-display: swap;
+}
+
 @layer base {
   :root {
     --background: 0 0% 100%;
@@ -44,6 +63,7 @@
   }
   body {
     @apply bg-background text-foreground antialiased;
+    font-family: 'AvantGarde', ui-sans-serif, system-ui, sans-serif;
     font-feature-settings: "rlig" 1, "calt" 1;
   }
   ::selection {

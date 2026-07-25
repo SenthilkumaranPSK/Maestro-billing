@@ -136,14 +136,17 @@ export function LineItemRow({ index, item, onChange, onRemove, includeInactive =
         </div>
       </td>
 
-      {/* Qty — Enter here appends the next row since price is no longer editable */}
+      {/* Qty — arrow buttons step by whole units; Enter appends the next row.
+          min must sit on the same 1-unit lattice as step, or the browser's
+          spin buttons snap to min + n*step (0.01, 1.01, 2.01…) instead of
+          whole numbers the moment the value doesn't already land on it. */}
       <td className="py-2 px-2 w-20">
         <Input
           type="number"
           className="h-8 text-sm text-right"
           value={item.qty}
-          min={0.01}
-          step={0.01}
+          min={1}
+          step={1}
           onChange={(e) => onChange({ ...item, qty: parseFloat(e.target.value) || 0 })}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && onRequestNewRow) {
@@ -154,9 +157,24 @@ export function LineItemRow({ index, item, onChange, onRemove, includeInactive =
         />
       </td>
 
-      {/* Price — fixed by the selected product, shown read-only */}
-      <td className="py-2 px-2 w-28 text-right text-sm tabular-nums font-medium">
-        {item.unitPrice > 0 ? `₹${item.unitPrice.toFixed(2)}` : <span className="text-muted-foreground">—</span>}
+      {/* Price — defaults from the selected product but stays editable, e.g.
+          for a negotiated/discounted price on a single bill. Arrow buttons
+          step by whole rupees; typing still accepts paisa (e.g. 499.50). */}
+      <td className="py-2 px-2 w-28">
+        <Input
+          type="number"
+          className="h-8 text-sm text-right"
+          value={item.unitPrice}
+          min={0}
+          step={1}
+          onChange={(e) => onChange({ ...item, unitPrice: parseFloat(e.target.value) || 0 })}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && onRequestNewRow) {
+              e.preventDefault();
+              onRequestNewRow();
+            }
+          }}
+        />
       </td>
 
       {/* GST % */}
