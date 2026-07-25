@@ -30,6 +30,19 @@ export default function SettingsPage() {
   });
   const backups = backupData?.backups;
 
+  // Not versioned/behind the app's /api/v1 prefix — same root-level health
+  // route desktop/main.js's waitForServer() polls at startup.
+  const { data: liveInfo } = useQuery({
+    queryKey: ['live'],
+    queryFn: async () => {
+      const res = await fetch('/live');
+      if (!res.ok) throw new Error('not ok');
+      return res.json() as Promise<{ version: string }>;
+    },
+    retry: false,
+    staleTime: Infinity,
+  });
+
   const [editingLocation, setEditingLocation] = useState(false);
   const [locationInput, setLocationInput] = useState('');
 
@@ -318,6 +331,10 @@ export default function SettingsPage() {
           </CardContent>
         </Card>
       </div>
+
+      {liveInfo?.version && (
+        <p className="text-xs text-muted-foreground text-center">App Version v{liveInfo.version}</p>
+      )}
     </div>
   );
 }

@@ -143,7 +143,7 @@ async function main() {
 
   // ── Health ───────────────────────────────────────────────────────────────
   // /live  — liveness probe: the process is up (never touches the DB)
-  app.get('/live', async () => ({ status: 'ok' }));
+  app.get('/live', async () => ({ status: 'ok', version: process.env.APP_VERSION ?? 'dev' }));
 
   // /health — readiness probe: pings the database; returns 503 if unreachable
   app.get('/health', async (_req, reply) => {

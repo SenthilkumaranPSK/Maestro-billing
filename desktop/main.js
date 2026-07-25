@@ -33,13 +33,16 @@ function isAppUrl(url, pathPrefix) {
 // otherwise Electron derives the folder from the package name.
 app.setName('Maestro Billing');
 
-// Packaged: resources/app/{backend,frontend,node_modules,template}
+// Packaged: resources/app.asar/{backend,frontend,node_modules} (archived —
+// Electron's require()/fs transparently read through it) plus
+// resources/template/ (a real loose file — see extraResources below, kept
+// out of the archive since main.js fs.copyFileSync()s it directly).
 // Dev (electron . from codes/desktop): the codes/ folder itself.
 const APP_ROOT = app.isPackaged
-  ? path.join(process.resourcesPath, 'app')
+  ? path.join(process.resourcesPath, 'app.asar')
   : path.resolve(__dirname, '..');
 const TEMPLATE_DB = app.isPackaged
-  ? path.join(APP_ROOT, 'template', 'studio.db')
+  ? path.join(process.resourcesPath, 'template', 'studio.db')
   : path.join(__dirname, 'template', 'studio.db');
 
 let mainWindow = null;
@@ -206,6 +209,7 @@ function startBackend() {
   process.env.FRONTEND_DIST = path.join(APP_ROOT, 'frontend', 'dist');
   process.env.WA_DATA_DIR = dataRoot;
   process.env.LOG_LEVEL = process.env.LOG_LEVEL || 'info';
+  process.env.APP_VERSION = app.getVersion();
 
   // Runs Fastify inside this (Node-capable) Electron main process.
   require(path.join(APP_ROOT, 'backend', 'dist', 'server.js'));

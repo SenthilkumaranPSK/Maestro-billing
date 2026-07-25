@@ -1,6 +1,6 @@
 {
   "name": "maestro-billing-desktop",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "The Maestro Studio's — Billing System (desktop)",
   "main": "main.js",
   "author": "The Maestro Studio's",
@@ -20,12 +20,36 @@
   "build": {
     "appId": "in.maestrostudios.billing",
     "productName": "Maestro Billing",
-    "asar": false,
+    "asar": true,
+    "asarUnpack": [
+      "**/.prisma/**",
+      "**/@prisma/engines/**"
+    ],
     "directories": {
       "output": "release"
     },
     "files": [
-      "main.js"
+      "main.js",
+      {
+        "from": "staging/backend_dist",
+        "to": "backend/dist"
+      },
+      {
+        "from": "staging/backend_package.json",
+        "to": "backend/package.json"
+      },
+      {
+        "from": "staging/backend_prisma",
+        "to": "backend/prisma"
+      },
+      {
+        "from": "staging/root_node_modules",
+        "to": "node_modules"
+      },
+      {
+        "from": "staging/frontend_dist",
+        "to": "frontend/dist"
+      }
     ],
     "extraResources": [
       {
@@ -33,32 +57,8 @@
         "to": "icon.ico"
       },
       {
-        "from": "../backend/dist",
-        "to": "app/backend/dist"
-      },
-      {
-        "from": "staging/backend_node_modules",
-        "to": "app/backend/node_modules"
-      },
-      {
-        "from": "../backend/package.json",
-        "to": "app/backend/package.json"
-      },
-      {
-        "from": "../backend/prisma",
-        "to": "app/backend/prisma"
-      },
-      {
-        "from": "staging/root_node_modules",
-        "to": "app/node_modules"
-      },
-      {
-        "from": "../frontend/dist",
-        "to": "app/frontend/dist"
-      },
-      {
         "from": "template",
-        "to": "app/template"
+        "to": "template"
       }
     ],
     "win": {
