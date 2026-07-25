@@ -33,6 +33,27 @@ async function embedBrandFonts(doc: PDFDocument): Promise<{ regular: PDFFont; bo
   return { regular, bold };
 }
 
+// Same caching/fallback pattern as lib/pdf.ts's thermal-receipt logo — fetch
+// and decode once per session, prefer the small pre-downscaled copy so the
+// invoice PDF doesn't balloon to ~1MB per generation.
+let logoBytesCache: ArrayBuffer | null | undefined;
+async function fetchLogoBytes(): Promise<ArrayBuffer | null> {
+  if (logoBytesCache !== undefined) return logoBytesCache;
+  logoBytesCache = null;
+  for (const path of ['/Logo-receipt.png', '/Logo.png']) {
+    try {
+      const response = await fetch(path);
+      if (response.ok) {
+        logoBytesCache = await response.arrayBuffer();
+        break;
+      }
+    } catch {
+      // try the next candidate
+    }
+  }
+  return logoBytesCache;
+}
+
 /**
  * "Service Bill" A4 invoice — a second, full-page layout alongside the
  * thermal-roll receipt (lib/thermal.ts + lib/pdf.ts), for studios printing
@@ -112,8 +133,8 @@ export async function generateA4InvoicePDF(bill: Bill, settings: Partial<Setting
   const outerTop = PAGE_H - MARGIN;
   const outerBottom = MARGIN;
 
-  const hline = (yPos: number, x1 = left, x2 = right) =>
-    page.drawLine({ start: { x: x1, y: yPos }, end: { x: x2, y: yPos }, thickness: 0.75, color: BLACK });
+  const hline = (yPos: number, x1 = left, x2 = right, thickness = 0.75) =>
+    page.drawLine({ start: { x: x1, y: yPos }, end: { x: x2, y: yPos }, thickness, color: BLACK });
   const vline = (xPos: number, y1: number, y2: number) =>
     page.drawLine({ start: { x: xPos, y: y1 }, end: { x: xPos, y: y2 }, thickness: 0.75, color: BLACK });
 
@@ -147,31 +168,49 @@ export async function generateA4InvoicePDF(bill: Bill, settings: Partial<Setting
   const studioPhone = studio?.studio_phone || '';
   const studioGstin = studio?.studio_gstin || '';
 
-  y -= 26;
-  text(studioOwner, left + 14, y, { size: 22, font: bold, color: BRAND });
-
-  const rightColX = right - 200;
-  let ry = y + 2;
-  if (studioGstin) {
-    text(`GSTIN : ${studioGstin}`, rightColX, ry, { size: 9.5, font: bold, color: ACCENT });
-    ry -= 15;
+  // Logo sits top-left; the studio name/address/mobile block stacks directly
+  // underneath it, all left-aligned in a fixed line-by-line order — a single
+  // coherent letterhead block, rather than the name alone (large, left) and
+  // the address/mobile (small, centered elsewhere) reading as disconnected.
+  y -= 6;
+  const logoBytes = await fetchLogoBytes();
+  let logoH = 0;
+  if (logoBytes) {
+    const logoImage = await doc.embedPng(logoBytes);
+    logoH = 48;
+    const logoW = logoH * (logoImage.width / logoImage.height);
+    page.drawImage(logoImage, { x: left, y: y - logoH, width: logoW, height: logoH });
   }
-  text(`Invoice : ${bill.billNumber}`, rightColX, ry, { size: 9.5, font: bold, color: ACCENT });
-  ry -= 15;
-  text(`Date : ${formatDDMMYYYY(new Date(bill.billDate))}`, rightColX, ry, { size: 9.5, font: bold, color: ACCENT });
 
-  y -= 18;
+  const rightColX = right - 205;
+  let ry = y - 4;
+  if (studioGstin) {
+    text(`GSTIN : ${studioGstin}`, rightColX, ry, { size: 10, font: bold, color: ACCENT, align: 'right', maxWidth: right - rightColX });
+    ry -= 16;
+  }
+  text(`Invoice : ${bill.billNumber}`, rightColX, ry, { size: 10, font: bold, color: ACCENT, align: 'right', maxWidth: right - rightColX });
+  ry -= 16;
+  text(`Date : ${formatDDMMYYYY(new Date(bill.billDate))}`, rightColX, ry, { size: 10, font: bold, color: ACCENT, align: 'right', maxWidth: right - rightColX });
+
+  y -= logoH + 12;
+  text(studioOwner, left, y, { size: 16, font: bold, color: BRAND });
+  y -= 16;
+  // Wrapped against the space left of the GSTIN/Invoice/Date column so a long
+  // address can never run underneath it.
+  const ownerBlockW = rightColX - left - 16;
   if (studioAddress) {
-    text(studioAddress.replace(/\n/g, ', '), left, y, { size: 9, color: ACCENT, align: 'center', maxWidth: contentW - 210 });
-    y -= 13;
+    for (const line of wrapText(regular, studioAddress.replace(/\n/g, ', '), 9.5, ownerBlockW)) {
+      text(line, left, y, { size: 9.5, color: ACCENT });
+      y -= 13;
+    }
   }
   if (studioPhone) {
-    text(`Mobile : ${studioPhone}`, left, y, { size: 9, color: ACCENT, align: 'center', maxWidth: contentW - 210 });
+    text(`Mobile : ${studioPhone}`, left, y, { size: 9.5, color: ACCENT });
     y -= 13;
   }
 
-  y -= 8;
-  hline(y);
+  y -= 10;
+  hline(y, left, right, 1.2);
   y -= 18;
 
   // ── "Service Bill From" / "Tax Invoice" row ─────────────────────────────
