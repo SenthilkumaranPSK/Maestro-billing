@@ -12,7 +12,7 @@ import { useToast } from '@/hooks/use-toast';
 import { formatCurrency, paisaToRupee, rupeeToPaisa } from '@/types';
 import type { Product } from '@/types';
 
-const UNITS = ['piece', 'photo', 'album', 'set', 'frame', 'session', 'roll', 'print'];
+const UNITS = ['no', 'set', 'piece', 'photo', 'album', 'frame', 'session', 'roll', 'print'];
 
 const EMPTY: Partial<Product> = { name: '', description: '', unit: 'piece', unitPrice: 0, gstRate: 18, hsnSac: '', isActive: true };
 
@@ -155,7 +155,7 @@ export default function ProductsPage() {
                     value={editing.unit ?? 'piece'}
                     onChange={(e) => setEditing({ ...editing, unit: e.target.value })}
                   >
-                    {UNITS.map((u) => <option key={u} value={u}>{u}</option>)}
+                    {UNITS.map((u) => <option key={u} value={u}>{u.charAt(0).toUpperCase() + u.slice(1)}</option>)}
                   </select>
                 </div>
                 <div className="space-y-1.5">

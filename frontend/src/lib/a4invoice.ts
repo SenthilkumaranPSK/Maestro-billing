@@ -163,13 +163,17 @@ export async function generateA4InvoicePDF(bill: Bill, settings: Partial<Setting
   // height calculation below AND the actual drawing — an unusually long
   // customer name/address or Service Description used to just draw past a
   // fixed 108pt box height and overlap the item table header underneath it.
-  const custNameLines = bill.customer ? wrapText(bold, bill.customer.name, 9.5, colA_W - 16) : [];
+  // '0000000000' is the seeded Walk-in Customer's placeholder phone — when
+  // that record is the one picked for the bill, print "Customer" rather than
+  // its admin-facing "Walk-in Customer" label, same as when no customer is
+  // attached at all.
+  const isPlaceholderCustomer = bill.customer?.phone === '0000000000';
+  const displayCustName = isPlaceholderCustomer ? 'Customer' : bill.customer?.name ?? '';
+  const custNameLines = bill.customer ? wrapText(bold, displayCustName, 9.5, colA_W - 16) : [];
   const custAddressLines = bill.customer?.address ? wrapText(regular, bill.customer.address, 9, colA_W - 16) : [];
   const serviceDescLines = bill.serviceDescription ? wrapText(regular, bill.serviceDescription, 9, colB_W - 16) : [];
 
-  // '0000000000' is the seeded Walk-in Customer's placeholder phone, not a
-  // real number — showing it on a printed invoice would look like a mistake.
-  const showCustPhone = !!bill.customer?.phone && bill.customer.phone !== '0000000000';
+  const showCustPhone = !!bill.customer?.phone && !isPlaceholderCustomer;
 
   const colA_ContentH = bill.customer
     ? 14 + custNameLines.length * 12.5 + custAddressLines.length * 12 + (showCustPhone ? 12 : 0) + (bill.customer.gstin ? 12 : 0)
@@ -205,7 +209,7 @@ export async function generateA4InvoicePDF(bill: Bill, settings: Partial<Setting
       text(`GST IN : ${bill.customer.gstin}`, colA_X + 8, cy, { size: 9, color: BODY });
     }
   } else {
-    text('Walk-in Customer', colA_X + 8, cy, { size: 9.5, color: BODY });
+    text('Customer', colA_X + 8, cy, { size: 9.5, color: BODY });
   }
 
   cy = infoTop - 14;
@@ -316,11 +320,18 @@ export async function generateA4InvoicePDF(bill: Bill, settings: Partial<Setting
       text(line, cols[1]!.x + 8, ly, { size: 9, color: BODY });
       ly -= lineH;
     }
+    // PRICE/AMOUNT show the tax-excluded base, not item.unitPrice as entered
+    // — for an exclusive bill those are the same number, but for an
+    // inclusive bill unitPrice is the all-in sticker price, and printing
+    // that here would make the item rows sum to more than the Sub Total row
+    // below. (totalAmount - gstAmount) is the tax-excluded base in both
+    // modes, matching lib/thermal.ts.
+    const baseAmt = item.totalAmount - item.gstAmount;
+    const baseUnitPrice = item.qty ? Math.round(baseAmt / item.qty) : item.unitPrice;
     text(`${item.qty} ${item.unit}`, cols[2]!.x, rowMid, { size: 9, color: BODY, align: 'center', maxWidth: cols[2]!.w });
-    text(`Rs ${paisaToRupee(item.unitPrice).toFixed(2)}`, cols[3]!.x, rowMid, { size: 9, color: BODY, align: 'center', maxWidth: cols[3]!.w });
+    text(`Rs ${paisaToRupee(baseUnitPrice).toFixed(2)}`, cols[3]!.x, rowMid, { size: 9, color: BODY, align: 'center', maxWidth: cols[3]!.w });
     text(item.hsnSac ?? '-', cols[4]!.x, rowMid, { size: 9, color: BODY, align: 'center', maxWidth: cols[4]!.w });
-    const lineAmount = Math.round(item.qty * item.unitPrice);
-    text(`Rs ${formatRupees(lineAmount)}`, cols[5]!.x, rowMid, { size: 9, color: BODY, align: 'right', maxWidth: cols[5]!.w - 8 });
+    text(`Rs ${formatRupees(baseAmt)}`, cols[5]!.x, rowMid, { size: 9, color: BODY, align: 'right', maxWidth: cols[5]!.w - 8 });
     ty -= rowH;
   });
 
@@ -341,26 +352,20 @@ export async function generateA4InvoicePDF(bill: Bill, settings: Partial<Setting
     text(line, left + 8, wordsY, { size: 9.5, color: BODY });
     wordsY -= 13;
   }
-  if (bill.gstInclusive && bill.gstAmount > 0) {
-    text('(Price is inclusive of applicable GST)', left + 8, wordsY - 4, { size: 8, color: BODY });
-  }
-
-  // GST-inclusive bills print as a single all-in figure — no separate
-  // CGST/SGST breakdown — since the whole point of that pricing mode is
-  // "one sticker price", not a line-itemized tax split.
+  // Same Sub Total / CGST / SGST / Round Off / Grand Total layout regardless
+  // of GST inclusive/exclusive — only how subTotal/gstAmount were derived
+  // differs (see billMath.ts), never how the invoice is printed.
   const gstRates = [...new Set(bill.items.filter((i) => i.gstRate > 0).map((i) => i.gstRate))];
   const halfRate = gstRates.length === 1 ? gstRates[0]! / 2 : undefined;
   // [label, amount, mid?] — mid is the total-quantity note shown next to Sub
   // Total, matching the thermal receipt's equivalent 3-column row.
   const totalRows: Array<[string, number, string?]> = [];
-  if (!bill.gstInclusive) {
-    const totalQty = bill.items.reduce((s, i) => s + i.qty, 0);
-    totalRows.push(['Sub Total', bill.subTotal, `${totalQty} No`]);
-    if (bill.gstAmount > 0) {
-      const half = Math.floor(bill.gstAmount / 2);
-      totalRows.push([halfRate !== undefined ? `CGST @ ${halfRate}%` : 'CGST', half]);
-      totalRows.push([halfRate !== undefined ? `SGST @ ${halfRate}%` : 'SGST', bill.gstAmount - half]);
-    }
+  const totalQty = bill.items.reduce((s, i) => s + i.qty, 0);
+  totalRows.push(['Sub Total', bill.subTotal, `${totalQty} No`]);
+  if (bill.gstAmount > 0) {
+    const half = Math.floor(bill.gstAmount / 2);
+    totalRows.push([halfRate !== undefined ? `CGST @ ${halfRate}%` : 'CGST', half]);
+    totalRows.push([halfRate !== undefined ? `SGST @ ${halfRate}%` : 'SGST', bill.gstAmount - half]);
   }
   if (bill.discountAmount > 0) totalRows.push(['Discount', -bill.discountAmount]);
   // Derived, not a stored field — same computation as the thermal receipt

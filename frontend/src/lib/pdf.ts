@@ -38,7 +38,7 @@ async function fetchLogoBytes(): Promise<ArrayBuffer | null> {
   return logoBytesCache;
 }
 const FONT_SIZE = 8;
-const LINE_HEIGHT = 10.5;
+const LINE_HEIGHT = 8.5;
 const COURIER_CHAR_WIDTH = 0.6 * FONT_SIZE; // Courier glyphs are 0.6em wide
 
 export async function generateBillPDF(
@@ -83,11 +83,12 @@ export async function generateBillPDF(
     : 0;
 
   const pdfDoc = await PDFDocument.create();
-  // Courier-Bold only (no regular weight): at the ~200dpi a thermal head
-  // prints at, hairline-weight strokes fall between dot rows and come out
-  // grey/soft, while bold strokes span enough dots to print crisp. Emphasis
-  // lines (line.bold) get an extra hairline double-strike on top so TOTAL/
-  // headers still stand out from body text that's already bold.
+  // Regular weight for body text, bold only for headers/emphasis lines
+  // (line.bold) — using CourierBold everywhere, plus a 3-4x overlapping
+  // stroke-offset "faux bold" on top of that, made every receipt print
+  // noticeably over-inked/heavy. A single draw at the font's real weight is
+  // enough on this printer; revisit if the studio reports faint print.
+  const regularFont = await pdfDoc.embedFont(StandardFonts.Courier);
   const boldFont = await pdfDoc.embedFont(StandardFonts.CourierBold);
 
   // Try the studio logo for the top of the receipt (same as thermal preview).
@@ -124,13 +125,29 @@ export async function generateBillPDF(
 
   const BLACK = rgb(0, 0, 0);
   const GRAY = rgb(0.45, 0.45, 0.45);
+  // Where an underscore glyph sits within its own em box (near the very
+  // bottom, at descender level) — a whole line of them, drawn at the normal
+  // text baseline, reads as if there's a gap ABOVE the divider rather than a
+  // line sitting mid-row like the a4invoice.ts dividers (real drawLine
+  // calls there, not text). Every divider line below is drawn the same way
+  // instead, positioned mid-row, which removes that illusion.
+  const DIVIDER_Y_OFFSET = FONT_SIZE * 0.32;
 
   for (const line of lines) {
     y -= LINE_HEIGHT;
     if (!line.text) continue;
 
-    const font: PDFFont = boldFont;
-    const color = line.separator ? GRAY : BLACK;
+    if (line.separator) {
+      page.drawLine({
+        start: { x: marginX + LEFT_SHIFT, y: y + DIVIDER_Y_OFFSET },
+        end: { x: marginX + textWidth + LEFT_SHIFT, y: y + DIVIDER_Y_OFFSET },
+        thickness: 0.75,
+        color: GRAY,
+      });
+      continue;
+    }
+
+    const font: PDFFont = line.bold ? boldFont : regularFont;
     const size = FONT_SIZE;
 
     let x = marginX;
@@ -140,17 +157,7 @@ export async function generateBillPDF(
     }
     x += LEFT_SHIFT;
 
-    // Faux bold via stroke expansion: repeat the draw offset right AND down
-    // so BOTH vertical strokes (I, l, |) and horizontal ones (T top, -, _)
-    // gain width, not just one axis — a single-axis offset left horizontal
-    // strokes on non-bold lines just as thin as before. Emphasis lines
-    // (TOTAL, headers) get a 4th, diagonal pass to stay heavier than body text.
-    page.drawText(line.text, { x, y, size, font, color });
-    page.drawText(line.text, { x: x + 0.3, y, size, font, color });
-    page.drawText(line.text, { x, y: y + 0.3, size, font, color });
-    if (line.bold) {
-      page.drawText(line.text, { x: x + 0.3, y: y + 0.3, size, font, color });
-    }
+    page.drawText(line.text, { x, y, size, font, color: BLACK });
   }
 
   return pdfDoc.save();

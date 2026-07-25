@@ -206,12 +206,15 @@ export function buildReceiptPreview(bill: Bill, settings: Partial<Settings>): Th
     }
   };
 
-  const custName = bill.customer?.name ?? 'Walk-in Customer';
-  pairOrStack(`Name : ${custName}`, `Bill Date : ${billDate}`);
-  // '0000000000' is the seeded Walk-in Customer's placeholder phone, not a
-  // real number — showing it on a printed bill would look like a mistake.
-  const showPhone = !!bill.customer?.phone && bill.customer.phone !== '0000000000';
-  pairOrStack(showPhone ? `Mobile : ${bill.customer!.phone}` : '', `Bill Num : ${bill.billNumber}`);
+  // '0000000000' is the seeded Walk-in Customer's placeholder phone — when
+  // that record is the one picked for the bill, print "Customer" rather than
+  // its admin-facing "Walk-in Customer" label, same as when no customer is
+  // attached at all.
+  const isPlaceholderCustomer = bill.customer?.phone === '0000000000';
+  const custName = !bill.customer || isPlaceholderCustomer ? 'Customer' : bill.customer.name;
+  pairOrStack(`Name : ${custName}`, `Bill Num : ${bill.billNumber}`);
+  const showPhone = !!bill.customer?.phone && !isPlaceholderCustomer;
+  pairOrStack(showPhone ? `Mobile : ${bill.customer!.phone}` : '', `Date : ${billDate}`);
   // GSTIN is uncommon enough (most walk-in customers don't have one) that it
   // only costs an extra line in the rarer case it's actually present, rather
   // than always reserving a slot for it next to Mobile.
@@ -219,58 +222,106 @@ export function buildReceiptPreview(bill: Bill, settings: Partial<Settings>): Th
     lines.push({ text: `Gstin : ${bill.customer.gstin}` });
   }
 
-  // Item table header.
+  // Item table header. Qty/Price/Amt sit in fixed-width columns on the right
+  // (colFit below), with Product taking whatever's left — the same layout
+  // the header row and every item row share, so the columns line up.
+  const QTY_W = 6;
+  // Wide enough for a plain "1,500" AND a two-decimal "1,271.19" — GST-
+  // inclusive bills extract tax from the entered price, which almost always
+  // leaves a paisa remainder, so ".XX" prices are the norm in that mode, not
+  // an edge case.
+  const PRICE_W = 9;
+  const AMT_W = 9;
+  // Right-aligns into `width`. Never truncates on overflow (e.g. a price
+  // wider than PRICE_W/AMT_W were sized for) — silently chopping digits off
+  // a printed amount is far worse than a column running slightly wide. Adds
+  // a leading space in that case so it never runs straight into its
+  // neighbour with zero gap.
+  const colFit = (text: string, width: number) =>
+    text.length >= width ? ` ${text}` : text.padStart(width, ' ');
+  const capitalize = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+  // Product.unit is a full word ("piece", "session", …) sized for the
+  // Products page and the A4 invoice, where there's room for it. On the
+  // thermal receipt's fixed 6-char Qty column, a full word (e.g. "1 Piece")
+  // overflows and throws the Price/Amt columns out of alignment with the
+  // header above them — abbreviate to keep every row the same width as the
+  // header, whatever unit the product is set to.
+  const UNIT_ABBR: Record<string, string> = {
+    piece: 'Pc', photo: 'Ph', album: 'Al', set: 'Set',
+    frame: 'Fr', session: 'Ses', roll: 'Rl', print: 'Pr', no: 'No',
+  };
+  const abbrUnit = (u: string) => UNIT_ABBR[u.toLowerCase()] ?? capitalize(u).slice(0, 3);
+
   lines.push(
     { text: dline, separator: true, center: true },
-    { text: rpad('SN  Product', 'Amt', charWidth), bold: true },
+    {
+      text: rpad(
+        'SN  Product',
+        `${colFit('Qty', QTY_W)}${colFit('Price', PRICE_W)}${colFit('Amt', AMT_W)}`,
+        charWidth,
+      ),
+      bold: true,
+    },
     { text: dline, separator: true, center: true },
   );
 
-  // Per-item line: "N  <product name>            <amount>". No qty×price
-  // breakdown line and no per-item GST — the tax split lives only in the
-  // totals block below, matching the reference template.
+  // Per-item line: "N  <product name>   <qty+unit>  <price>  <amount>". No
+  // per-item GST — the tax split lives only in the totals block below,
+  // matching the reference template.
+  //
+  // Price/Amt always show the tax-excluded base, not item.unitPrice as
+  // entered — for an exclusive bill those are the same number, but for an
+  // inclusive bill unitPrice is the all-in sticker price, and printing that
+  // next to Amt would make the item lines sum to more than the Sub Total row
+  // below them. (item.totalAmount - item.gstAmount) is the tax-excluded
+  // base in both modes, so this keeps every receipt internally consistent —
+  // same as the "look the same as exclusive" ask, not just same labels.
   bill.items.forEach((item, i) => {
-    const amt = formatAmt(item.qty * item.unitPrice);
-    emitWrapped(lines, `${i + 1}  `, item.productName, charWidth, { right: amt });
+    const baseAmt = item.totalAmount - item.gstAmount;
+    const baseUnitPrice = item.qty ? Math.round(baseAmt / item.qty) : item.unitPrice;
+    const qtyStr = colFit(`${item.qty} ${abbrUnit(item.unit)}`, QTY_W);
+    const priceStr = colFit(formatAmt(baseUnitPrice), PRICE_W);
+    const amtStr = colFit(formatAmt(baseAmt), AMT_W);
+    emitWrapped(lines, `${i + 1}  `, item.productName, charWidth, {
+      right: `${qtyStr}${priceStr}${amtStr}`,
+    });
   });
 
   lines.push({ text: dline, separator: true, center: true });
-
-  // GST-inclusive bills print as a single all-in figure — no Sub Total/CGST/
-  // SGST breakdown — same rule as the A4 invoice (see lib/a4invoice.ts).
-  if (!bill.gstInclusive) {
-    const totalQty = bill.items.reduce((s, i) => s + i.qty, 0);
-    lines.push({ text: rpad3('Sub Total', `${totalQty} No`, `Rs ${formatAmt(bill.subTotal)}`, charWidth) });
-
-    if (bill.gstAmount > 0) {
-      const gstRates = [...new Set(bill.items.filter((i) => i.gstRate > 0).map((i) => i.gstRate))];
-      const halfRate = gstRates.length === 1 ? gstRates[0]! / 2 : null;
-      const half = Math.floor(bill.gstAmount / 2);
-      lines.push({ text: rpad(halfRate !== null ? `CGST ${halfRate}%` : 'CGST', `Rs ${formatAmt(half)}`, charWidth) });
-      lines.push({ text: rpad(halfRate !== null ? `SGST ${halfRate}%` : 'SGST', `Rs ${formatAmt(bill.gstAmount - half)}`, charWidth) });
-    }
-  }
-
-  if (bill.discountAmount > 0) {
-    lines.push({ text: rpad('Discount', `-Rs ${formatAmt(bill.discountAmount)}`, charWidth) });
-  }
 
   // grandTotal includes the round-off; without this line the printed items
   // wouldn't add up to the printed Grand Total. Derived (not a stored field
   // on the API's Bill shape): items-incl-GST − discount vs grand total.
   const itemsTotal = bill.items.reduce((s, i) => s + i.totalAmount, 0);
   const roundOff = bill.grandTotal - (itemsTotal - bill.discountAmount);
-  if (roundOff !== 0) {
-    lines.push({
-      text: rpad('Round Off', `${roundOff > 0 ? '+' : '-'}Rs ${formatAmt(Math.abs(roundOff))}`, charWidth),
-    });
+  const roundOffAmt = `${roundOff > 0 ? '+' : roundOff < 0 ? '-' : ''}Rs ${formatAmt(Math.abs(roundOff))}`;
+
+  // Same Sub Total / CGST / SGST / Round Off / Grand Total layout regardless
+  // of GST inclusive/exclusive — only how subTotal/gstAmount were derived
+  // differs (see billMath.ts), never how the receipt is printed.
+  // Boxed like the reference layout: Sub Total on its own, then a divider,
+  // then the CGST/SGST/Round Off group, then a divider before Grand Total.
+  const totalQty = bill.items.reduce((s, i) => s + i.qty, 0);
+  lines.push({ text: rpad3('Sub Total', `${totalQty} No`, `Rs ${formatAmt(bill.subTotal)}`, charWidth) });
+  lines.push({ text: dline, separator: true, center: true });
+
+  if (bill.gstAmount > 0) {
+    const gstRates = [...new Set(bill.items.filter((i) => i.gstRate > 0).map((i) => i.gstRate))];
+    const halfRate = gstRates.length === 1 ? gstRates[0]! / 2 : null;
+    const half = Math.floor(bill.gstAmount / 2);
+    lines.push({ text: rpad(halfRate !== null ? `CGST ${halfRate}%` : 'CGST', `Rs ${formatAmt(half)}`, charWidth) });
+    lines.push({ text: rpad(halfRate !== null ? `SGST ${halfRate}%` : 'SGST', `Rs ${formatAmt(bill.gstAmount - half)}`, charWidth) });
   }
+  if (bill.discountAmount > 0) {
+    lines.push({ text: rpad('Discount', `-Rs ${formatAmt(bill.discountAmount)}`, charWidth) });
+  }
+  // Always shown here — "Rs 0" when there's no rounding — to match the
+  // reference template's fixed Sub Total / CGST / SGST / Round Off / Grand
+  // Total rows (a blank amount next to the label read as broken/missing).
+  lines.push({ text: rpad('Round Off', roundOffAmt, charWidth) });
 
   lines.push({ text: dline, separator: true, center: true });
   lines.push({ text: rpad('Grand Total', `Rs ${formatAmt(bill.grandTotal)}`, charWidth), bold: true });
-  if (bill.gstInclusive && bill.gstAmount > 0) {
-    lines.push({ text: '(Price incl. of GST)', center: true });
-  }
   lines.push({ text: footer, center: true, bold: true });
   lines.push({ text: '' });
   lines.push({ text: '' });
