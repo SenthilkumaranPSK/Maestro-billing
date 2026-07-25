@@ -35,12 +35,17 @@ async function embedBrandFonts(doc: PDFDocument): Promise<{ regular: PDFFont; bo
 
 // Same caching/fallback pattern as lib/pdf.ts's thermal-receipt logo — fetch
 // and decode once per session, prefer the small pre-downscaled copy so the
-// invoice PDF doesn't balloon to ~1MB per generation.
+// invoice PDF doesn't balloon to ~1MB per generation. Logo-receipt-green.png
+// is a pre-tinted (BRAND green) copy generated from Logo.png via sharp's
+// alpha-masked composite ("dest-in" onto a solid-green canvas) — a plain
+// sharp.tint() leaves solid-black artwork black, since tint colorizes by
+// lightness and black has none. Falls back to the original black/transparent
+// logo if the green copy is ever missing.
 let logoBytesCache: ArrayBuffer | null | undefined;
 async function fetchLogoBytes(): Promise<ArrayBuffer | null> {
   if (logoBytesCache !== undefined) return logoBytesCache;
   logoBytesCache = null;
-  for (const path of ['/Logo-receipt.png', '/Logo.png']) {
+  for (const path of ['/Logo-receipt-green.png', '/Logo-receipt.png', '/Logo.png']) {
     try {
       const response = await fetch(path);
       if (response.ok) {
@@ -168,48 +173,74 @@ export async function generateA4InvoicePDF(bill: Bill, settings: Partial<Setting
   const studioPhone = studio?.studio_phone || '';
   const studioGstin = studio?.studio_gstin || '';
 
-  // Logo sits top-left; the studio name/address/mobile block stacks directly
-  // underneath it, all left-aligned in a fixed line-by-line order — a single
-  // coherent letterhead block, rather than the name alone (large, left) and
-  // the address/mobile (small, centered elsewhere) reading as disconnected.
-  y -= 6;
+  // Fixed-height header box: logo top-left (large); the studio name/address/
+  // mobile block is bottom-aligned inside the same box, tightly packed with
+  // no extra line-gap, sitting right above the divider; GSTIN/Invoice/Date is
+  // vertically centered on the right. Three independent vertical anchors
+  // (top/bottom/center) sharing one box, rather than everything chained off
+  // a single cursor top-down — that's what let the name/address/mobile block
+  // drift away from the logo with awkward gaps before.
+  const HEADER_H = 118;
+  const headerTop = y - 4;
+  const headerBottom = headerTop - HEADER_H;
+  const rightColX = right - 205;
+  // Logo + name/address/mobile are inset from the page margin, not flush
+  // against it, matching the indent every other left-aligned block in this
+  // invoice (e.g. "Service Bill To :") already uses.
+  const headerLeft = left + 10;
+
   const logoBytes = await fetchLogoBytes();
   let logoH = 0;
+  let logoW = 0;
   if (logoBytes) {
     const logoImage = await doc.embedPng(logoBytes);
-    logoH = 48;
-    const logoW = logoH * (logoImage.width / logoImage.height);
-    page.drawImage(logoImage, { x: left, y: y - logoH, width: logoW, height: logoH });
+    logoH = 62;
+    logoW = logoH * (logoImage.width / logoImage.height);
+    page.drawImage(logoImage, { x: headerLeft, y: headerTop - logoH, width: logoW, height: logoH });
+  }
+  // Name/address/mobile is centered under the logo's own width, rather than
+  // left-aligned to any edge of it — this centers each line relative to the
+  // others too, since they all share the same centering box. If the logo
+  // asset ever fails to load, logoW is 0 — falling back to a fixed width
+  // keeps text wrapping/centering sane instead of a 0-width box forcing
+  // every single word onto its own line.
+  const ownerBlockW = logoW || 220;
+
+  // Right column: block is anchored to the right side of the page, but the
+  // lines are center-aligned to each other within that block (not each one
+  // hugging the right edge, which reads as ragged since "Date" is shorter
+  // than "GSTIN"), and vertically centered in the header box.
+  const rightLines: string[] = [];
+  if (studioGstin) rightLines.push(`GSTIN : ${studioGstin}`);
+  rightLines.push(`Invoice : ${bill.billNumber}`);
+  rightLines.push(`Date : ${formatDDMMYYYY(new Date(bill.billDate))}`);
+  const RIGHT_LINE_GAP = 16;
+  const rightBlockH = (rightLines.length - 1) * RIGHT_LINE_GAP;
+  let ry = (headerTop + headerBottom) / 2 + rightBlockH / 2;
+  for (const line of rightLines) {
+    text(line, rightColX, ry, { size: 10, font: bold, color: ACCENT, align: 'center', maxWidth: right - rightColX });
+    ry -= RIGHT_LINE_GAP;
   }
 
-  const rightColX = right - 205;
-  let ry = y - 4;
-  if (studioGstin) {
-    text(`GSTIN : ${studioGstin}`, rightColX, ry, { size: 10, font: bold, color: ACCENT, align: 'right', maxWidth: right - rightColX });
-    ry -= 16;
-  }
-  text(`Invoice : ${bill.billNumber}`, rightColX, ry, { size: 10, font: bold, color: ACCENT, align: 'right', maxWidth: right - rightColX });
-  ry -= 16;
-  text(`Date : ${formatDDMMYYYY(new Date(bill.billDate))}`, rightColX, ry, { size: 10, font: bold, color: ACCENT, align: 'right', maxWidth: right - rightColX });
-
-  y -= logoH + 12;
-  text(studioOwner, left, y, { size: 16, font: bold, color: BRAND });
-  y -= 16;
-  // Wrapped against the space left of the GSTIN/Invoice/Date column so a long
-  // address can never run underneath it.
-  const ownerBlockW = rightColX - left - 16;
-  if (studioAddress) {
-    for (const line of wrapText(regular, studioAddress.replace(/\n/g, ', '), 9.5, ownerBlockW)) {
-      text(line, left, y, { size: 9.5, color: ACCENT });
-      y -= 13;
-    }
-  }
-  if (studioPhone) {
-    text(`Mobile : ${studioPhone}`, left, y, { size: 9.5, color: ACCENT });
-    y -= 13;
+  // Name/address/mobile, tightly packed and bottom-aligned to the header box
+  // — computed bottom-up so the last line always sits a fixed 4pt above the
+  // divider regardless of how many lines the address wraps to.
+  const addressLines = studioAddress
+    ? wrapText(regular, studioAddress.replace(/\n/g, ', '), 9.5, ownerBlockW)
+    : [];
+  const ownerLines: Array<{ text: string; size: number; font: PDFFont; color: ReturnType<typeof rgb> }> = [
+    { text: studioOwner, size: 13, font: bold, color: BRAND },
+    ...addressLines.map((line) => ({ text: line, size: 9.5, font: regular, color: ACCENT })),
+    ...(studioPhone ? [{ text: `Mobile : ${studioPhone}`, size: 9.5, font: regular, color: ACCENT }] : []),
+  ];
+  let ly = headerBottom + 4;
+  for (let i = ownerLines.length - 1; i >= 0; i--) {
+    const ln = ownerLines[i]!;
+    text(ln.text, headerLeft, ly, { size: ln.size, font: ln.font, color: ln.color, align: 'center', maxWidth: ownerBlockW });
+    ly += ln.size + 2;
   }
 
-  y -= 10;
+  y = headerBottom;
   hline(y, left, right, 1.2);
   y -= 18;
 
@@ -248,8 +279,12 @@ export async function generateA4InvoicePDF(bill: Bill, settings: Partial<Setting
   const colB_ContentH = 14 + serviceDescLines.length * 12;
   const colC_ContentH = 14 + (bill.serviceFrom || bill.serviceTo ? [bill.serviceFrom, bill.serviceTo].filter(Boolean).length : 1) * 12;
 
+  // Sized to whatever content actually needs (40pt floor just keeps the box
+  // from looking clipped when every column is at its shortest) — previously
+  // forced to a 108pt minimum, which left a large dead gap under a short
+  // customer/service block on most real bills.
   const infoTop = y;
-  const infoBoxH = Math.max(108, colA_ContentH, colB_ContentH, colC_ContentH) + 6; // 6pt bottom padding
+  const infoBoxH = Math.max(40, colA_ContentH, colB_ContentH, colC_ContentH) + 6; // 6pt bottom padding
   const infoBottom = infoTop - infoBoxH;
 
   hline(infoBottom);
@@ -490,9 +525,11 @@ export async function generateA4InvoicePDF(bill: Bill, settings: Partial<Setting
     by -= 12.5;
   }
 
+  // Both lines sit at the bottom of the box together (the blank space for an
+  // actual pen signature is above them, not between them).
   const sigX = left + bankColW;
   const sigW = contentW - bankColW;
-  text(`For ${studioName.toUpperCase()}`, sigX, y - 22, { size: 9.5, font: bold, color: ACCENT, align: 'center', maxWidth: sigW });
+  text(`For ${studioName.toUpperCase()}`, sigX, y - bankBoxH + 30, { size: 9.5, font: bold, color: ACCENT, align: 'center', maxWidth: sigW });
   text('Authorised Signature', sigX, y - bankBoxH + 16, { size: 9, color: ACCENT, align: 'center', maxWidth: sigW });
 
   y -= bankBoxH;
