@@ -343,7 +343,11 @@ export function buildReceiptPreview(bill: Bill, settings: Partial<Settings>): Th
   // on the API's Bill shape): items-incl-GST − discount vs grand total.
   const itemsTotal = bill.items.reduce((s, i) => s + i.totalAmount, 0);
   const roundOff = bill.grandTotal - (itemsTotal - bill.discountAmount);
-  const roundOffAmt = `${roundOff > 0 ? '+' : roundOff < 0 ? '-' : ''}Rs ${formatAmt(Math.abs(roundOff))}`;
+  // No "+" on a positive round-off — same convention as the A4 invoice
+  // (lib/a4invoice.ts's totalRows amount formatting): a negative gets "-",
+  // everything else (including positive) prints bare, matching how every
+  // other total row (Sub Total, Grand Total) never carries a sign either.
+  const roundOffAmt = `${roundOff < 0 ? '-' : ''}Rs ${formatAmt(Math.abs(roundOff))}`;
 
   // Same Sub Total / CGST / SGST / Round Off / Grand Total layout regardless
   // of GST inclusive/exclusive — only how subTotal/gstAmount were derived

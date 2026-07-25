@@ -289,7 +289,11 @@ export async function generateA4InvoicePDF(bill: Bill, settings: Partial<Setting
   const tableHeaderH = 22;
   const tableHeaderBottom = tableTop - tableHeaderH;
 
-  text(cols[0]!.label, cols[0]!.x + 8, tableTop - 15, { size: 9.5, font: bold });
+  // SN's header is centered over the full column width, matching its row
+  // values below (String(i + 1), also centered) — a left+8-inset header
+  // over centered data left the numbers visibly right of "SN" (confirmed by
+  // rendering an actual invoice, not just reading the alignment options).
+  text(cols[0]!.label, cols[0]!.x, tableTop - 15, { size: 9.5, font: bold, align: 'center', maxWidth: cols[0]!.w });
   text(cols[1]!.label, cols[1]!.x + 8, tableTop - 15, { size: 9.5, font: bold });
   for (const c of cols.slice(2, -1)) {
     text(c.label, c.x, tableTop - 15, { size: 9, font: bold, align: 'center', maxWidth: c.w });
