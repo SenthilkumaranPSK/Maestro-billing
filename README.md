@@ -11,7 +11,7 @@ Local-first billing software for The Maestro Studio's, Salem. Runs entirely on y
 - **Bill history** — search, view, edit items, cancel. Cancelled bills stay visible for audit but never count as revenue. Every change is written to a log table.
 - **Customers & products** — simple catalogs; bill items snapshot the product name and price, so history survives catalog changes.
 - **Reports** (in Settings) — printable end-of-day Day Report, and a monthly GST report grouped by rate with CSV export. Both warn if any bills could not be loaded.
-- **Backups** — automatic daily snapshot on app start (last 30 kept), one-click restore with a safety snapshot first.
+- **Backups** — automatic daily snapshot on app start (last 30 kept), to a configurable folder on a separate drive; each backup can be saved anywhere as a copy. Restoring is CLI-only, on purpose.
 - **Resilience** — SQLite WAL mode, Zod-validated API boundary, race-proof unique bill numbers, self-recovering WhatsApp session, printer-availability badge on the billing screen.
 
 ---
@@ -97,6 +97,21 @@ HOST=0.0.0.0
 CORS_ORIGIN=http://localhost:5173,http://192.168.1.100:5173
 ```
 
+In the packaged desktop app these are not edited by hand — `desktop/main.js`
+sets them from the Connection Setup screen (Alt → Setup → Connection Setup…,
+or Ctrl+Shift+C), which writes `network-mode.json` in the app-data folder:
+
+| Mode | Effect |
+|---|---|
+| `{"mode":"server","share":false}` | Default. Backend on `127.0.0.1` only |
+| `{"mode":"server","share":true}` | Backend on `0.0.0.0` so a second studio PC can connect |
+| `{"mode":"client","address":"192.168.1.50:3179"}` | No local backend or database at all — the window points at the main PC |
+
+See **[TWO-PC-SETUP.md](TWO-PC-SETUP.md)** for the operator-facing walkthrough
+(including the required Windows Firewall rule). Note that sharing the database
+by putting `studio.db` on a network share instead is **not** supported — SQLite
+in WAL mode requires all connections to be on the same machine.
+
 ---
 
 ## Health Checks
@@ -123,10 +138,16 @@ GET /api/v1/backups
 # Create a new backup
 POST /api/v1/backups
 
-# Restore from a backup (destructive — overwrites the live database)
-POST /api/v1/backups/<filename>/restore
-Header: X-Confirm-Restore: yes
+# Save a copy of a backup (streams the file as a download)
+GET /api/v1/backups/<filename>/download
+
+# Read / set the backup folder ("" clears it, reverting to auto-detection)
+GET /api/v1/backups/location
+PUT /api/v1/backups/location   { "path": "D:\\Billing" }
 ```
+
+There is no restore endpoint — restoring is deliberately not exposed in the
+app or the API (see the CLI below).
 
 ### CLI Commands
 
@@ -134,8 +155,10 @@ Header: X-Confirm-Restore: yes
 # Create a backup
 npm run backup --workspace=backend
 
-# Restore from a backup (set CONFIRM=yes to confirm the destructive operation)
-CONFIRM=yes npm run restore --workspace=backend -- studio_2025-01-01T12-00-00.db
+# Restore from a backup (set CONFIRM=yes to confirm the destructive operation).
+# This is the ONLY restore path — it is intentionally not available in the app,
+# so a mis-click can never roll the studio's live database back.
+CONFIRM=yes npm run restore --workspace=backend -- 2026-07/studio_2026-07-24T03-00-00.db
 ```
 
 ### Notes

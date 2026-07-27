@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Smartphone, RotateCcw, FileBarChart2, Percent, ChevronRight, Save, AlertTriangle, FolderCog } from 'lucide-react';
+import { Smartphone, FileBarChart2, Percent, ChevronRight, Save, AlertTriangle, FolderCog } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
@@ -69,32 +69,6 @@ export default function SettingsPage() {
       return;
     }
     setLocationMutation.mutate(locationInput.trim());
-  };
-
-  const restoreMutation = useMutation({
-    mutationFn: backupsApi.restore,
-    onSuccess: () => {
-      qc.invalidateQueries();
-      toast({
-        title: 'Database restored',
-        description: 'All data has been rolled back to the selected backup.',
-        variant: 'success',
-      });
-    },
-    onError: (err: Error) => {
-      toast({ title: 'Restore failed', description: err.message, variant: 'destructive' });
-    },
-  });
-
-  const handleRestore = (name: string, createdAt: string) => {
-    const ok = confirm(
-      `Restore the database from this backup?\n\n${name}\n(${formatDateTime(createdAt)})\n\n` +
-        'ALL bills and customers created after this backup will be LOST. ' +
-        'This cannot be undone.',
-    );
-    if (!ok) return;
-    const doubleCheck = confirm('Are you absolutely sure? This replaces the live database.');
-    if (doubleCheck) restoreMutation.mutate(name);
   };
 
   return (
@@ -172,8 +146,7 @@ export default function SettingsPage() {
             <code className="bg-slate-100 px-1 rounded">D:\Billing</code> (or{' '}
             <code className="bg-slate-100 px-1 rounded">E:\Billing</code> if D: isn't available) —
             a separate drive from wherever the app and its live database live, on purpose. Set a
-            location of your own below if you'd rather use a specific drive or folder. Restoring
-            rolls the whole database back to that moment. Use{' '}
+            location of your own below if you'd rather use a specific drive or folder. Use{' '}
             <span className="font-medium text-slate-700">Save a Copy</span> to save any backup to a
             location of your choice — a USB drive, Desktop, cloud-synced folder, wherever.
           </p>
@@ -262,16 +235,6 @@ export default function SettingsPage() {
                     >
                       <Save className="h-3.5 w-3.5 mr-1.5" />
                       Save a Copy
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="text-amber-700 border-amber-300 hover:bg-amber-50"
-                      onClick={() => handleRestore(b.name, b.createdAt)}
-                      disabled={restoreMutation.isPending}
-                    >
-                      <RotateCcw className="h-3.5 w-3.5 mr-1.5" />
-                      Restore
                     </Button>
                   </div>
                 </div>

@@ -1,6 +1,6 @@
 {
   "name": "maestro-billing-desktop",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "The Maestro Studio's — Billing System (desktop)",
   "main": "main.js",
   "author": "The Maestro Studio's",
@@ -30,6 +30,7 @@
     },
     "files": [
       "main.js",
+      "setup.html",
       {
         "from": "staging/backend_dist",
         "to": "backend/dist"

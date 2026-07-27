@@ -116,33 +116,10 @@ export async function backupRoutes(fastify: FastifyInstance) {
     }
   });
 
-  // POST /api/v1/backups/:file/restore — restore from a backup
-  // Requires header: X-Confirm-Restore: yes
-  fastify.post<{ Params: { file: string } }>('/:file/restore', async (request, reply) => {
-    if (request.headers['x-confirm-restore'] !== 'yes') {
-      return reply.status(400).send({
-        success: false,
-        error: 'Send header X-Confirm-Restore: yes to confirm the restore.',
-      });
-    }
-
-    const { file } = request.params;
-    try {
-      const customDir = await getConfiguredBackupDir(fastify.prisma);
-      const svc = new BackupService(customDir);
-      // Snapshot the current DB first so a mistaken restore is undoable.
-      await svc.backup();
-      // Close our SQLite handle so Windows lets us replace the file (and no
-      // stale connection keeps writing to the old inode). Prisma reconnects
-      // automatically on the next query.
-      await fastify.prisma.$disconnect();
-      await svc.restore(file);
-      return reply.send({ success: true, message: `Database restored from ${file}` });
-    } catch (err) {
-      if (err instanceof BackupError) {
-        return reply.status(400).send({ success: false, error: err.message });
-      }
-      throw err;
-    }
-  });
+  // NOTE: there is deliberately no restore route. Restoring is a destructive,
+  // one-click way for the operator to wipe every bill created since a backup,
+  // so it was removed from the app entirely. The recovery path is still there
+  // for an actual disaster — `BackupService.restore()` plus the
+  // `npm run restore -- <file>` CLI in backend/scripts/restore.ts, run
+  // deliberately by whoever is supporting the studio, not from the UI.
 }

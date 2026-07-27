@@ -4,13 +4,21 @@
 // (database, backups, WhatsApp session) lives in the per-user app-data
 // folder, because the install directory is not writable.
 
-const { app, BrowserWindow, dialog, shell, session } = require('electron');
+const { app, BrowserWindow, Menu, dialog, shell, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
+const os = require('os');
 
 const PORT = 3179;
-const APP_URL = `http://127.0.0.1:${PORT}`;
+const LOCAL_URL = `http://127.0.0.1:${PORT}`;
+
+// Where the UI actually lives. In the normal ("server") mode that's this PC's
+// own in-process backend; on a second PC running in "client" mode it's the
+// main PC's address across the studio LAN. Assigned during startup, before
+// any window exists, so every isAppUrl() check below compares against the
+// origin this install genuinely talks to.
+let APP_URL = LOCAL_URL;
 
 // url.startsWith(APP_URL) is not a safe origin check: a URL like
 // "http://127.0.0.1:3179@evil.example" passes that prefix test (the string
@@ -64,6 +72,124 @@ if (!gotLock) {
     } else {
       focusPending = true;
     }
+  });
+}
+
+// ── Network mode (single PC vs. two PCs sharing one database) ─────────────
+// Two studio PCs cannot both open the same studio.db over a file share:
+// SQLite in WAL mode needs shared memory that only works when every process
+// is on the same machine, and Windows share locking would corrupt the file
+// regardless. So the second PC does NOT get its own database — it runs the
+// UI against the main PC's backend over HTTP, which is what this app already
+// is internally (a Fastify server + a browser UI that happens to be local).
+//
+//   server mode — the normal install: own database, backups, WhatsApp.
+//                 `share: true` additionally binds the backend to the LAN.
+//   client mode — no database, no backend, no WhatsApp on this PC. The window
+//                 just points at the main PC. Nothing is stored locally.
+//
+// Concurrency is already safe: billNumber is UNIQUE and BillService.createBill
+// retries on P2002, so two operators saving at the same instant get different
+// bill numbers rather than a duplicate-key error.
+const NETWORK_CONFIG = path.join(app.getPath('userData'), 'network-mode.json');
+
+function readNetworkConfig() {
+  try {
+    // Strip a UTF-8 BOM before parsing. We never write one, but Notepad and
+    // PowerShell's Out-File both add one by default — so the moment anyone
+    // hand-edits this file to fix an address, JSON.parse would throw and the
+    // app would silently look like it had forgotten its settings.
+    const raw = fs.readFileSync(NETWORK_CONFIG, 'utf8').replace(/^﻿/, '');
+    const cfg = JSON.parse(raw);
+    if (cfg.mode === 'client' && typeof cfg.address === 'string' && cfg.address) return cfg;
+    if (cfg.mode === 'server') return { mode: 'server', share: cfg.share === true };
+    return null;
+  } catch {
+    return null; // never configured — first run
+  }
+}
+
+function writeNetworkConfig(cfg) {
+  fs.mkdirSync(path.dirname(NETWORK_CONFIG), { recursive: true });
+  fs.writeFileSync(NETWORK_CONFIG, JSON.stringify(cfg), 'utf8');
+}
+
+// This PC's LAN addresses, shown on the main PC so the operator knows what to
+// type on the second one.
+//
+// A bare "every non-internal IPv4" list is not usable here — a normal Windows
+// PC reports a pile of addresses that will never work: 169.254.x.x (APIPA,
+// which Windows self-assigns to an adapter that got NO network at all), and
+// virtual switches from Hyper-V/WSL/VirtualBox/VMware, which are real private
+// addresses on a network the other PC isn't on. Handing the operator six
+// addresses and letting them guess is how "I typed it and it didn't work"
+// happens. Drop the ones that cannot be right, then order the rest so the
+// most likely home/studio-router address is first.
+const VIRTUAL_IFACE = /vethernet|virtualbox|vmware|hyper-v|loopback|wsl|docker|tailscale|zerotier/i;
+
+function getLanAddresses() {
+  const candidates = [];
+  const ifaces = os.networkInterfaces();
+  for (const name of Object.keys(ifaces)) {
+    if (VIRTUAL_IFACE.test(name)) continue;
+    for (const net of ifaces[name] ?? []) {
+      if (net.family !== 'IPv4' || net.internal) continue;
+      if (net.address.startsWith('169.254.')) continue; // APIPA — no network
+      candidates.push(net.address);
+    }
+  }
+  // 192.168.x.x is what almost every home/small-office router hands out, so
+  // it goes first; then 10.x, then the 172.16–31 range.
+  const rank = (ip) => (ip.startsWith('192.168.') ? 0 : ip.startsWith('10.') ? 1 : 2);
+  return candidates.sort((a, b) => rank(a) - rank(b));
+}
+
+// Electron has no text-input dialog, so this is a real (small, frameless-ish)
+// window loading setup.html. It stays under the same webPreferences lockdown
+// as the main window — no Node in the renderer — and hands its answer back
+// through a page-side promise that executeJavaScript awaits. Resolves to the
+// chosen config, or null if the operator cancelled.
+function showSetupWindow(current) {
+  return new Promise((resolve) => {
+    const params = new URLSearchParams({
+      ips: JSON.stringify(getLanAddresses()),
+      port: String(PORT),
+      mode: current?.mode ?? '',
+      address: current?.address ?? '',
+      share: current?.share ? '1' : '0',
+      firstRun: current ? '0' : '1',
+    });
+
+    const win = new BrowserWindow({
+      width: 620,
+      height: 660,
+      resizable: false,
+      minimizable: false,
+      maximizable: false,
+      autoHideMenuBar: true,
+      title: 'Maestro Billing — Connection Setup',
+      backgroundColor: '#f8fafc',
+      webPreferences: { nodeIntegration: false, contextIsolation: true },
+    });
+
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+      if (!win.isDestroyed()) win.destroy();
+    };
+
+    // Closing the window with the X is the same as cancelling.
+    win.on('closed', () => finish(null));
+
+    win.loadFile(path.join(__dirname, 'setup.html'), { search: params.toString() });
+    win.webContents.once('did-finish-load', () => {
+      win.webContents
+        .executeJavaScript('window.__setupResult')
+        .then(finish)
+        .catch(() => finish(null));
+    });
   });
 }
 
@@ -198,14 +324,22 @@ function prepareDataDir() {
   return { dataRoot, dbFile };
 }
 
-function startBackend() {
+function startBackend(share) {
   const { dataRoot, dbFile } = prepareDataDir();
 
   process.env.NODE_ENV = 'production';
   process.env.DATABASE_URL = 'file:' + dbFile.replace(/\\/g, '/');
   process.env.PORT = String(PORT);
-  process.env.HOST = '127.0.0.1';
-  process.env.CORS_ORIGIN = APP_URL;
+  // Loopback unless the operator explicitly opted into letting a second
+  // studio PC connect — this app has no login, so binding to the LAN is a
+  // deliberate choice, never the default.
+  process.env.HOST = share ? '0.0.0.0' : '127.0.0.1';
+  // The second PC loads the UI *from* this server, so its requests are
+  // same-origin and never hit CORS at all. The LAN origins are listed anyway
+  // so a direct cross-origin call from the other PC isn't silently blocked.
+  process.env.CORS_ORIGIN = share
+    ? [LOCAL_URL, ...getLanAddresses().map((ip) => `http://${ip}:${PORT}`)].join(',')
+    : LOCAL_URL;
   process.env.FRONTEND_DIST = path.join(APP_ROOT, 'frontend', 'dist');
   process.env.WA_DATA_DIR = dataRoot;
   process.env.LOG_LEVEL = process.env.LOG_LEVEL || 'info';
@@ -215,7 +349,7 @@ function startBackend() {
   require(path.join(APP_ROOT, 'backend', 'dist', 'server.js'));
 }
 
-function waitForServer(retriesLeft, onReady) {
+function waitForServer(retriesLeft, onReady, onUnreachable) {
   const req = http.get(`${APP_URL}/live`, (res) => {
     res.resume();
     if (res.statusCode === 200) return onReady();
@@ -229,6 +363,7 @@ function waitForServer(retriesLeft, onReady) {
 
   function retry() {
     if (retriesLeft <= 0) {
+      if (onUnreachable) return onUnreachable();
       dialog.showErrorBox(
         'Maestro Billing could not start',
         'The billing server did not come up. Restart the app; if this keeps happening, contact support.',
@@ -236,7 +371,7 @@ function waitForServer(retriesLeft, onReady) {
       app.quit();
       return;
     }
-    setTimeout(() => waitForServer(retriesLeft - 1, onReady), 500);
+    setTimeout(() => waitForServer(retriesLeft - 1, onReady, onUnreachable), 500);
   }
 }
 
@@ -407,16 +542,124 @@ app.on('child-process-gone', (_e, details) => {
   console.error(`Child process gone: type=${details.type} reason=${details.reason} name=${details.name ?? ''}`);
 });
 
-app.whenReady().then(() => {
-  try {
-    startBackend();
-  } catch (err) {
-    dialog.showErrorBox('Maestro Billing could not start', String(err && err.stack ? err.stack : err));
-    app.quit();
+let networkMode = 'server';
+
+// Asks for the connection settings (first run, or after the main PC turned
+// out to be unreachable), saves them, then boots accordingly. Recursive on
+// purpose: a client that still can't reach the main PC lands back on the
+// setup screen instead of a dead window with no way out.
+function startWithConfig(cfg) {
+  networkMode = cfg.mode;
+  APP_URL = cfg.mode === 'client' ? `http://${cfg.address}` : LOCAL_URL;
+
+  if (cfg.mode === 'server') {
+    try {
+      startBackend(cfg.share);
+    } catch (err) {
+      dialog.showErrorBox('Maestro Billing could not start', String(err && err.stack ? err.stack : err));
+      app.quit();
+      return;
+    }
+    setupBackupDownloads();
+    waitForServer(60, createWindow);
     return;
   }
+
+  // Client mode: nothing to boot locally — just check the main PC answers.
+  // Far fewer retries than a local boot: this isn't waiting for a server to
+  // warm up, it's asking whether another PC is switched on and reachable, and
+  // making the operator stare at a blank window for 30s to find that out is
+  // worse than telling them in 5.
   setupBackupDownloads();
-  waitForServer(60, createWindow);
+  waitForServer(10, createWindow, () => {
+    const { response } = dialog.showMessageBoxSync({
+      type: 'error',
+      title: 'Maestro Billing — Cannot Reach the Main PC',
+      message: `No answer from ${cfg.address}`,
+      detail:
+        'Check that:\n' +
+        '  • the Main PC is switched on and Maestro Billing is open on it\n' +
+        '  • both PCs are on the same Wi-Fi\n' +
+        "  • the Main PC's Connection Setup has sharing turned on\n" +
+        '  • the address is still correct (it can change if the router reassigns it)',
+      buttons: ['Retry', 'Change Connection Settings…', 'Quit'],
+      defaultId: 0,
+      cancelId: 2,
+      noLink: true,
+    });
+    if (response === 0) return startWithConfig(cfg);
+    if (response === 1) return runSetup(cfg);
+    app.quit();
+  });
+}
+
+function runSetup(current) {
+  showSetupWindow(current).then((cfg) => {
+    if (!cfg) {
+      // Cancelled with existing settings — keep running on them rather than
+      // quitting; cancelled on a genuine first run — there's nothing to fall
+      // back to, so quit.
+      if (current) return startWithConfig(current);
+      app.quit();
+      return;
+    }
+    writeNetworkConfig(cfg);
+    startWithConfig(cfg);
+  });
+}
+
+// Changing the connection afterwards is rare — the usual case (the router
+// gave the main PC a new address) is already handled by the "Cannot Reach the
+// Main PC" dialog's own "Change Connection Settings…" button. This menu is
+// the deliberate route for everything else: switching a PC between main and
+// second, or turning sharing on later. The menu bar is auto-hidden, so it
+// appears on Alt; Ctrl+Shift+C works without it.
+function buildMenu() {
+  Menu.setApplicationMenu(
+    Menu.buildFromTemplate([
+      {
+        label: '&Setup',
+        submenu: [
+          {
+            label: 'Connection Setup…',
+            accelerator: 'CommandOrControl+Shift+C',
+            click: () => {
+              dialog
+                .showMessageBox(mainWindow ?? undefined, {
+                  type: 'question',
+                  title: 'Maestro Billing',
+                  message: 'Change how this PC connects?',
+                  detail: 'Maestro Billing needs to restart to apply the new setting.',
+                  buttons: ['Continue', 'Cancel'],
+                  defaultId: 0,
+                  cancelId: 1,
+                  noLink: true,
+                })
+                .then(({ response }) => {
+                  if (response !== 0) return;
+                  showSetupWindow(readNetworkConfig()).then((cfg) => {
+                    if (!cfg) return;
+                    writeNetworkConfig(cfg);
+                    app.relaunch();
+                    app.quit();
+                  });
+                });
+            },
+          },
+          { type: 'separator' },
+          { role: 'reload' },
+          { role: 'quit' },
+        ],
+      },
+    ]),
+  );
+}
+
+app.whenReady().then(() => {
+  buildMenu();
+  const cfg = readNetworkConfig();
+  if (cfg) startWithConfig(cfg);
+  else runSetup(null);
 });
 
 app.on('window-all-closed', () => {
@@ -427,6 +670,14 @@ let quitting = false;
 function beginGracefulShutdown() {
   if (quitting) return;
   quitting = true;
+  // In client mode there is no backend in this process, so nothing is
+  // listening for SIGTERM — process.emit() would just return false and the
+  // app would hang on quit forever, since before-quit already called
+  // preventDefault(). Exit directly instead; there's nothing local to flush.
+  if (networkMode === 'client') {
+    app.exit(0);
+    return;
+  }
   try {
     process.emit('SIGTERM', 'SIGTERM');
   } catch {
