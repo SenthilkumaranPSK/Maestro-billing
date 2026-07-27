@@ -320,7 +320,7 @@ function looksLikeSqliteDb(file) {
     fd = fs.openSync(file, 'r');
     const header = Buffer.alloc(16);
     fs.readSync(fd, header, 0, 16, 0);
-    return header.toString('latin1') === 'SQLite format 3 ';
+    return header.toString('latin1') === 'SQLite format 3\u0000';
   } catch {
     return false;
   } finally {
