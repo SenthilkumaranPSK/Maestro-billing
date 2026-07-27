@@ -78,15 +78,26 @@ export async function generateBillPDF(
   // this used `0.5 * MM_TO_PT`, which is 0.5 MILLIMETRES, not 0.5cm — a
   // units bug that made that fix ~10x too small to notice. Fixed here.)
   // Requested total so far: 1cm, capped to whatever's actually safely
-  // available on this paper width, minus a small safety buffer so the right
-  // edge never gets cut. On 80mm paper that's ~3.7mm of the 1cm asked for;
-  // on 58mm paper there's only ~1.2mm of margin to give either way — beyond
-  // this cap, the only real fix left is the printer driver's own left-offset
-  // /margin setting, which PDF content has no way to reach.
+  // available on this paper width. Beyond that cap, the only real fix left is
+  // the printer driver's own left-offset/margin setting, which PDF content
+  // has no way to reach.
+  //
+  // The cap used to be `marginX - 2pt`, i.e. "take everything except 2pt".
+  // On 80mm paper marginX is only ~10pt, so that handed 8 of the 10 available
+  // points to the left side and left ~0.7mm on the right — the studio saw it
+  // as a big gap down the left, and the Amt column (the rightmost thing on
+  // the receipt) ended up close enough to the paper edge to risk being
+  // clipped. Rendering the two variants side by side made it obvious: the
+  // print copy was visibly lopsided next to the download copy.
+  //
+  // Now it borrows at most a fixed share of the idle margin, so a real right
+  // margin always survives no matter how tight the paper is. Still biased
+  // left-to-right (which is the point), just not to the exclusion of the
+  // other edge.
   const REQUESTED_SHIFT = 1.0 * 10 * MM_TO_PT; // 1cm
-  const RIGHT_SAFETY_PT = 2;
+  const MAX_SHIFT_FRACTION = 0.4; // never give away more than 40% of the slack
   const LEFT_SHIFT = compensatePrinterMargin
-    ? Math.max(0, Math.min(REQUESTED_SHIFT, marginX - RIGHT_SAFETY_PT))
+    ? Math.max(0, Math.min(REQUESTED_SHIFT, marginX * MAX_SHIFT_FRACTION))
     : 0;
 
   const pdfDoc = await PDFDocument.create();

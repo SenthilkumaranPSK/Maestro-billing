@@ -241,24 +241,17 @@ export function buildReceiptPreview(bill: Bill, settings: Partial<Settings>): Th
   // Item table header. Qty/Price/Amt sit in fixed-width columns on the right
   // (colFit below), with Product taking whatever's left — the same layout
   // the header row and every item row share, so the columns line up.
-  const QTY_W = 6;
-  // Wide enough for a plain "1,500" AND a two-decimal "1,271.19" — GST-
-  // inclusive bills extract tax from the entered price, which almost always
-  // leaves a paisa remainder, so ".XX" prices are the norm in that mode, not
-  // an edge case.
-  const PRICE_W = 9;
-  const AMT_W = 9;
   // Right-aligns into `width`. Never truncates on overflow (e.g. a price
-  // wider than PRICE_W/AMT_W were sized for) — silently chopping digits off
-  // a printed amount is far worse than a column running slightly wide. Adds
-  // a leading space in that case so it never runs straight into its
-  // neighbour with zero gap.
+  // wider than the column was sized for) — silently chopping digits off a
+  // printed amount is far worse than a column running slightly wide. Adds a
+  // leading space in that case so it never runs straight into its neighbour
+  // with zero gap.
   const colFit = (text: string, width: number) =>
     text.length >= width ? ` ${text}` : text.padStart(width, ' ');
   const capitalize = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
   // Product.unit is a full word ("piece", "session", …) sized for the
   // Products page and the A4 invoice, where there's room for it. On the
-  // thermal receipt's fixed 6-char Qty column, a full word (e.g. "1 Piece")
+  // thermal receipt's narrow Qty column, a full word (e.g. "1 Piece")
   // overflows and throws the Price/Amt columns out of alignment with the
   // header above them — abbreviate to keep every row the same width as the
   // header, whatever unit the product is set to.
@@ -267,6 +260,39 @@ export function buildReceiptPreview(bill: Bill, settings: Partial<Settings>): Th
     frame: 'Fr', session: 'Ses', roll: 'Rl', print: 'Pr', no: 'No',
   };
   const abbrUnit = (u: string) => UNIT_ABBR[u.toLowerCase()] ?? capitalize(u).slice(0, 3);
+
+  // Qty/Price/Amt sit in right-hand columns sized to THIS bill's widest
+  // actual value, with Product taking whatever's left.
+  //
+  // These used to be hardcoded 6/9/9. The 9s existed for GST-INCLUSIVE bills,
+  // where tax is extracted from the entered price and almost always leaves a
+  // paisa remainder ("1,271.19"). But an exclusive bill's amounts are short
+  // ("1,500"), so 24 characters were reserved on every receipt to fit a
+  // number most bills never print — leaving the product name just 14
+  // characters on 80mm paper. "Passport Size Photo" (19) therefore wrapped
+  // onto two lines while eight columns sat blank beside it, which is what the
+  // studio reported as the item block looking broken.
+  //
+  // Measuring the real values keeps the wide case working (an inclusive bill
+  // still gets its 9s, because that IS its widest value) while giving short
+  // bills their space back. Every row and the header share one computed
+  // width, so the columns still line up exactly.
+  const colWidth = (header: string, values: string[]) =>
+    Math.max(header.length, ...values.map((v) => v.length)) + 1;
+
+  const itemCells = bill.items.map((item) => {
+    const baseAmt = item.totalAmount - item.gstAmount;
+    return {
+      baseAmt,
+      qty: `${item.qty} ${abbrUnit(item.unit)}`,
+      price: formatAmt(item.qty ? Math.round(baseAmt / item.qty) : item.unitPrice),
+      amt: formatAmt(baseAmt),
+    };
+  });
+
+  const QTY_W = colWidth('Qty', itemCells.map((c) => c.qty));
+  const PRICE_W = colWidth('Price', itemCells.map((c) => c.price));
+  const AMT_W = colWidth('Amt', itemCells.map((c) => c.amt));
 
   lines.push(
     { text: dline, separator: true, center: true },
@@ -293,12 +319,11 @@ export function buildReceiptPreview(bill: Bill, settings: Partial<Settings>): Th
   // base in both modes, so this keeps every receipt internally consistent —
   // same as the "look the same as exclusive" ask, not just same labels.
   bill.items.forEach((item, i) => {
-    const baseAmt = item.totalAmount - item.gstAmount;
-    const baseUnitPrice = item.qty ? Math.round(baseAmt / item.qty) : item.unitPrice;
-    const qtyStr = colFit(`${item.qty} ${abbrUnit(item.unit)}`, QTY_W);
-    const priceStr = colFit(formatAmt(baseUnitPrice), PRICE_W);
-    const amtStr = colFit(formatAmt(baseAmt), AMT_W);
-    const totalsBlock = `${qtyStr}${priceStr}${amtStr}`;
+    // Cells were computed above so the column widths could be measured from
+    // the real values; reuse them rather than recomputing, so what was
+    // measured and what gets printed can never drift apart.
+    const cell = itemCells[i]!;
+    const totalsBlock = `${colFit(cell.qty, QTY_W)}${colFit(cell.price, PRICE_W)}${colFit(cell.amt, AMT_W)}`;
 
     // Product name wraps on its own (like the customer name above) instead
     // of going through emitWrapped's rpad-based truncation — a long name
@@ -313,7 +338,15 @@ export function buildReceiptPreview(bill: Bill, settings: Partial<Settings>): Th
     // so reserving room for it would force almost every name into unreadable
     // 3-4 char slivers — fall back to the old generous wrap + bail-the-totals-
     // to-their-own-line behavior there instead.
-    const prefix = `${i + 1}  `;
+    // The serial number is padded to the width of the "SN" header so the name
+    // starts in the same column as the word "Product" above it. Previously
+    // this was `${i + 1}  ` — 3 characters for a single-digit row against the
+    // header's 4 ("SN" + two spaces), so every row from 1 to 9 printed its
+    // product name one character left of its own column heading, and rows
+    // 10+ printed correctly. Subtle enough to read as generally "off" rather
+    // than as a specific bug, which is how it survived several redesigns.
+    const SN_HEADER = 'SN';
+    const prefix = `${String(i + 1).padEnd(SN_HEADER.length)}  `;
     const MIN_READABLE_NAME_LEN = 8;
     const tightNameMaxLen = charWidth - totalsBlock.length - 1 - prefix.length;
     const nameMaxLen = tightNameMaxLen >= MIN_READABLE_NAME_LEN
