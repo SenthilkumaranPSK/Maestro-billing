@@ -6,6 +6,7 @@ import { LayoutToggle, type BillLayout } from '@/components/billing/LayoutToggle
 import { formatCurrency, billStatusVariant, type Bill, type Settings, type BillStatus } from '@/types';
 import { formatDate } from '@/lib/utils';
 import { useClosingTransition } from '@/hooks/use-closing-transition';
+import { useToast } from '@/hooks/use-toast';
 
 // pdf-lib is heavy (~400KB) — loaded on demand, same pattern as BillingPage/History.
 const loadPdfLib = () => import('@/lib/pdf');
@@ -23,14 +24,23 @@ interface BillDetailModalProps {
 export function BillDetailModal({ bill, settings, onClose, onEdit }: BillDetailModalProps) {
   const [layout, setLayout] = useState<BillLayout>('thermal');
   const { closing, requestClose } = useClosingTransition(onClose);
+  const { toast } = useToast();
 
   const handlePrint = async () => {
     if (layout === 'a4') {
       const { printA4InvoicePDF } = await loadA4Lib();
       await printA4InvoicePDF(bill, settings);
-    } else {
-      const { printBillPDF } = await loadPdfLib();
-      await printBillPDF(bill, settings);
+      return;
+    }
+    try {
+      const { printThermalReceipt } = await import('@/lib/printThermal');
+      await printThermalReceipt(bill, settings);
+    } catch (err) {
+      toast({
+        title: 'Could not print the receipt',
+        description: err instanceof Error ? err.message : String(err),
+        variant: 'destructive',
+      });
     }
   };
 

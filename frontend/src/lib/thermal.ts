@@ -151,7 +151,18 @@ function emitWrapped(
   });
 }
 
-export function buildReceiptPreview(bill: Bill, settings: Partial<Settings>): ThermalPreviewLine[] {
+/**
+ * @param charWidthOverride  columns to lay the receipt out in, when the caller
+ *   knows the real figure. The PDF renderer sizes its own page, so it uses the
+ *   getCharWidth() default; raw ESC/POS printing computes the exact number of
+ *   characters that fit inside the printer's configured print area and passes
+ *   it here, so what gets padded matches what the printer actually prints.
+ */
+export function buildReceiptPreview(
+  bill: Bill,
+  settings: Partial<Settings>,
+  charWidthOverride?: number,
+): ThermalPreviewLine[] {
   const studio = settings.studio;
   const studioOwner = studio?.studio_owner ?? '';
   const studioPhone = studio?.studio_phone ?? '';
@@ -161,7 +172,7 @@ export function buildReceiptPreview(bill: Bill, settings: Partial<Settings>): Th
   // because the settings row is missing.
   const footer = settings.invoice?.invoice_footer ?? 'Thank You';
   const paperWidth = normalizePaperWidth(settings.printer?.thermal_paper_width);
-  const charWidth = getCharWidth(paperWidth);
+  const charWidth = charWidthOverride ?? getCharWidth(paperWidth);
 
   // A solid rule, not a dashed one — "-" repeated read as a row of dashes
   // rather than a straight divider line.
@@ -454,14 +465,183 @@ function textToBytes(text: string): Uint8Array {
   return new TextEncoder().encode(text + '\n');
 }
 
-export function buildEscPosCommands(bill: Bill, settings: Partial<Settings>): Uint8Array {
-  const lines = buildReceiptPreview(bill, settings);
-  const parts: Uint8Array[] = [INIT];
+/**
+ * Printable width of the thermal head, in dots, at its native 203dpi.
+ * Not the paper width: an 80mm roll prints ~72mm of it (576 dots), a 58mm
+ * roll ~48mm (384 dots). Raster images must be built to exactly this width
+ * or the printer either clips them or leaves them off-centre.
+ */
+export function getPrinterDots(paperWidth: '58' | '80'): number {
+  return paperWidth === '58' ? 384 : 576;
+}
+
+/**
+ * ESC/POS raster bit-image block (GS v 0).
+ *
+ * `bits` is packed one byte per 8 horizontal dots, MSB = leftmost dot, and a
+ * set bit means "burn". This is how an image reaches a thermal printer
+ * natively — as dots it prints 1:1, rather than as a PDF the OS rasterises
+ * and antialiases first.
+ */
+export function escPosRaster(bits: Uint8Array, widthBytes: number, heightDots: number): Uint8Array {
+  const header = cmd(
+    GS, 0x76, 0x30, 0x00,
+    widthBytes & 0xff, (widthBytes >> 8) & 0xff,
+    heightDots & 0xff, (heightDots >> 8) & 0xff,
+  );
+  return concat(header, bits);
+}
+
+export interface EscPosLogo {
+  bits: Uint8Array;
+  widthBytes: number;
+  heightDots: number;
+}
+
+/**
+ * Build the raw ESC/POS byte stream for a receipt.
+ *
+ * This is the path that actually produces crisp output on the RP3160. Printing
+ * the PDF instead goes through the browser's print pipeline, which rasterises
+ * the page with antialiasing — and a thermal head is 1-bit, so those grey edge
+ * pixels get dithered into visible fuzz. Sending text as text lets the printer
+ * use its own built-in font, which is exactly aligned to its dot grid.
+ *
+ * `logo` is optional and built by the caller (see lib/escposLogo.ts) because
+ * converting a PNG to 1-bit needs a canvas, which this module deliberately
+ * stays free of so it remains testable outside a browser.
+ */
+/** Font A cell width in dots on this printer class (12x24). */
+const FONT_A_DOT_WIDTH = 12;
+/** 203dpi head ≈ 8 dots per mm. */
+const DOTS_PER_MM = 8;
+/** Blank paper deliberately left down each edge, per the studio's request. */
+export const ESCPOS_MARGIN_MM = 3;
+
+/**
+ * The print geometry raw ESC/POS output is laid out against.
+ *
+ * getCharWidth()'s 42 columns is a figure chosen for the PDF's page, NOT what
+ * the printer does: a 12-dot font across 576 printable dots is 48 columns.
+ * That mismatch is what broke alignment when printing raw — see
+ * buildEscPosCommands below.
+ */
+export function getEscPosGeometry(paperWidth: '58' | '80') {
+  const totalDots = getPrinterDots(paperWidth);
+  const marginDots = ESCPOS_MARGIN_MM * DOTS_PER_MM;
+  const printDots = totalDots - marginDots * 2;
+  return {
+    totalDots,
+    marginDots,
+    printDots,
+    charWidth: Math.floor(printDots / FONT_A_DOT_WIDTH),
+  };
+}
+
+/** GS L — left margin, in dots from the physical left edge. */
+const setLeftMargin = (dots: number) => cmd(GS, 0x4c, dots & 0xff, (dots >> 8) & 0xff);
+/** GS W — printable area width, in dots. */
+const setPrintWidth = (dots: number) => cmd(GS, 0x57, dots & 0xff, (dots >> 8) & 0xff);
+
+/** Height of a divider rule, in dots. Thin but unmistakably a printed line. */
+const RULE_DOTS = 2;
+// Whitespace baked into the rule raster, above and below the bar itself.
+//
+// A text line advances the paper by the full line spacing (~30 dots for a
+// 24-dot glyph), which leaves ~6 dots of leading under it before the next
+// thing prints. A raster advances by EXACTLY its own height, so a bare 2-dot
+// rule ends up with a little space above it and none at all below — which is
+// how "Tax Bill" ended up sitting hard against the line above it. More
+// padding below than above compensates for that leading, so the rule reads as
+// centred in its own band rather than glued to whatever follows.
+const RULE_PAD_ABOVE_DOTS = 3;
+const RULE_PAD_BELOW_DOTS = 8;
+
+/**
+ * A divider drawn as a real rule — a solid raster bar — instead of a row of
+ * underscore characters.
+ *
+ * Underscores cost a whole text line (~30 dots) and render near the bottom of
+ * their glyph box, so each divider printed as a thin mark with a large empty
+ * band above it. That is what the studio first saw as too much space around
+ * the lines. lib/pdf.ts already solved this for the PDF by drawing real lines
+ * (Phase 9); this is the same fix for the raw-printing path, which had been
+ * left on the old character-based dividers.
+ */
+function escPosRule(printDots: number): Uint8Array {
+  const widthBytes = Math.ceil(printDots / 8);
+  const height = RULE_PAD_ABOVE_DOTS + RULE_DOTS + RULE_PAD_BELOW_DOTS;
+  const bits = new Uint8Array(widthBytes * height); // zero = white
+  // The last byte of a row can extend past printDots; mask the overhang so the
+  // rule stops exactly at the print-area edge instead of nudging the printer
+  // into wrapping.
+  const overhang = widthBytes * 8 - printDots;
+  const lastByte = overhang > 0 ? (0xff << overhang) & 0xff : 0xff;
+  for (let row = RULE_PAD_ABOVE_DOTS; row < RULE_PAD_ABOVE_DOTS + RULE_DOTS; row++) {
+    const base = row * widthBytes;
+    bits.fill(0xff, base, base + widthBytes);
+    bits[base + widthBytes - 1] = lastByte;
+  }
+  return escPosRaster(bits, widthBytes, height);
+}
+
+/**
+ * Build the raw ESC/POS byte stream for a receipt.
+ *
+ * This is the path that produces crisp output on the RP3160. Printing the PDF
+ * instead goes through the OS print pipeline, which rasterises the page with
+ * antialiasing — and a thermal head is 1-bit, so those greys dither into
+ * visible fuzz.
+ *
+ * Two things here are deliberate and were the cause of the misaligned first
+ * attempt:
+ *
+ * 1. The receipt is laid out at the column count that genuinely fits the
+ *    print area, not the PDF's 42. Printing 42-column lines into the
+ *    printer's real 48-column line left every rpad()'d right-hand column
+ *    short of where it belonged.
+ *
+ * 2. Centred lines are padded HERE and everything is emitted left-aligned.
+ *    Using the printer's own ESC a 1 centred those lines within the
+ *    printer's line width while left-aligned rows started at column 0, so
+ *    dividers and headings sat several characters right of the item table.
+ *    The PDF never showed this because it centres against the same geometry
+ *    it padded to. One coordinate system, applied once, is the fix.
+ */
+export function buildEscPosCommands(
+  bill: Bill,
+  settings: Partial<Settings>,
+  logo?: EscPosLogo | null,
+): Uint8Array {
+  const paperWidth = normalizePaperWidth(settings.printer?.thermal_paper_width);
+  const { marginDots, printDots, charWidth } = getEscPosGeometry(paperWidth);
+  const lines = buildReceiptPreview(bill, settings, charWidth);
+
+  const parts: Uint8Array[] = [
+    INIT,
+    // INIT resets these, so they must come after it.
+    setLeftMargin(marginDots),
+    setPrintWidth(printDots),
+    LEFT,
+  ];
+
+  if (logo) {
+    parts.push(escPosRaster(logo.bits, logo.widthBytes, logo.heightDots));
+    // A raster advances the paper by exactly its own height, so without this
+    // the studio name printed hard against the bottom of the logo.
+    parts.push(textToBytes(''));
+  }
 
   for (const line of lines) {
-    parts.push(line.center ? CENTER : LEFT);
+    // Dividers are rules, not text — see escPosRule().
+    if (line.separator) {
+      parts.push(escPosRule(printDots));
+      continue;
+    }
     if (line.bold) parts.push(BOLD_ON);
-    parts.push(textToBytes(line.text));
+    // Centre by padding, not by ESC a — see the note above.
+    const text = line.center ? centreIn(line.text, charWidth) : line.text;
+    parts.push(textToBytes(text));
     if (line.bold) parts.push(BOLD_OFF);
   }
 
@@ -469,4 +649,9 @@ export function buildEscPosCommands(bill: Bill, settings: Partial<Settings>): Ui
   parts.push(CUT);
 
   return concat(...parts);
+}
+
+function centreIn(text: string, charWidth: number): string {
+  if (text.length >= charWidth) return text;
+  return ' '.repeat(Math.floor((charWidth - text.length) / 2)) + text;
 }

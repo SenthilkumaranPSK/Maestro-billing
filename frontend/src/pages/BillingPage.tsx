@@ -305,9 +305,17 @@ export default function BillingPage() {
     if (layout === 'a4') {
       const { printA4InvoicePDF } = await loadA4Lib();
       await printA4InvoicePDF(savedBill, settings ?? {});
-    } else {
-      const { printBillPDF } = await loadPdfLib();
-      await printBillPDF(savedBill, settings ?? {});
+      return;
+    }
+    try {
+      const { printThermalReceipt } = await import('@/lib/printThermal');
+      await printThermalReceipt(savedBill, settings ?? {});
+    } catch (err) {
+      toast({
+        title: 'Could not print the receipt',
+        description: err instanceof Error ? err.message : String(err),
+        variant: 'destructive',
+      });
     }
   };
 
