@@ -50,9 +50,16 @@ export async function reportRoutes(fastify: FastifyInstance) {
   // No requireAppHeader here: the frontend triggers this via a plain
   // `window.location.href` navigation (not axios) so the browser/Electron
   // treats it as a download rather than an XHR — a real navigation can't
-  // attach a custom header, so this route stays unauthenticated. It's only
-  // exploitable from another origin if HOST is ever changed from the
-  // 127.0.0.1 default (see server.ts).
+  // attach a custom header, so this route stays unauthenticated.
+  //
+  // This used to say it was "only exploitable if HOST is ever changed from
+  // the 127.0.0.1 default" — that is no longer a hypothetical. Two-PC mode
+  // (desktop/main.js, Connection Setup → sharing) binds HOST to 0.0.0.0 on
+  // purpose, so while sharing is on, anything on the studio LAN can fetch
+  // this. That is an accepted tradeoff for a private studio network with no
+  // login anywhere in the app — the whole API is equally open — but it IS a
+  // real exposure, not a theoretical one. Revisit together with the rest of
+  // the API if the app ever runs on a network the studio doesn't control.
   fastify.get<{ Params: { file: string } }>('/:file/download', async (request, reply) => {
     try {
       const svc = new ReportService(fastify.prisma);

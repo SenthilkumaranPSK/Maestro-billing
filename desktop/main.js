@@ -109,6 +109,30 @@ function readNetworkConfig() {
   }
 }
 
+// Turns whatever the operator typed into the exact origin string every
+// isAppUrl() check compares against.
+//
+// Two things go wrong without this. First, a bare "192.168.1.50" becomes
+// http://192.168.1.50 — which is port 80, not this app — so the second PC
+// would sit there insisting the main PC is switched off. The setup screen
+// deliberately allows a bare address (a studio operator should not have to
+// know what a port is), so the default has to be applied here.
+//
+// Second, isAppUrl compares against URL.origin, which is normalized:
+// lowercased host, and the default port dropped. Comparing that to a raw
+// concatenated string means an address typed as "Reception-PC:3179" never
+// matches its own pages — and then every in-app navigation gets treated as
+// external and thrown out to the system browser. Normalizing through URL
+// once, here, keeps both sides in the same shape.
+function clientOrigin(address) {
+  const withPort = /:\d+$/.test(address) ? address : `${address}:${PORT}`;
+  try {
+    return new URL(`http://${withPort}`).origin;
+  } catch {
+    return `http://${withPort}`; // setup.html already validated the shape
+  }
+}
+
 function writeNetworkConfig(cfg) {
   fs.mkdirSync(path.dirname(NETWORK_CONFIG), { recursive: true });
   fs.writeFileSync(NETWORK_CONFIG, JSON.stringify(cfg), 'utf8');
@@ -149,7 +173,17 @@ function getLanAddresses() {
 // as the main window — no Node in the renderer — and hands its answer back
 // through a page-side promise that executeJavaScript awaits. Resolves to the
 // chosen config, or null if the operator cancelled.
+let setupWindow = null;
+
 function showSetupWindow(current) {
+  // Ctrl+Shift+C is an app-wide accelerator, so it fires while the setup
+  // window itself has focus — without this it would stack a second setup
+  // window over the first, each awaiting its own page promise, and only one
+  // of them could ever be the answer.
+  if (setupWindow && !setupWindow.isDestroyed()) {
+    setupWindow.focus();
+    return Promise.resolve(null);
+  }
   return new Promise((resolve) => {
     const params = new URLSearchParams({
       ips: JSON.stringify(getLanAddresses()),
@@ -171,24 +205,37 @@ function showSetupWindow(current) {
       backgroundColor: '#f8fafc',
       webPreferences: { nodeIntegration: false, contextIsolation: true },
     });
+    setupWindow = win;
+    // The app menu's Ctrl+R (role: 'reload') would otherwise reload this page,
+    // which builds a brand-new window.__setupResult promise while we are still
+    // awaiting the old one — Save & Start would then appear to do nothing at
+    // all, forever. Nothing here needs reloading.
+    win.setMenu(null);
 
     let settled = false;
     const finish = (value) => {
       if (settled) return;
       settled = true;
-      resolve(value);
+      if (setupWindow === win) setupWindow = null;
       if (!win.isDestroyed()) win.destroy();
+      resolve(value);
     };
 
     // Closing the window with the X is the same as cancelling.
     win.on('closed', () => finish(null));
 
     win.loadFile(path.join(__dirname, 'setup.html'), { search: params.toString() });
-    win.webContents.once('did-finish-load', () => {
+    // `on`, not `once`: if the page ever does reload, re-attach to the new
+    // promise rather than waiting forever on the discarded one.
+    win.webContents.on('did-finish-load', () => {
       win.webContents
         .executeJavaScript('window.__setupResult')
         .then(finish)
-        .catch(() => finish(null));
+        .catch(() => {
+          // A reload rejects the pending executeJavaScript. That is not a
+          // cancellation — the next did-finish-load will re-attach.
+          if (win.isDestroyed()) finish(null);
+        });
     });
   });
 }
@@ -220,7 +267,12 @@ function writeDbLocationPointer(dbDir) {
 // per-user app-data folder, but the operator can instead pick a folder on
 // another drive (handy when C: is small/an SSD they want to keep free).
 function chooseDbDirOnFirstRun() {
-  const { response } = dialog.showMessageBoxSync({
+  // NOTE: showMessageBoxSync returns the clicked button INDEX (a number), not
+  // the {response} object its async sibling showMessageBox resolves to. This
+  // was destructured as an object here for a long time, which silently made
+  // `response` undefined — so "Use Default Location" never matched and every
+  // first run fell through to the folder picker regardless of the choice.
+  const response = dialog.showMessageBoxSync({
     type: 'question',
     title: 'Maestro Billing — Database Location',
     message: 'Where should the billing database be stored?',
@@ -268,7 +320,10 @@ function ensureDbDirAccessible(dbDir) {
       fs.mkdirSync(dbDir, { recursive: true });
       return dbDir;
     } catch (err) {
-      const { response } = dialog.showMessageBoxSync({
+      // Button index, not an object — see chooseDbDirOnFirstRun above.
+      // Destructured as {response} here previously, which meant Retry and
+      // "Use Default Location" both fell through to the quit branch.
+      const response = dialog.showMessageBoxSync({
         type: 'error',
         title: 'Maestro Billing — Database Location Unavailable',
         message: `Can't reach the database folder:\n${dbDir}`,
@@ -543,6 +598,13 @@ app.on('child-process-gone', (_e, details) => {
 });
 
 let networkMode = 'server';
+// True only while the Connection Setup window is open — see runSetup().
+let setupInFlight = false;
+// What an install runs as unless it has been told otherwise: its own
+// database, loopback only. Every existing 2.0.0 install has no
+// network-mode.json at all, so this is also what they upgrade into — they
+// must never be stopped by a connection question they didn't ask for.
+const DEFAULT_NETWORK_CONFIG = { mode: 'server', share: false };
 
 // Asks for the connection settings (first run, or after the main PC turned
 // out to be unreachable), saves them, then boots accordingly. Recursive on
@@ -550,7 +612,7 @@ let networkMode = 'server';
 // setup screen instead of a dead window with no way out.
 function startWithConfig(cfg) {
   networkMode = cfg.mode;
-  APP_URL = cfg.mode === 'client' ? `http://${cfg.address}` : LOCAL_URL;
+  APP_URL = cfg.mode === 'client' ? clientOrigin(cfg.address) : LOCAL_URL;
 
   if (cfg.mode === 'server') {
     try {
@@ -560,7 +622,6 @@ function startWithConfig(cfg) {
       app.quit();
       return;
     }
-    setupBackupDownloads();
     waitForServer(60, createWindow);
     return;
   }
@@ -570,9 +631,9 @@ function startWithConfig(cfg) {
   // warm up, it's asking whether another PC is switched on and reachable, and
   // making the operator stare at a blank window for 30s to find that out is
   // worse than telling them in 5.
-  setupBackupDownloads();
   waitForServer(10, createWindow, () => {
-    const { response } = dialog.showMessageBoxSync({
+    // Button index, not an object — see chooseDbDirOnFirstRun above.
+    const response = dialog.showMessageBoxSync({
       type: 'error',
       title: 'Maestro Billing — Cannot Reach the Main PC',
       message: `No answer from ${cfg.address}`,
@@ -594,14 +655,23 @@ function startWithConfig(cfg) {
 }
 
 function runSetup(current) {
+  // Destroying the setup window leaves zero open windows, and Electron emits
+  // 'window-all-closed' synchronously during that destroy — i.e. BEFORE the
+  // .then() below (a microtask) can open the real window. Without this flag
+  // the handler's app.quit() fires mid-setup: in client mode that reaches
+  // beginGracefulShutdown's app.exit(0) and kills the app with the operator's
+  // just-saved settings never applied, and in server mode it latches
+  // `quitting = true`, so the genuine quit later that session skips the
+  // backend's SIGTERM shutdown entirely — reintroducing the zombie chrome.exe
+  // the before-quit fix exists to prevent.
+  setupInFlight = true;
   showSetupWindow(current).then((cfg) => {
+    setupInFlight = false;
     if (!cfg) {
-      // Cancelled with existing settings — keep running on them rather than
-      // quitting; cancelled on a genuine first run — there's nothing to fall
-      // back to, so quit.
-      if (current) return startWithConfig(current);
-      app.quit();
-      return;
+      // Cancelled — carry on with whatever was already in effect. There is
+      // always something to fall back to now that a missing config means
+      // "normal single-PC install" rather than "must answer this dialog".
+      return startWithConfig(current ?? DEFAULT_NETWORK_CONFIG);
     }
     writeNetworkConfig(cfg);
     startWithConfig(cfg);
@@ -657,12 +727,24 @@ function buildMenu() {
 
 app.whenReady().then(() => {
   buildMenu();
-  const cfg = readNetworkConfig();
-  if (cfg) startWithConfig(cfg);
-  else runSetup(null);
+  // Registered once, here — not per boot. startWithConfig can be re-entered
+  // (Retry from the unreachable dialog, cancelling out of setup, switching
+  // mode), and re-registering would stack duplicate 'will-download' handlers
+  // on the shared default session: one "Download PDF" click would then open
+  // a Save As dialog per stacked listener, each racing setSavePath/cancel on
+  // the same item.
+  setupBackupDownloads();
+  // A missing config is NOT a question to ask — it's every existing install
+  // on upgrade, plus every fresh single-PC install. Boot normally; two-PC
+  // mode is opt-in via Setup → Connection Setup (Ctrl+Shift+C).
+  startWithConfig(readNetworkConfig() ?? DEFAULT_NETWORK_CONFIG);
 });
 
 app.on('window-all-closed', () => {
+  // The setup window is briefly the only window there is; quitting while it
+  // is open (or while its result is being applied) would kill the app right
+  // as the operator finished configuring it. See runSetup().
+  if (setupInFlight) return;
   app.quit();
 });
 

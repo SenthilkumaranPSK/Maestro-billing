@@ -158,8 +158,18 @@ npm run backup --workspace=backend
 # Restore from a backup (set CONFIRM=yes to confirm the destructive operation).
 # This is the ONLY restore path — it is intentionally not available in the app,
 # so a mis-click can never roll the studio's live database back.
+# Pass the name exactly as listed, INCLUDING its month folder.
+# A safety snapshot of the current database is taken automatically first.
 CONFIRM=yes npm run restore --workspace=backend -- 2026-07/studio_2026-07-24T03-00-00.db
 ```
+
+> ⚠️ **This script is not shipped in the installer.** `desktop/package.json`'s
+> `files` list contains `backend/dist`, not `backend/scripts`, and `tsx` is a
+> devDependency — so on a client PC there is currently **no** way to restore a
+> backup at all. Recovering a studio machine today means either copying the
+> backup `.db` over `studio.db` by hand (stop the app first; delete the
+> `-wal`/`-shm` sidecars next to it) or running this script from a dev
+> checkout with `DATABASE_URL`/`BACKUP_DIR` pointed at that machine's folders.
 
 ### Notes
 

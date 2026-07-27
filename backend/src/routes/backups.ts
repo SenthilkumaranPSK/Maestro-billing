@@ -64,8 +64,15 @@ export async function backupRoutes(fastify: FastifyInstance) {
   // instead of only the app's internal backups folder.
   // No requireAppHeader here: the frontend triggers this via a plain
   // `window.location.href` navigation (not axios), which can't attach a
-  // custom header — so this route stays unauthenticated. Only exploitable
-  // from another origin if HOST is ever changed from the 127.0.0.1 default.
+  // custom header — so this route stays unauthenticated.
+  //
+  // This used to say it was "only exploitable if HOST is ever changed from
+  // the 127.0.0.1 default". Two-PC mode (desktop/main.js, Connection Setup →
+  // sharing) now changes exactly that, on purpose. While sharing is on, any
+  // device on the studio LAN can list backups via GET /backups and pull the
+  // whole SQLite database through this route. Accepted for a private studio
+  // network with no login anywhere in the app, but it is the single most
+  // valuable thing exposed — if auth is ever added, start here.
   fastify.get<{ Params: { file: string } }>('/:file/download', async (request, reply) => {
     try {
       const customDir = await getConfiguredBackupDir(fastify.prisma);
