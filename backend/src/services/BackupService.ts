@@ -68,9 +68,19 @@ export class BackupService {
   constructor(customBackupDir?: string) {
     const dbUrl = process.env.DATABASE_URL ?? 'file:../../database/studio.db';
     const filePath = dbUrl.replace(/^file:/, '');
-    this.dbPath = path.isAbsolute(filePath)
-      ? filePath
-      : path.resolve(process.cwd(), filePath);
+    // path.resolve() rather than using an absolute path verbatim: it also
+    // NORMALIZES separators, which matters more than it looks.
+    //
+    // The packaged app builds DATABASE_URL as
+    // 'file:' + dbFile.replace(/\\/g, '/') (desktop/main.js), so in production
+    // this arrives as "C:/Users/.../studio.db" with forward slashes, while
+    // backupDir is always built with path.join/resolve and comes out with
+    // backslashes. path.parse() then reports the drive root as "C:/" for one
+    // and "C:\" for the other — different strings for the same drive, which
+    // made onSeparateDrive below silently return true on every packaged
+    // install. Dev and the test suite both pass native backslash paths, so
+    // the bug only ever existed in the shipped app.
+    this.dbPath = path.resolve(filePath);
 
     if (!fs.existsSync(this.dbPath)) {
       throw new BackupError(
@@ -98,7 +108,12 @@ export class BackupService {
    * security.
    */
   get onSeparateDrive(): boolean {
-    return path.parse(this.dbPath).root.toLowerCase() !== path.parse(this.backupDir).root.toLowerCase();
+    // Both sides go through path.resolve() again here rather than trusting
+    // the stored values: getting this wrong doesn't throw, it just quietly
+    // tells the operator their backups are safe when they aren't, which is
+    // the exact failure this flag exists to prevent.
+    const driveOf = (p: string) => path.parse(path.resolve(p)).root.toLowerCase();
+    return driveOf(this.dbPath) !== driveOf(this.backupDir);
   }
 
   get resolvedBackupDir(): string {

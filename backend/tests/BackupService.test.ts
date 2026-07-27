@@ -281,6 +281,34 @@ test('BackupService: no custom dir passed falls back to auto-detection, not flag
   rmSync(dir, { recursive: true, force: true });
 });
 
+test('BackupService: onSeparateDrive is false when DATABASE_URL uses forward slashes', async () => {
+  // Regression test. The packaged desktop app builds DATABASE_URL as
+  // 'file:' + dbFile.replace(/\\/g, '/'), so it arrives with FORWARD slashes,
+  // while backupDir is always built with path.join and uses backslashes.
+  // path.parse() then reported the drive root as "C:/" vs "C:\" — different
+  // strings for the same drive — so onSeparateDrive returned true on every
+  // packaged install, and the "your backups are on the same drive as the
+  // database" warning in Settings could never appear on the single-drive PCs
+  // it exists to warn. Dev and every other test here pass native backslash
+  // paths, which is why this only ever broke in the shipped app.
+  const dir = mkdtempSync(join(tmpdir(), 'studio-backup-slash-'));
+  const dbFile = join(dir, 'mydb.db');
+  copyFileSync(TEMPLATE_DB, dbFile);
+
+  process.env.DATABASE_URL = `file:${dbFile.replace(/\\/g, '/')}`;
+  process.env.BACKUP_DIR = join(dir, 'backups'); // same drive, deliberately
+  const { BackupService } = await import(`../src/services/BackupService.ts?cb=${Date.now()}-${Math.random()}-slash`);
+
+  const svc = new BackupService();
+  assert.equal(
+    svc.onSeparateDrive,
+    false,
+    'database and backups are on the same drive, so this must be false regardless of path separator',
+  );
+
+  rmSync(dir, { recursive: true, force: true });
+});
+
 test('assertBackupDirUsable: accepts a creatable, writable path', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'studio-backup-assert-ok-'));
   const target = join(dir, 'nested', 'location');

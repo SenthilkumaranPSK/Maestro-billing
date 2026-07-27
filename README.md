@@ -114,6 +114,34 @@ in WAL mode requires all connections to be on the same machine.
 
 ---
 
+## Database location — do not put it in a protected folder
+
+The database folder is chosen once, on first launch, and stored in
+`db-location.json` under `%APPDATA%/Maestro Billing/`.
+
+**Never put it under `Pictures`, `Documents`, `Desktop`, `Videos` or `Music`.**
+Windows Defender's *Controlled Folder Access* (anti-ransomware) guards exactly
+those folders by default and blocks unrecognised apps from writing to them. A
+freshly built or newly installed `Maestro Billing.exe` is unrecognised, so:
+
+- SQLite cannot create the `-wal`/`-shm` sidecars it needs, even to read.
+- The app starts normally and serves the UI, then **every** query fails with
+  `unable to open database file` (SQLite 14) or
+  `SQLITE_IOERR_SHMOPEN` (4618).
+- Nothing in the app says why. The block is only visible in Event Viewer:
+  *Applications and Services → Microsoft → Windows → Windows Defender →
+  Operational*, event ID **1123**.
+
+Worse, it is intermittent in the most misleading way: an already-running copy
+keeps working off sidecars an older, trusted build created, so the failure
+often appears only after an update — looking like the update broke the app.
+
+Verified live on the dev machine, 2026-07-27. Fix: keep the database somewhere
+neutral (`C:\MaestroBilling`, or the default under `%APPDATA%`). Do not chase
+this as a Prisma or packaging bug — check event 1123 first.
+
+---
+
 ## Health Checks
 
 | Endpoint | Purpose | Success | Failure |
