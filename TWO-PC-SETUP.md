@@ -94,7 +94,9 @@ This is fine on a private studio network that guests don't have the password to.
 Do not enable sharing on public or customer-facing Wi-Fi.
 
 **Back up from the Main PC only.** Settings → Database on either PC shows the
-Main PC's backups, because there is only one database.
+Main PC's backups, because there is only one database. Restoring a backup
+(**Alt** → **Setup** → **Restore from Backup…**) also has to be done on the
+Main PC — the second PC will tell you so rather than doing something wrong.
 
 ---
 

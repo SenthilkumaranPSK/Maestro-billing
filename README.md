@@ -163,13 +163,18 @@ npm run backup --workspace=backend
 CONFIRM=yes npm run restore --workspace=backend -- 2026-07/studio_2026-07-24T03-00-00.db
 ```
 
-> ⚠️ **This script is not shipped in the installer.** `desktop/package.json`'s
-> `files` list contains `backend/dist`, not `backend/scripts`, and `tsx` is a
-> devDependency — so on a client PC there is currently **no** way to restore a
-> backup at all. Recovering a studio machine today means either copying the
-> backup `.db` over `studio.db` by hand (stop the app first; delete the
-> `-wal`/`-shm` sidecars next to it) or running this script from a dev
-> checkout with `DATABASE_URL`/`BACKUP_DIR` pointed at that machine's folders.
+This script is for a dev checkout — it is not shipped in the installer
+(`desktop/package.json`'s `files` list contains `backend/dist`, not
+`backend/scripts`, and `tsx` is a devDependency). **On an installed client PC,
+restore is done from the app instead: Alt → Setup → Restore from Backup…**
+
+That path deliberately does *not* swap the file while the app is running. The
+chosen backup is recorded in `pending-restore.json` and the app restarts; the
+copy happens in `prepareDataDir()` (`desktop/main.js`) before the backend is
+required and before Prisma has opened anything — which on Windows is the
+difference between a reliable restore and an EBUSY partway through replacing a
+live database. The pre-restore database is kept alongside as
+`studio.db.before-restore-<timestamp>` as the undo.
 
 ### Notes
 

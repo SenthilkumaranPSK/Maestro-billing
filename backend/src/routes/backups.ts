@@ -125,8 +125,11 @@ export async function backupRoutes(fastify: FastifyInstance) {
 
   // NOTE: there is deliberately no restore route. Restoring is a destructive,
   // one-click way for the operator to wipe every bill created since a backup,
-  // so it was removed from the app entirely. The recovery path is still there
-  // for an actual disaster — `BackupService.restore()` plus the
-  // `npm run restore -- <file>` CLI in backend/scripts/restore.ts, run
-  // deliberately by whoever is supporting the studio, not from the UI.
+  // so it is kept out of the billing UI entirely — and out of the HTTP API,
+  // which two-PC mode now exposes to the whole studio LAN.
+  //
+  // Recovery instead lives in the desktop shell: Alt → Setup → Restore from
+  // Backup… (desktop/main.js), which does the swap at restart, before the
+  // database is opened. `backend/scripts/restore.ts` is the equivalent for a
+  // dev checkout. Both take a safety snapshot of the current database first.
 }

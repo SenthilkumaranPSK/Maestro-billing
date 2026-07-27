@@ -295,6 +295,111 @@ function chooseDbDirOnFirstRun() {
   return path.join(picked[0], 'Maestro Billing Database');
 }
 
+// ── Restore from a backup ─────────────────────────────────────────────────
+// Restoring is kept out of the billing UI on purpose — a one-click way to
+// discard every bill taken since a backup is too easy to hit by accident —
+// but the studio still needs SOME way back after a corrupted database, so it
+// lives here, in the Setup menu, behind two confirmations.
+//
+// The swap deliberately does NOT happen while the app is running. The chosen
+// file is recorded in a marker file and the app restarts; the copy then
+// happens during prepareDataDir(), before the backend is required and before
+// anything has opened studio.db. On Windows that is the difference between a
+// reliable restore and an EBUSY halfway through replacing a live database.
+const PENDING_RESTORE = path.join(app.getPath('userData'), 'pending-restore.json');
+
+// Every SQLite database on disk starts with this exact 16-byte string. Cheap
+// guard against the operator picking a PDF, a .db-wal sidecar, or a truncated
+// file — all of which would otherwise replace their real database with
+// something Prisma cannot open, turning a recovery into a second outage.
+function looksLikeSqliteDb(file) {
+  let fd;
+  try {
+    const stat = fs.statSync(file);
+    if (stat.size < 1024) return false;
+    fd = fs.openSync(file, 'r');
+    const header = Buffer.alloc(16);
+    fs.readSync(fd, header, 0, 16, 0);
+    return header.toString('latin1') === 'SQLite format 3 ';
+  } catch {
+    return false;
+  } finally {
+    if (fd !== undefined) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        /* nothing useful to do */
+      }
+    }
+  }
+}
+
+// Runs at boot, before the database is opened by anything.
+function applyPendingRestore(dbFile) {
+  let pending;
+  try {
+    pending = JSON.parse(fs.readFileSync(PENDING_RESTORE, 'utf8').replace(/^﻿/, ''));
+  } catch {
+    return; // nothing pending — the normal case
+  }
+  // Clear the marker FIRST. If the copy below throws (drive unplugged, file
+  // deleted since it was chosen), the operator gets one clear error and a
+  // normal app — not a restore that retries and fails on every launch
+  // forever, which would leave them unable to open their billing app at all.
+  try {
+    fs.unlinkSync(PENDING_RESTORE);
+  } catch {
+    /* already gone */
+  }
+
+  const src = pending && pending.source;
+  try {
+    if (!src || !looksLikeSqliteDb(src)) {
+      throw new Error(`The selected file is no longer a readable database backup:\n${src}`);
+    }
+
+    // Keep the pre-restore database next to the live one. This is the undo
+    // for "I restored the wrong backup", and it is written before anything is
+    // overwritten. Not routed through BackupService: that resolves a
+    // configured backup folder which may be on a drive that isn't attached,
+    // and this must not be the step that fails.
+    if (fs.existsSync(dbFile)) {
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      fs.copyFileSync(dbFile, `${dbFile}.before-restore-${stamp}`);
+    }
+
+    // Drop the live WAL/SHM sidecars before swapping the file underneath
+    // them — a stale WAL no longer corresponds to the restored database and
+    // SQLite would try to replay it on the next connection.
+    for (const suffix of ['-wal', '-shm']) {
+      const sidecar = dbFile + suffix;
+      if (fs.existsSync(sidecar)) fs.unlinkSync(sidecar);
+    }
+
+    fs.copyFileSync(src, dbFile);
+    dialog.showMessageBoxSync({
+      type: 'info',
+      title: 'Maestro Billing — Restore Complete',
+      message: 'The database has been restored.',
+      detail:
+        `Restored from:\n${src}\n\n` +
+        'The database as it was just before this restore was saved next to it as ' +
+        'a ".before-restore-…" file, in case this was not the backup you wanted.',
+      buttons: ['OK'],
+      noLink: true,
+    });
+  } catch (err) {
+    dialog.showMessageBoxSync({
+      type: 'error',
+      title: 'Maestro Billing — Restore Failed',
+      message: 'The database was NOT restored.',
+      detail: `${err.message}\n\nYour existing database has been left untouched.`,
+      buttons: ['OK'],
+      noLink: true,
+    });
+  }
+}
+
 // rename() fails with EXDEV across drives (e.g. C: -> D:) — fall back to
 // copy+delete in that case. Used for studio.db and its WAL/SHM sidecars.
 function moveFile(src, dest) {
@@ -376,6 +481,11 @@ function prepareDataDir() {
       fs.copyFileSync(TEMPLATE_DB, dbFile);
     }
   }
+
+  // Only safe to do here: after dbFile is known, before the backend is
+  // required and before Prisma has opened anything.
+  applyPendingRestore(dbFile);
+
   return { dataRoot, dbFile };
 }
 
@@ -684,12 +794,131 @@ function runSetup(current) {
 // the deliberate route for everything else: switching a PC between main and
 // second, or turning sharing on later. The menu bar is auto-hidden, so it
 // appears on Alt; Ctrl+Shift+C works without it.
+// Asks the running backend where backups actually live, so the file picker
+// opens in the right folder — that location is an operator setting
+// (Settings → Database), not something main.js can derive on its own.
+// Best-effort: if anything goes wrong the picker just opens with no default.
+function fetchBackupDir() {
+  return new Promise((resolve) => {
+    const req = http.get(
+      `${APP_URL}/api/v1/backups`,
+      { headers: { 'X-Requested-With': 'maestro-billing-app' } },
+      (res) => {
+        let body = '';
+        res.setEncoding('utf8');
+        res.on('data', (chunk) => (body += chunk));
+        res.on('end', () => {
+          try {
+            resolve(JSON.parse(body)?.meta?.backupDir ?? null);
+          } catch {
+            resolve(null);
+          }
+        });
+      },
+    );
+    req.on('error', () => resolve(null));
+    req.setTimeout(3000, () => {
+      req.destroy();
+      resolve(null);
+    });
+  });
+}
+
+async function restoreFromBackup() {
+  // Client mode has no local database — the database it shows belongs to the
+  // main PC, and restoring it from here would be both wrong and confusing.
+  if (networkMode === 'client') {
+    dialog.showMessageBoxSync(mainWindow ?? undefined, {
+      type: 'info',
+      title: 'Maestro Billing',
+      message: 'Restore has to be done on the Main PC.',
+      detail:
+        'This PC does not hold the database — it shows the Main PC\'s. Open Maestro Billing on ' +
+        'the Main PC and use Setup → Restore from Backup… there.',
+      buttons: ['OK'],
+      noLink: true,
+    });
+    return;
+  }
+
+  const backupDir = await fetchBackupDir();
+  const picked = dialog.showOpenDialogSync(mainWindow ?? undefined, {
+    title: 'Choose a backup to restore',
+    // Not restricted to the backup folder: "Save a Copy" exists precisely so
+    // operators can keep copies on a USB drive or a cloud-synced folder, and
+    // the case where that copy is the only surviving one is exactly the case
+    // this feature is for.
+    defaultPath: backupDir ?? undefined,
+    filters: [{ name: 'Database Backup', extensions: ['db'] }],
+    properties: ['openFile'],
+  });
+  if (!picked || picked.length === 0) return;
+  const source = picked[0];
+
+  if (!looksLikeSqliteDb(source)) {
+    dialog.showMessageBoxSync(mainWindow ?? undefined, {
+      type: 'error',
+      title: 'Maestro Billing',
+      message: 'That file is not a Maestro Billing backup.',
+      detail: `${source}\n\nPick a "studio_….db" file from your backup folder.`,
+      buttons: ['OK'],
+      noLink: true,
+    });
+    return;
+  }
+
+  const { mtime } = fs.statSync(source);
+  const confirm1 = dialog.showMessageBoxSync(mainWindow ?? undefined, {
+    type: 'warning',
+    title: 'Maestro Billing — Restore Database',
+    message: 'Replace the current database with this backup?',
+    detail:
+      `${source}\n(from ${mtime.toLocaleString()})\n\n` +
+      'EVERY bill, customer and product added since this backup was taken will be GONE.\n\n' +
+      'Maestro Billing will close and reopen to do this.',
+    buttons: ['Continue', 'Cancel'],
+    defaultId: 1,
+    cancelId: 1,
+    noLink: true,
+  });
+  if (confirm1 !== 0) return;
+
+  const confirm2 = dialog.showMessageBoxSync(mainWindow ?? undefined, {
+    type: 'warning',
+    title: 'Maestro Billing — Are You Sure?',
+    message: 'This cannot be undone from inside the app.',
+    detail:
+      'A copy of the current database will be saved next to it as a ".before-restore-…" file, ' +
+      'so support can put it back if this turns out to be the wrong backup.\n\n' +
+      'Restore now?',
+    buttons: ['Restore and Restart', 'Cancel'],
+    defaultId: 1,
+    cancelId: 1,
+    noLink: true,
+  });
+  if (confirm2 !== 0) return;
+
+  fs.mkdirSync(path.dirname(PENDING_RESTORE), { recursive: true });
+  fs.writeFileSync(PENDING_RESTORE, JSON.stringify({ source, chosenAt: new Date().toISOString() }), 'utf8');
+  app.relaunch();
+  app.quit(); // graceful: before-quit still runs the backend's SIGTERM shutdown
+}
+
 function buildMenu() {
   Menu.setApplicationMenu(
     Menu.buildFromTemplate([
       {
         label: '&Setup',
         submenu: [
+          {
+            label: 'Restore from Backup…',
+            click: () => {
+              restoreFromBackup().catch((err) => {
+                dialog.showErrorBox('Maestro Billing', `Restore could not be started:\n${err.message}`);
+              });
+            },
+          },
+          { type: 'separator' },
           {
             label: 'Connection Setup…',
             accelerator: 'CommandOrControl+Shift+C',
