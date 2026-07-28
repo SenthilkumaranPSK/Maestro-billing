@@ -8,6 +8,43 @@ import { executablePath } from 'puppeteer';
 
 puppeteer.use(StealthPlugin());
 
+// Diagnosing WhatsApp connection issues has repeatedly required launching the
+// app with ELECTRON_ENABLE_LOGGING and redirected stdout just to catch a
+// single stuck session live. Mirroring the same lines to a small capped file
+// in the writable per-user data dir means the *next* stuck session leaves
+// evidence behind on disk, retrievable after the fact with no special
+// relaunch needed.
+const WA_LOG_MAX_BYTES = 1_000_000;
+function waLogPath(): string {
+  return path.join(process.env.WA_DATA_DIR ?? process.cwd(), 'whatsapp-debug.log');
+}
+function appendWaLog(level: string, args: unknown[]): void {
+  try {
+    const file = waLogPath();
+    if (fs.existsSync(file) && fs.statSync(file).size > WA_LOG_MAX_BYTES) {
+      fs.writeFileSync(file, '');
+    }
+    const text = args
+      .map((a) => (a instanceof Error ? (a.stack ?? a.message) : typeof a === 'string' ? a : JSON.stringify(a)))
+      .join(' ');
+    fs.appendFileSync(file, `[${new Date().toISOString()}] ${level} ${text}\n`);
+  } catch {
+    // best-effort only — logging must never break WhatsApp itself
+  }
+}
+function logInfo(...args: unknown[]): void {
+  console.log(...args);
+  appendWaLog('INFO', args);
+}
+function logWarn(...args: unknown[]): void {
+  console.warn(...args);
+  appendWaLog('WARN', args);
+}
+function logError(...args: unknown[]): void {
+  console.error(...args);
+  appendWaLog('ERROR', args);
+}
+
 /** Races a promise against a timeout so a stuck Chrome/CDP call can't hang forever. */
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -162,7 +199,7 @@ export class WhatsAppService {
     const elapsed = Date.now() - this.authenticatedAt;
     const remainingCeiling = READY_ABSOLUTE_TIMEOUT_MS - elapsed;
     if (remainingCeiling <= 0) {
-      console.warn(
+      logWarn(
         `WhatsApp never became ready within ${READY_ABSOLUTE_TIMEOUT_MS / 1000}s of authenticating — reinitializing`,
       );
       this.scheduleReconnect();
@@ -172,7 +209,7 @@ export class WhatsAppService {
     const delay = Math.min(READY_STALL_TIMEOUT_MS, remainingCeiling);
     this.readyWatchdog = setTimeout(() => {
       this.readyWatchdog = null;
-      console.warn(
+      logWarn(
         `WhatsApp stalled between authenticated and ready (no progress for ${delay / 1000}s) — reinitializing`,
       );
       this.scheduleReconnect();
@@ -194,13 +231,13 @@ export class WhatsAppService {
     this.clearReadyWatchdog();
     if (this.client) {
       await withTimeout(this.client.destroy(), 10_000).catch((err: unknown) => {
-        console.error('Failed to destroy previous WhatsApp client:', err);
+        logError('Failed to destroy previous WhatsApp client:', err);
       });
       this.client = null;
     }
     if (this.browser) {
       await withTimeout(this.browser.close(), 10_000).catch((err: unknown) => {
-        console.error('Failed to close previous WhatsApp browser:', err);
+        logError('Failed to close previous WhatsApp browser:', err);
       });
       this.browser = null;
     }
@@ -216,7 +253,7 @@ export class WhatsAppService {
     // "authenticated" never fired, even against a freshly re-linked session.
     const browserPath = findBrowserPath();
     if (!browserPath) {
-      console.error('No Chromium browser found for WhatsApp (Chrome/Edge not installed?)');
+      logError('No Chromium browser found for WhatsApp (Chrome/Edge not installed?)');
       this.status = 'DISCONNECTED';
       // Chrome/Edge could be installed later, or CHROME_PATH fixed — keep
       // trying rather than stranding the service for the rest of the day.
@@ -267,7 +304,7 @@ export class WhatsAppService {
       this.browser = browser;
       browserWSEndpoint = browser.wsEndpoint();
     } catch (err) {
-      console.error('Failed to launch stealth-patched Chrome for WhatsApp:', err);
+      logError('Failed to launch stealth-patched Chrome for WhatsApp:', err);
       this.status = 'DISCONNECTED';
       this.scheduleReconnect();
       return;
@@ -290,9 +327,9 @@ export class WhatsAppService {
       try {
         this.status = 'QR_READY';
         this.qrCodeData = await QRCode.toDataURL(qr);
-        console.log(`WhatsApp QR generated at ${new Date().toISOString()} (raw len ${qr.length})`);
+        logInfo(`WhatsApp QR generated at ${new Date().toISOString()} (raw len ${qr.length})`);
       } catch (err) {
-        console.error('Failed to generate WhatsApp QR Data URL:', err);
+        logError('Failed to generate WhatsApp QR Data URL:', err);
       }
     });
 
@@ -300,7 +337,7 @@ export class WhatsAppService {
       this.clearReadyWatchdog();
       this.status = 'CONNECTED';
       this.qrCodeData = null;
-      console.log('WhatsApp client is ready and connected!');
+      logInfo('WhatsApp client is ready and connected!');
     });
 
     this.client.on('authenticated', () => {
@@ -312,7 +349,7 @@ export class WhatsAppService {
       // image immediately — 'ready' will flip it to CONNECTED shortly after.
       this.status = 'CONNECTING';
       this.qrCodeData = null;
-      console.log('WhatsApp client authenticated successfully');
+      logInfo('WhatsApp client authenticated successfully');
 
       // authenticated -> ready is a known whatsapp-web.js quirk that can hang
       // silently on a resumed session — without a bound, an operator who
@@ -324,19 +361,19 @@ export class WhatsAppService {
     // Visibility into the authenticated → ready gap — and, critically, proof
     // of LIFE in it: every progress tick re-arms the watchdog below.
     this.client.on('loading_screen', (percent, message) => {
-      console.log(`WhatsApp loading: ${percent}% — ${message}`);
+      logInfo(`WhatsApp loading: ${percent}% — ${message}`);
       this.armReadyWatchdog();
     });
 
     this.client.on('change_state', (state) => {
-      console.log('WhatsApp connection state changed:', state);
+      logInfo('WhatsApp connection state changed:', state);
     });
 
     this.client.on('auth_failure', () => {
       this.clearReadyWatchdog();
       this.status = 'DISCONNECTED';
       this.qrCodeData = null;
-      console.warn('WhatsApp authentication failed');
+      logWarn('WhatsApp authentication failed');
       // whatsapp-web.js destroys the client internally on auth_failure (a
       // failed LocalAuth session restore) without ever emitting
       // 'disconnected' — without this, the service is stranded at
@@ -349,7 +386,7 @@ export class WhatsAppService {
       this.clearReadyWatchdog();
       this.status = 'DISCONNECTED';
       this.qrCodeData = null;
-      console.warn('WhatsApp client disconnected. Retrying initialization...');
+      logWarn('WhatsApp client disconnected. Retrying initialization...');
       // (scheduleReconnect() itself no-ops while shuttingDown — see its
       // comment: a reconnect that starts writing fresh session files right
       // as the process is killed can corrupt the LocalAuth session, forcing
@@ -357,6 +394,27 @@ export class WhatsAppService {
       // ever called logout().)
       this.scheduleReconnect();
     });
+
+    // Everything that happens inside the connected browser page (including
+    // whatever throws during whatsapp-web.js's own post-'authenticated'
+    // window.WWebJS injection check) has been completely invisible to us —
+    // it never reaches our Node-side console. Attach as soon as the page
+    // exists (set synchronously near the top of Client.initialize(), well
+    // before navigation) so the NEXT stuck session logs the real underlying
+    // browser-side error instead of just silently stalling until our
+    // watchdog gives up and reissues a QR.
+    const attachPageDiagnostics = () => {
+      const page = this.client?.pupPage;
+      if (!page) {
+        setTimeout(attachPageDiagnostics, 250);
+        return;
+      }
+      page.on('pageerror', (err) => logError('[WA page error]', err));
+      page.on('console', (msg) => {
+        if (msg.type() === 'error') logError('[WA page console]', msg.text());
+      });
+    };
+    attachPageDiagnostics();
 
     // whatsapp-web.js's own Client.initialize() calls page.goto(WhatsWebURL,
     // { timeout: 0, ... }) internally — timeout: 0 means NO timeout at all.
@@ -369,7 +427,7 @@ export class WhatsAppService {
     // of repeated "stuck on Starting" reports: withTimeout() forces this to
     // fail after a generous but finite wait instead of hanging indefinitely.
     withTimeout(this.client.initialize(), 90_000).catch((err: unknown) => {
-      console.error('Failed to initialize WhatsApp client:', err);
+      logError('Failed to initialize WhatsApp client:', err);
       this.status = 'DISCONNECTED';
       // whatsapp-web.js quirks (slow first load, a stuck page) can reject
       // here without ever emitting 'disconnected' — without this, that one
