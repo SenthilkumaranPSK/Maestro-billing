@@ -221,11 +221,7 @@ async function main() {
     try {
       const customDir = await getConfiguredBackupDir(prisma);
       const svc = new BackupService(customDir);
-      // Check by filename (it embeds the timestamp) — file mtime is
-      // unreliable on Windows because copies preserve source timestamps.
-      const today = new Date().toISOString().slice(0, 10);
-      const alreadyToday = svc.list().some((b) => b.name.startsWith(`studio_${today}`));
-      if (alreadyToday) {
+      if (svc.hasBackupForDate(new Date())) {
         app.log.info('Auto-backup skipped — a backup already exists for today');
         return;
       }

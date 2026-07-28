@@ -166,7 +166,7 @@ test('BackupService: prunes old backups beyond keepCount', async () => {
   // list() API (not a raw non-recursive readdir) to count backups, since
   // list() is what's actually responsible for seeing both the 5 legacy
   // flat files and the 1 new nested one as a single unified set.
-  assert.match(newBackupPath, /[\\/]\d{4}-\d{2}[\\/]studio_/, 'new backup should be nested under a YYYY-MM folder');
+  assert.match(newBackupPath, /[\\/]\d{4}-\d{2}[\\/]Studio__/, 'new backup should be nested under a YYYY-MM folder');
   assert.equal(svc.list().length, 6, '5 legacy flat + 1 new nested = 6 total');
 
   rmSync(dir, { recursive: true, force: true });

@@ -209,7 +209,7 @@ export async function generateA4InvoicePDF(bill: Bill, settings: Partial<Setting
     ? wrapText(regular, studioAddress.replace(/\n/g, ', '), 9.5, ownerBlockW)
     : [];
   const ownerLines: Array<{ text: string; size: number; font: PDFFont; color: ReturnType<typeof rgb> }> = [
-    { text: studioOwner, size: 17, font: bold, color: BRAND },
+    { text: studioOwner, size: 22, font: bold, color: BRAND },
     ...addressLines.map((line) => ({ text: line, size: 9.5, font: regular, color: ACCENT })),
     ...(studioPhone ? [{ text: `Mobile : ${studioPhone}`, size: 9.5, font: regular, color: ACCENT }] : []),
   ];
@@ -511,14 +511,17 @@ export async function generateA4InvoicePDF(bill: Bill, settings: Partial<Setting
 
   // Signature block: the studio logo (small — sized to the footprint the
   // removed "For <studio name>" text used to occupy, not a full-size header
-  // logo) sits directly above "Authorised Signature", both centered within
-  // this half of the box (not right-aligned to the page edge) — reads as a
-  // proper signature block rather than text hugging the margin. The blank
-  // space above them is still the room for an actual pen signature.
+  // logo) sits directly above "Authorised Signature", nudged right of dead-
+  // center within this half of the box — centering it exactly between the
+  // bank box and the page edge read as too far left under the signature
+  // line above it. The blank space above them is still the room for an
+  // actual pen signature.
   const sigColLeft = left + bankColW + 8;
   const sigColRight = right - 8;
-  const sigColW = sigColRight - sigColLeft;
-  const sigColCenter = (sigColLeft + sigColRight) / 2;
+  const SIG_RIGHT_NUDGE = 24;
+  const sigCenterLeft = sigColLeft + SIG_RIGHT_NUDGE;
+  const sigColW = sigColRight - sigCenterLeft;
+  const sigColCenter = (sigCenterLeft + sigColRight) / 2;
   const sigTextY = y - bankBoxH + 16;
   if (logoImage) {
     const forTextWidth = bold.widthOfTextAtSize(`For ${studioName.toUpperCase()}`, 9.5);
@@ -531,7 +534,7 @@ export async function generateA4InvoicePDF(bill: Bill, settings: Partial<Setting
       height: sigLogoH,
     });
   }
-  text('Authorised Signature', sigColLeft, sigTextY, { size: 9, color: ACCENT, align: 'center', maxWidth: sigColW });
+  text('Authorised Signature', sigCenterLeft, sigTextY, { size: 9, color: ACCENT, align: 'center', maxWidth: sigColW });
 
   y -= bankBoxH;
 

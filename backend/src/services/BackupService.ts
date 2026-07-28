@@ -13,6 +13,52 @@ export class BackupError extends Error {
 const MIN_BACKUP_BYTES = 1024; // refuse to keep a backup smaller than 1 KB
 const BACKUP_DIR_SETTING_KEY = 'backup_dir';
 
+// "Studio__28_07_2026__T__08_18_AM.db" — DD_MM_YYYY (not ISO) plus a 12-hour
+// clock, chosen so an operator can tell a backup's date and time apart at a
+// glance from the raw filename in Explorer, without parsing an ISO string.
+// Deliberately NOT alphabetically sortable (day comes before month/year) —
+// list()'s sort below parses the embedded date back out rather than relying
+// on string order, which is what actually keeps "newest first" correct.
+// Trailing "_2"/"_3"/... is the same-minute collision disambiguator backup()
+// appends below — optional and ignored here, since it doesn't affect the
+// parsed date/time.
+const NEW_NAME_RE = /^Studio__(\d{2})_(\d{2})_(\d{4})__T__(\d{2})_(\d{2})_(AM|PM)(?:_\d+)?\.db$/;
+// Old format ("studio_2026-07-28T14-22-51.db"), still parsed so backups made
+// before this change keep sorting/pruning correctly alongside new ones.
+const OLD_NAME_RE = /^studio_(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})\.db$/;
+
+function formatBackupTimestamp(date: Date): string {
+  const dd = String(date.getDate()).padStart(2, '0');
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const yyyy = date.getFullYear();
+  let hour12 = date.getHours() % 12;
+  if (hour12 === 0) hour12 = 12;
+  const ampm = date.getHours() >= 12 ? 'PM' : 'AM';
+  const hh = String(hour12).padStart(2, '0');
+  const min = String(date.getMinutes()).padStart(2, '0');
+  return `${dd}_${mm}_${yyyy}__T__${hh}_${min}_${ampm}`;
+}
+
+// Reverses formatBackupTimestamp (or parses the old format) to recover the
+// real date/time a backup was taken — used for sorting/pruning/the
+// already-backed-up-today check, all of which need actual chronological
+// order, not a string comparison that DD_MM_YYYY can't provide.
+function parseBackupDate(baseName: string): Date | null {
+  let m = NEW_NAME_RE.exec(baseName);
+  if (m) {
+    const [, dd, mm, yyyy, hh12, min, ampm] = m as unknown as [string, string, string, string, string, string, 'AM' | 'PM'];
+    let hour = parseInt(hh12, 10) % 12;
+    if (ampm === 'PM') hour += 12;
+    return new Date(Number(yyyy), Number(mm) - 1, Number(dd), hour, Number(min));
+  }
+  m = OLD_NAME_RE.exec(baseName);
+  if (m) {
+    const [, yyyy, mm, dd, hh, min, ss] = m;
+    return new Date(Number(yyyy), Number(mm) - 1, Number(dd), Number(hh), Number(min), Number(ss));
+  }
+  return null;
+}
+
 // Backups deliberately live off the same drive as the app/database, so a
 // failing C: drive (or a botched install/uninstall) can't take the database
 // AND its safety net down together. D:\Billing is tried first, then
@@ -132,12 +178,14 @@ export class BackupService {
   }
 
   async backup(): Promise<string> {
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const now = new Date();
     // Grouped into a per-month subfolder (e.g. "2026-07") so a growing
     // history of daily backups doesn't just pile up as one flat folder of
     // loose files — makes it obvious at a glance which month a backup is
     // from when browsing the folder directly (not just in the app's list).
-    const monthFolder = timestamp.slice(0, 7);
+    // Independent of the display filename format below (DD_MM_YYYY isn't
+    // itself sortable as a folder name).
+    const monthFolder = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
     const monthDir = path.join(this.backupDir, monthFolder);
     try {
       if (!fs.existsSync(monthDir)) {
@@ -154,8 +202,19 @@ export class BackupService {
       );
     }
 
-    const backupFileName = `studio_${timestamp}.db`;
-    const backupPath = path.join(monthDir, backupFileName);
+    // The display format only has minute precision (no seconds), unlike the
+    // old ISO-based name — two backups in the same minute (e.g. two manual
+    // "Save a Copy" clicks in quick succession) would otherwise collide and
+    // the second would silently overwrite the first with no error. Append a
+    // disambiguating "_2", "_3", ... only when that would actually happen,
+    // so the common case still gets exactly the clean requested format.
+    const base = `Studio__${formatBackupTimestamp(now)}`;
+    let backupFileName = `${base}.db`;
+    let backupPath = path.join(monthDir, backupFileName);
+    for (let n = 2; fs.existsSync(backupPath); n++) {
+      backupFileName = `${base}_${n}.db`;
+      backupPath = path.join(monthDir, backupFileName);
+    }
 
     // Prefer the sqlite3 CLI — it uses the online backup API, which is WAL-safe
     // and works even while the DB is being written to.
@@ -314,12 +373,34 @@ export class BackupService {
       }
     }
 
-    // Sort by the base filename (it embeds the ISO timestamp), newest first,
-    // ignoring any month-folder prefix so nesting never affects ordering.
-    // File mtime is unreliable on Windows — CopyFileW preserves the source's
-    // timestamp, so copied backups can share identical mtimes.
+    // Sort by the date/time PARSED from the filename, newest first, ignoring
+    // any month-folder prefix so nesting never affects ordering. Can't sort
+    // by the raw filename string any more — the current DD_MM_YYYY display
+    // format isn't alphabetically sortable the way the old ISO-based one
+    // was. Falls back to file mtime only for a name neither format
+    // recognizes (unreliable on Windows — CopyFileW preserves the source's
+    // timestamp, so copied backups can share identical mtimes — but better
+    // than an arbitrary order for a file that predates both schemes).
     const baseName = (name: string) => name.slice(name.lastIndexOf('/') + 1);
-    return results.sort((a, b) => baseName(b.name).localeCompare(baseName(a.name)));
+    const effectiveDate = (r: { name: string; createdAt: Date }) => parseBackupDate(baseName(r.name)) ?? r.createdAt;
+    return results.sort((a, b) => effectiveDate(b).getTime() - effectiveDate(a).getTime());
+  }
+
+  // Whether a backup already exists for the given calendar date — parses
+  // each backup's embedded date rather than string-matching a filename
+  // prefix (the previous approach, tied to the old ISO-based naming), so
+  // this keeps working across the new display format and old backups alike.
+  hasBackupForDate(date: Date): boolean {
+    const baseName = (name: string) => name.slice(name.lastIndexOf('/') + 1);
+    return this.list().some((b) => {
+      const d = parseBackupDate(baseName(b.name));
+      return (
+        d != null &&
+        d.getFullYear() === date.getFullYear() &&
+        d.getMonth() === date.getMonth() &&
+        d.getDate() === date.getDate()
+      );
+    });
   }
 
   // Called as the last step of a backup that has ALREADY succeeded — a
