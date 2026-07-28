@@ -413,6 +413,14 @@ export class WhatsAppService {
       page.on('console', (msg) => {
         if (msg.type() === 'error') logError('[WA page console]', msg.text());
       });
+      // The console text for a failed resource load ("...status of 400 ()")
+      // never includes which URL — these two give the actual endpoint.
+      page.on('response', (res) => {
+        if (res.status() >= 400) logError('[WA response]', res.status(), res.url());
+      });
+      page.on('requestfailed', (req) => {
+        logError('[WA requestfailed]', req.failure()?.errorText, req.url());
+      });
     };
     attachPageDiagnostics();
 
