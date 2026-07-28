@@ -69,15 +69,22 @@ export type WhatsAppStatus = 'DISCONNECTED' | 'CONNECTING' | 'QR_READY' | 'CONNE
 const WHATSAPP_INIT_DELAY_MS = 5000;
 
 // How long WhatsApp may go WITHOUT any sync progress after authenticating
-// before it's treated as genuinely stuck (see armReadyWatchdog). Generous on
-// purpose: it only has to outlast the gap between two 'loading_screen'
-// ticks, not the whole sync, so a slow-but-alive link is never interrupted.
-const READY_STALL_TIMEOUT_MS = 180_000;
+// before it's treated as genuinely stuck (see armReadyWatchdog). Only has to
+// outlast the gap between two 'loading_screen' ticks, not the whole sync, so
+// a slow-but-alive link is never interrupted. Was 180s — confirmed working
+// (a real stuck session did self-recover with a fresh QR), but every
+// successful connection actually observed reached 'ready' within about a
+// minute, so a 3-minute wait to notice a genuine stall just made the
+// self-healing feel broken. Shortened so a real stall recovers faster,
+// without cutting into an actually-progressing sync's normal timeframe.
+const READY_STALL_TIMEOUT_MS = 60_000;
 
 // Hard ceiling on the whole authenticated→ready wait, however much progress
 // is reported. Without it a client that keeps emitting 'loading_screen' but
-// never reaches 'ready' leaves the UI on "Starting WhatsApp…" forever.
-const READY_ABSOLUTE_TIMEOUT_MS = 600_000;
+// never reaches 'ready' leaves the UI on "Starting WhatsApp…" forever. Same
+// reasoning as above for shortening it — 10 minutes was far longer than any
+// real connection has taken.
+const READY_ABSOLUTE_TIMEOUT_MS = 180_000;
 
 export class WhatsAppService {
   client: Client | null = null;
