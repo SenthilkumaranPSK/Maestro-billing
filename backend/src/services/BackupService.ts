@@ -12,6 +12,8 @@ export class BackupError extends Error {
 
 const MIN_BACKUP_BYTES = 1024; // refuse to keep a backup smaller than 1 KB
 const BACKUP_DIR_SETTING_KEY = 'backup_dir';
+// Days of history kept, not number of files — see pruneOldBackups().
+export const BACKUP_RETENTION_DAYS = 30;
 
 // "Studio__28_07_2026__T__08_18_AM.db" — DD_MM_YYYY (not ISO) plus a 12-hour
 // clock, chosen so an operator can tell a backup's date and time apart at a
@@ -203,19 +205,48 @@ export class BackupService {
     }
 
     // The display format only has minute precision (no seconds), unlike the
-    // old ISO-based name — two backups in the same minute (e.g. two manual
-    // "Save a Copy" clicks in quick succession) would otherwise collide and
-    // the second would silently overwrite the first with no error. Append a
-    // disambiguating "_2", "_3", ... only when that would actually happen,
-    // so the common case still gets exactly the clean requested format.
+    // old ISO-based name — two backups in the same minute (e.g. a manual
+    // "Backup Now" click landing in the same minute as the boot auto-backup,
+    // or two operators clicking it at once in two-PC mode) would otherwise
+    // collide. Append a disambiguating "_2", "_3", ... only when that would
+    // actually happen, so the common case keeps the clean requested format.
+    //
+    // The name is RESERVED by creating the file here, atomically ('wx' fails
+    // if it already exists), rather than just testing existence and writing
+    // it much later: the actual write below happens after a WAL checkpoint
+    // that can take seconds of retries, and a plain existsSync() check left
+    // that entire window open for a second concurrent backup to pick the
+    // same name and silently overwrite the first.
     const base = `Studio__${formatBackupTimestamp(now)}`;
     let backupFileName = `${base}.db`;
     let backupPath = path.join(monthDir, backupFileName);
-    for (let n = 2; fs.existsSync(backupPath); n++) {
-      backupFileName = `${base}_${n}.db`;
-      backupPath = path.join(monthDir, backupFileName);
+    for (let n = 2; ; n++) {
+      try {
+        fs.closeSync(fs.openSync(backupPath, 'wx'));
+        break;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+        backupFileName = `${base}_${n}.db`;
+        backupPath = path.join(monthDir, backupFileName);
+      }
     }
 
+    try {
+      return await this.writeBackup(backupPath);
+    } catch (err) {
+      // Don't leave the reserved 0-byte placeholder behind on a failed
+      // backup — it isn't a usable backup, and it would occupy the name (and
+      // a retention slot, and a row in the operator's backup list) forever.
+      try {
+        if (fs.existsSync(backupPath)) fs.unlinkSync(backupPath);
+      } catch {
+        // best effort — the original failure below is the one that matters
+      }
+      throw err;
+    }
+  }
+
+  private async writeBackup(backupPath: string): Promise<string> {
     // Prefer the sqlite3 CLI — it uses the online backup API, which is WAL-safe
     // and works even while the DB is being written to.
     const cliResult = spawnSync(
@@ -283,7 +314,7 @@ export class BackupService {
       );
     }
 
-    this.pruneOldBackups(30);
+    this.pruneOldBackups(BACKUP_RETENTION_DAYS);
     return backupPath;
   }
 
@@ -407,9 +438,45 @@ export class BackupService {
   // pruning failure (a locked/permission-denied old file) must never
   // propagate and make the caller think the fresh backup itself failed.
   // Best-effort: log and move on, don't abort the rest of the cleanup either.
-  private pruneOldBackups(keepCount: number): void {
-    const files = this.list();
-    const toDelete = files.slice(keepCount);
+  //
+  // Retention is measured in DAYS, not files. It used to keep the newest N
+  // files, which was equivalent while backups were strictly one-per-day
+  // (the automatic morning one). Now that the operator can also take a
+  // manual backup at any time (Settings → Backup Now), a file-count budget
+  // would let a few manual clicks silently evict real daily history — click
+  // it 30 times and the studio is left with 30 copies of today and nothing
+  // older. Counting distinct days instead makes manual backups effectively
+  // free: they land on a day that is already being kept.
+  private pruneOldBackups(keepDays: number): void {
+    const files = this.list(); // newest first
+    const baseName = (name: string) => name.slice(name.lastIndexOf('/') + 1);
+    const dayKey = (name: string): string | null => {
+      const d = parseBackupDate(baseName(name));
+      return d ? `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}` : null;
+    };
+
+    const keptDays = new Set<string>();
+    const toDelete: typeof files = [];
+    // Per-day cap purely as a runaway guard (a stuck retry loop, someone
+    // holding the button) — high enough that ordinary manual use never hits
+    // it, so it can't reintroduce the eviction problem above.
+    const MAX_PER_DAY = 48;
+    const perDayCount = new Map<string, number>();
+
+    for (const f of files) {
+      const key = dayKey(f.name);
+      // A name in neither the current nor the legacy format can't be dated,
+      // so it can't be safely aged out — keep it rather than guess.
+      if (key == null) continue;
+      if (!keptDays.has(key) && keptDays.size >= keepDays) {
+        toDelete.push(f); // belongs to a day older than the retention window
+        continue;
+      }
+      keptDays.add(key);
+      const n = (perDayCount.get(key) ?? 0) + 1;
+      perDayCount.set(key, n);
+      if (n > MAX_PER_DAY) toDelete.push(f);
+    }
     for (const f of toDelete) {
       try {
         fs.unlinkSync(path.join(this.backupDir, f.name));

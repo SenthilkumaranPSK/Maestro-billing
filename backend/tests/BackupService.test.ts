@@ -214,6 +214,72 @@ test('BackupService: pruning removes old backups AND the now-empty month folder'
   rmSync(dir, { recursive: true, force: true });
 });
 
+test('BackupService: repeated manual backups do NOT evict older daily history', async () => {
+  // Regression test. Retention used to keep the newest 30 FILES, which was
+  // equivalent while backups were strictly one-per-day. Once Settings gained
+  // a manual "Backup Now" button, a handful of clicks silently deleted the
+  // oldest real daily backups — 30 clicks would leave the studio with 30
+  // copies of today and no history at all. Retention now counts distinct
+  // DAYS, so same-day manual backups can never push a previous day out.
+  const dir = mkdtempSync(join(tmpdir(), 'studio-backup-manual-'));
+  const dbFile = join(dir, 'manual.db');
+  const backupsDir = join(dir, 'backups');
+  copyFileSync(TEMPLATE_DB, dbFile);
+
+  // 29 days of daily history, dated in the past so "today" is strictly newer
+  // — 29 + today = exactly the 30-day retention window, so nothing should be
+  // aged out and any loss is attributable purely to the manual backups.
+  // Under the old file-count budget, 29 history files + 5 manual ones = 34
+  // > 30, so four days of real history were silently deleted.
+  const monthDir = join(backupsDir, '2026-06');
+  mkdirSync(monthDir, { recursive: true });
+  for (let day = 1; day <= 29; day++) {
+    const dd = String(day).padStart(2, '0');
+    writeFileSync(join(monthDir, `Studio__${dd}_06_2026__T__08_00_AM.db`), '');
+  }
+  assert.equal(readdirSync(monthDir).length, 29);
+
+  process.env.DATABASE_URL = `file:${dbFile}`;
+  process.env.BACKUP_DIR = backupsDir;
+  const { BackupService } = await import(`../src/services/BackupService.ts?cb=${Date.now()}-${Math.random()}-manual`);
+  const svc = new BackupService();
+
+  // Five manual "Backup Now" clicks, all landing on today.
+  for (let i = 0; i < 5; i++) await svc.backup();
+
+  const surviving = svc.list().map((f) => f.name.slice(f.name.lastIndexOf('/') + 1));
+  const juneKept = surviving.filter((n) => n.includes('_06_2026__'));
+  assert.equal(juneKept.length, 29, 'every day of daily history must survive repeated manual backups');
+  assert.equal(surviving.length - juneKept.length, 5, 'and all 5 of today\'s manual backups are kept too');
+
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('BackupService: two backups in the same minute both survive (no silent overwrite)', async () => {
+  // Regression test. The display filename only has minute precision, and the
+  // "_2"/"_3" collision suffix used to be chosen by an existsSync() check
+  // that ran BEFORE the (potentially multi-second) WAL checkpoint and write
+  // — leaving a window where a concurrent backup picked the same name and
+  // silently clobbered the first. The name is now reserved atomically.
+  const dir = mkdtempSync(join(tmpdir(), 'studio-backup-sameminute-'));
+  const dbFile = join(dir, 'sameminute.db');
+  copyFileSync(TEMPLATE_DB, dbFile);
+
+  process.env.DATABASE_URL = `file:${dbFile}`;
+  process.env.BACKUP_DIR = join(dir, 'backups');
+  const { BackupService } = await import(`../src/services/BackupService.ts?cb=${Date.now()}-${Math.random()}-sameminute`);
+  const svc = new BackupService();
+
+  // Started concurrently, so they genuinely overlap rather than running
+  // strictly one after the other.
+  const paths = await Promise.all([svc.backup(), svc.backup(), svc.backup()]);
+  assert.equal(new Set(paths).size, 3, 'each concurrent backup must get its own filename');
+  for (const p of paths) assert.ok(existsSync(p), `${p} should still exist (not overwritten)`);
+  assert.equal(svc.list().length, 3);
+
+  rmSync(dir, { recursive: true, force: true });
+});
+
 test('BackupService: relative DATABASE_URL is resolved against process.cwd()', async () => {
   // The typical project layout: codes/backend/ is cwd, DATABASE_URL is
   // "file:../../database/studio.db" relative to it. We create a real DB

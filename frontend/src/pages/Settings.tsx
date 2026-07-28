@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Smartphone, FileBarChart2, Percent, ChevronRight, Save, FolderCog } from 'lucide-react';
+import { Smartphone, FileBarChart2, Percent, ChevronRight, Save, FolderCog, DatabaseBackup } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
@@ -76,6 +76,17 @@ export default function SettingsPage() {
     },
     onError: (err: Error) => {
       toast({ title: 'Could not set backup location', description: err.message, variant: 'destructive' });
+    },
+  });
+
+  const backupNowMutation = useMutation({
+    mutationFn: backupsApi.create,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['backups'] });
+      toast({ title: 'Backup created', variant: 'success' });
+    },
+    onError: (err: Error) => {
+      toast({ title: 'Backup failed', description: err.message, variant: 'destructive' });
     },
   });
 
@@ -172,14 +183,24 @@ export default function SettingsPage() {
       </Card>
 
       <Card>
-        <CardHeader className="pb-3">
+        <CardHeader className="pb-3 flex flex-row items-center justify-between">
           <CardTitle className="text-sm">Database</CardTitle>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => backupNowMutation.mutate()}
+            disabled={backupNowMutation.isPending}
+          >
+            <DatabaseBackup className="h-3.5 w-3.5 mr-1.5" />
+            {backupNowMutation.isPending ? 'Backing up…' : 'Backup Now'}
+          </Button>
         </CardHeader>
         <CardContent>
           <p className="text-xs text-muted-foreground mb-3">
             A backup is taken automatically every morning, the first time the app is opened that
-            day — there's no manual "backup now" button, it's all automatic. The last 30 are kept,
-            by default on{' '}
+            day — or any time with{' '}
+            <span className="font-medium text-slate-700">Backup Now</span> above. The last 30 days
+            are kept (taking extra backups yourself never removes an older day), by default on{' '}
             <code className="bg-slate-100 px-1 rounded">D:\Billing</code> (or{' '}
             <code className="bg-slate-100 px-1 rounded">E:\Billing</code> if D: isn't available) —
             a separate drive from wherever the app and its live database live, on purpose. Set a

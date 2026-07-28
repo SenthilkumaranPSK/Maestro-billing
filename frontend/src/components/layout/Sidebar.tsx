@@ -32,7 +32,7 @@ export function Sidebar() {
               cn(
                 'group flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200',
                 isActive
-                  ? 'bg-brand-500/15 text-brand-800 ring-1 ring-inset ring-brand-500/25'
+                  ? 'bg-brand-500 text-primary-foreground shadow-soft'
                   : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900 hover:translate-x-1',
               )
             }
@@ -42,7 +42,7 @@ export function Sidebar() {
                 <Icon
                   className={cn(
                     'w-4 h-4 shrink-0 transition-transform duration-200 group-hover:scale-110',
-                    isActive ? 'text-brand-700' : 'text-slate-400',
+                    isActive ? 'text-primary-foreground' : 'text-slate-400',
                   )}
                 />
                 {label}

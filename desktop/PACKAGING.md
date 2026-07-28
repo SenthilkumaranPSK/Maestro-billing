@@ -46,8 +46,14 @@ Backups are deliberately NOT under `%APPDATA%` — `BackupService` defaults to
 `D:\Billing` (falling back to `E:\Billing`, then finally to a `backups/`
 folder next to `studio.db` on a single-drive PC with neither), so a backup
 survives even if the app's own drive/profile is lost. One is taken
-automatically the first time the app is opened each day; there is no manual
-"backup now" trigger in the UI.
+automatically the first time the app is opened each day, and the operator can
+take one at any time with Settings → Database → **Backup Now**.
+
+Retention is **30 days, not 30 files** (`BACKUP_RETENTION_DAYS`). That
+distinction matters: with a file count, a few manual "Backup Now" clicks
+would silently evict real daily history (30 clicks would leave only copies of
+today). Counting distinct days makes same-day manual backups free. There is a
+per-day cap purely as a runaway guard.
 
 ## Known workspace quirks
 

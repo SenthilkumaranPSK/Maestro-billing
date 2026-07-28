@@ -68,6 +68,12 @@ export type WhatsAppStatus = 'DISCONNECTED' | 'CONNECTING' | 'QR_READY' | 'CONNE
 // delay here costs nothing real while letting the UI become interactive first.
 const WHATSAPP_INIT_DELAY_MS = 5000;
 
+// How long WhatsApp may go WITHOUT any sync progress after authenticating
+// before it's treated as genuinely stuck (see armReadyWatchdog). Generous on
+// purpose: it only has to outlast the gap between two 'loading_screen'
+// ticks, not the whole sync, so a slow-but-alive link is never interrupted.
+const READY_STALL_TIMEOUT_MS = 180_000;
+
 export class WhatsAppService {
   client: Client | null = null;
   private status: WhatsAppStatus = 'DISCONNECTED';
@@ -105,6 +111,32 @@ export class WhatsAppService {
   /** Schedules a reconnect attempt unless the app is shutting down. Shared by
    * every failure path (disconnected event, launch failure, init rejection)
    * so none of them silently strand the service for the rest of the day. */
+  /**
+   * (Re)starts the authenticated→ready stall timer.
+   *
+   * This deliberately measures time since the last sign of PROGRESS, not
+   * time since 'authenticated'. The first version measured the latter, on a
+   * 2-minute fuse, which broke the case it was meant to protect: linking a
+   * busy account (or resuming one with a lot of history) legitimately takes
+   * longer than 2 minutes, so the timer fired mid-sync and tore the client
+   * down. LocalAuth was still part-way through writing the session, so the
+   * restart came back with an unusable/empty session folder and served a
+   * fresh QR — the operator scans, waits, gets another QR, forever, which
+   * reads as "WhatsApp is broken" and is strictly worse than the original
+   * hang. whatsapp-web.js emits 'loading_screen' throughout that window, so
+   * a tick there is proof it is still working and the fuse is reset.
+   */
+  private armReadyWatchdog() {
+    if (this.readyWatchdog) clearTimeout(this.readyWatchdog);
+    this.readyWatchdog = setTimeout(() => {
+      this.readyWatchdog = null;
+      console.warn(
+        `WhatsApp made no sync progress for ${READY_STALL_TIMEOUT_MS / 1000}s after authenticating — reinitializing`,
+      );
+      this.scheduleReconnect();
+    }, READY_STALL_TIMEOUT_MS);
+  }
+
   private scheduleReconnect() {
     if (this.shuttingDown) return;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
@@ -212,24 +244,17 @@ export class WhatsAppService {
       console.log('WhatsApp client authenticated successfully');
 
       // authenticated -> ready is a known whatsapp-web.js quirk that can hang
-      // silently for minutes on a resumed session (see the loading_screen log
-      // below) — without a bound, an operator who scanned successfully could
-      // be stuck on "Starting WhatsApp…" indefinitely with no way back except
-      // restarting the whole app. If ready hasn't followed within 2 minutes,
-      // treat it as stuck and force a clean reinitialize; the saved session
-      // (LocalAuth) means this resumes rather than asking for a fresh QR scan.
-      if (this.readyWatchdog) clearTimeout(this.readyWatchdog);
-      this.readyWatchdog = setTimeout(() => {
-        this.readyWatchdog = null;
-        console.warn('WhatsApp stuck between authenticated and ready for 2 minutes — reinitializing');
-        this.scheduleReconnect();
-      }, 120_000);
+      // silently on a resumed session — without a bound, an operator who
+      // scanned successfully could be stuck on "Starting WhatsApp…" forever
+      // with no way back except restarting the whole app.
+      this.armReadyWatchdog();
     });
 
-    // Visibility into the authenticated → ready gap, which can otherwise hang
-    // silently for minutes (a known whatsapp-web.js quirk on resumed sessions).
+    // Visibility into the authenticated → ready gap — and, critically, proof
+    // of LIFE in it: every progress tick re-arms the watchdog below.
     this.client.on('loading_screen', (percent, message) => {
       console.log(`WhatsApp loading: ${percent}% — ${message}`);
+      this.armReadyWatchdog();
     });
 
     this.client.on('change_state', (state) => {

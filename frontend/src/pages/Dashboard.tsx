@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Plus, Eye } from 'lucide-react';
+import { Plus, Eye, IndianRupee } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
@@ -84,9 +84,15 @@ export default function DashboardPage() {
             <p className="text-3xl font-bold mt-1">{todayBills.length}</p>
           </CardContent>
         </Card>
-        <Card className="border-brand-500/30">
+        <Card className="border-brand-500/30 relative overflow-hidden">
+          <div className="absolute top-0 left-0 right-0 h-1 bg-brand-500" />
           <CardContent className="pt-4 pb-4">
-            <p className="text-xs text-muted-foreground uppercase tracking-wide">Today's Revenue</p>
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-muted-foreground uppercase tracking-wide">Today's Revenue</p>
+              <div className="h-7 w-7 rounded-full bg-brand-500 flex items-center justify-center shrink-0">
+                <IndianRupee className="h-4 w-4 text-primary-foreground" />
+              </div>
+            </div>
             <p className="text-2xl font-bold mt-1 text-brand-700 tabular-nums">{formatCurrency(todayRevenue)}</p>
           </CardContent>
         </Card>
@@ -96,9 +102,15 @@ export default function DashboardPage() {
             <p className="text-3xl font-bold mt-1">{monthBills.length}</p>
           </CardContent>
         </Card>
-        <Card className="border-brand-500/30">
+        <Card className="border-brand-500/30 relative overflow-hidden">
+          <div className="absolute top-0 left-0 right-0 h-1 bg-brand-500" />
           <CardContent className="pt-4 pb-4">
-            <p className="text-xs text-muted-foreground uppercase tracking-wide">This Month's Revenue</p>
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-muted-foreground uppercase tracking-wide">This Month's Revenue</p>
+              <div className="h-7 w-7 rounded-full bg-brand-500 flex items-center justify-center shrink-0">
+                <IndianRupee className="h-4 w-4 text-primary-foreground" />
+              </div>
+            </div>
             <p className="text-2xl font-bold mt-1 text-brand-700 tabular-nums">{formatCurrency(monthRevenue)}</p>
           </CardContent>
         </Card>

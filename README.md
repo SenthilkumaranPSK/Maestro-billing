@@ -11,7 +11,7 @@ Local-first billing software for The Maestro Studio's, Salem. Runs entirely on y
 - **Bill history** — search, view, edit items, cancel. Cancelled bills stay visible for audit but never count as revenue. Every change is written to a log table.
 - **Customers & products** — simple catalogs; bill items snapshot the product name and price, so history survives catalog changes.
 - **Reports** (in Settings) — printable end-of-day Day Report, and a monthly GST report grouped by rate with CSV export. Both warn if any bills could not be loaded.
-- **Backups** — automatic daily snapshot on app start (last 30 kept), to a configurable folder on a separate drive; each backup can be saved anywhere as a copy. Restoring is CLI-only, on purpose.
+- **Backups** — automatic daily snapshot on app start, plus an on-demand **Backup Now** button (last 30 days kept), to a configurable folder on a separate drive; each backup can be saved anywhere as a copy. Restoring is CLI-only, on purpose.
 - **Resilience** — SQLite WAL mode, Zod-validated API boundary, race-proof unique bill numbers, self-recovering WhatsApp session, printer-availability badge on the billing screen.
 
 ---
