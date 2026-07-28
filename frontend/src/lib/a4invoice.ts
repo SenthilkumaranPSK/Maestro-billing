@@ -423,8 +423,18 @@ export async function generateA4InvoicePDF(bill: Bill, settings: Partial<Setting
   const bankBoxTop = totalsBoxBottom;
   const bankBoxBottom = bankBoxTop - bankBoxH;
   // The invoice's real bottom edge — follows the content up the page on a
-  // short bill instead of always sitting at the page margin.
-  const outerBottom = bankBoxBottom;
+  // short bill instead of always sitting at the page margin (this is what
+  // fixed a large empty rectangle *inside* the item table's own border on a
+  // short bill). Left alone, though, that same short bill puts the whole
+  // invoice at the very top of the page with a large blank area of plain
+  // paper *below* the border — reported as "too much space in the A4 down
+  // below". Reclaiming half of that leftover (capped, so it can never grow
+  // back into a full-page stretch — the exact table-sizing fix above is
+  // untouched) as a bottom margin inside the border reads as an intentional
+  // page margin instead of a document that's mostly blank.
+  const leftoverBelowContent = bankBoxBottom - pageBottomLimit;
+  const EXTRA_BOTTOM_MARGIN = Math.min(leftoverBelowContent * 0.5, 150);
+  const outerBottom = bankBoxBottom - EXTRA_BOTTOM_MARGIN;
 
   // A very long bill (many items / long names) won't fit one A4 page at
   // natural size — compress proportionally as a last resort rather than
