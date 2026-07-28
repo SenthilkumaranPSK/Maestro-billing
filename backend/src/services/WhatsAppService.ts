@@ -351,7 +351,17 @@ export class WhatsAppService {
       this.scheduleReconnect();
     });
 
-    this.client.initialize().catch((err) => {
+    // whatsapp-web.js's own Client.initialize() calls page.goto(WhatsWebURL,
+    // { timeout: 0, ... }) internally — timeout: 0 means NO timeout at all.
+    // If that page load ever hangs (a network hiccup, a slow/stuck load,
+    // anything), the promise this wraps never settles: not resolved, not
+    // rejected. The .catch() below only ever handled a genuine rejection —
+    // a hang has none — so the service sat at CONNECTING/"Starting
+    // WhatsApp…" forever with no error logged and no retry ever scheduled,
+    // since nothing ever fired to trigger one. Confirmed as the actual cause
+    // of repeated "stuck on Starting" reports: withTimeout() forces this to
+    // fail after a generous but finite wait instead of hanging indefinitely.
+    withTimeout(this.client.initialize(), 90_000).catch((err: unknown) => {
       console.error('Failed to initialize WhatsApp client:', err);
       this.status = 'DISCONNECTED';
       // whatsapp-web.js quirks (slow first load, a stuck page) can reject
