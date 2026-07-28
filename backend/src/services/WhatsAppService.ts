@@ -244,6 +244,12 @@ export class WhatsAppService {
       this.status = 'DISCONNECTED';
       this.qrCodeData = null;
       console.warn('WhatsApp authentication failed');
+      // whatsapp-web.js destroys the client internally on auth_failure (a
+      // failed LocalAuth session restore) without ever emitting
+      // 'disconnected' — without this, the service is stranded at
+      // DISCONNECTED forever with no reconnect timer and no manual-reconnect
+      // route, needing a full app restart to recover.
+      this.scheduleReconnect();
     });
 
     this.client.on('disconnected', () => {

@@ -22,7 +22,7 @@ import { useToast } from '@/hooks/use-toast';
 import { isValidIndianPhone } from '@/lib/utils';
 import { computeLineTotals } from '@/lib/billMath';
 import type { BillItemForm, Bill, Settings } from '@/types';
-import { rupeeToPaisa, paisaToRupee, formatCurrency } from '@/types';
+import { rupeeToPaisa, paisaToRupee, formatCurrency, shouldShowWhatsappOnBilling } from '@/types';
 
 function WhatsAppIcon({ className }: { className?: string }) {
   return (
@@ -123,7 +123,7 @@ export default function BillingPage() {
   // Settings → WhatsApp Integration → "Show WhatsApp option on the New Bill
   // screen". Missing (older installs) or anything but the literal string
   // 'false' means show — must default to today's behaviour on upgrade.
-  const showWhatsapp = settings?.general?.show_whatsapp_on_billing !== 'false';
+  const showWhatsapp = shouldShowWhatsappOnBilling(settings?.general);
 
   // Thermal printer availability — polled so plugging the printer in (or
   // turning it on) is reflected without a page reload.
@@ -238,6 +238,7 @@ export default function BillingPage() {
       }
     }
 
+    const filledServiceDates = serviceDates.filter(Boolean);
     createBillMutation.mutate({
       customerId,
       // Bill date is fixed to the moment of saving — no backdating from the UI.
@@ -257,7 +258,7 @@ export default function BillingPage() {
       // actually in state, or switching back to Thermal right before Save
       // would silently wipe out Service Details the operator already typed.
       serviceDescription: serviceDescription.trim() || undefined,
-      serviceDates: serviceDates.filter(Boolean).length ? serviceDates.filter(Boolean) : undefined,
+      serviceDates: filledServiceDates.length ? filledServiceDates : undefined,
       gstInclusive,
     });
   };

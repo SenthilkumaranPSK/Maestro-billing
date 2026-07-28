@@ -1,5 +1,5 @@
 import type { Bill, Settings } from '@/types';
-import { buildThermalLayout, type ThermalRow, type Measure } from '@/lib/thermalLayout';
+import { buildThermalLayout, thermalRowHeight, type Measure } from '@/lib/thermalLayout';
 import { normalizePaperWidth, getEscPosGeometry } from '@/lib/thermal';
 import { toGrayscale, ditherAndPack } from '@/lib/escposDither';
 
@@ -89,21 +89,12 @@ export async function renderThermalReceiptRaster(
 
   const layout = buildThermalLayout(bill, settings, printDots, measure);
 
-  // Mirrors the draw loop's own y-advancement exactly (same switch, same
-  // per-kind height) so the canvas is sized to precisely what gets drawn —
-  // computed once here, upfront, since canvas height can't grow mid-draw.
-  const rowHeight = (row: ThermalRow): number => {
-    switch (row.kind) {
-      case 'blank':
-        return Math.round(LINE_HEIGHT * 0.6);
-      case 'divider':
-        return Math.round(LINE_HEIGHT * 0.5);
-      case 'itemRow':
-        return row.nameLines.length * LINE_HEIGHT + (row.totalsOnLastLine ? 0 : LINE_HEIGHT);
-      default:
-        return LINE_HEIGHT;
-    }
-  };
+  // Mirrors the draw loop's own y-advancement exactly (same shared height
+  // rule as lib/pdf.ts) so the canvas is sized to precisely what gets drawn
+  // — computed once here, upfront, since canvas height can't grow mid-draw.
+  // Rounded per-row (not just the total) since dots must land on whole
+  // pixels the same way each draw call below does.
+  const rowHeight = (row: (typeof layout.rows)[number]) => Math.round(thermalRowHeight(row, LINE_HEIGHT));
   const contentHeight = layout.rows.reduce((sum, r) => sum + rowHeight(r), 0);
 
   const canvas = document.createElement('canvas');

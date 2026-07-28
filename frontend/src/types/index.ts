@@ -141,6 +141,14 @@ export interface Settings {
   };
 }
 
+// Single source of truth for the show_whatsapp_on_billing convention — only
+// the literal string 'false' hides it; missing (older installs) or any
+// other value means "show". Used by both BillingPage (New Bill) and
+// Settings (the toggle itself) so they can't silently disagree.
+export function shouldShowWhatsappOnBilling(general: Pick<Settings['general'], 'show_whatsapp_on_billing'> | undefined): boolean {
+  return general?.show_whatsapp_on_billing !== 'false';
+}
+
 export interface ApiResponse<T> {
   success: boolean;
   data: T;

@@ -64,6 +64,28 @@ export interface ThermalLayout {
   columns: ThermalColumns;
 }
 
+/**
+ * Vertical footprint of one row, in the caller's own line-height unit
+ * (pdf-lib points in lib/pdf.ts, printer dots in lib/thermalRaster.ts) — the
+ * single source of truth both draw loops mirror to size their page/canvas
+ * upfront, instead of each keeping its own copy of this switch. A second
+ * hand-maintained copy previously drifted silently whenever a new
+ * `ThermalRow` kind was added, since TypeScript's `default:` fallthrough
+ * doesn't flag an un-updated duplicate.
+ */
+export function thermalRowHeight(row: ThermalRow, lineHeight: number): number {
+  switch (row.kind) {
+    case 'blank':
+      return lineHeight * 0.6;
+    case 'divider':
+      return lineHeight * 0.5;
+    case 'itemRow':
+      return row.nameLines.length * lineHeight + (row.totalsOnLastLine ? 0 : lineHeight);
+    default:
+      return lineHeight;
+  }
+}
+
 function wrapByWidth(measure: Measure, text: string, maxWidth: number, bold = false): string[] {
   const words = text.split(/\s+/).filter(Boolean);
   if (words.length === 0) return [''];

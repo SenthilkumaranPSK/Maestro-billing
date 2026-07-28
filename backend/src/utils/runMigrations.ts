@@ -58,21 +58,29 @@ export async function runPendingMigrations(prisma: PrismaClient, migrationsDir: 
 
     const sql = fs.readFileSync(sqlPath, 'utf-8');
     const statements = splitStatements(sql);
-    for (const statement of statements) {
-      await prisma.$executeRawUnsafe(statement);
-    }
-
     const checksum = crypto.createHash('sha256').update(sql).digest('hex');
     const now = new Date().toISOString();
-    await prisma.$executeRawUnsafe(
-      `INSERT INTO "_prisma_migrations" (id, checksum, finished_at, migration_name, started_at, applied_steps_count) VALUES (?, ?, ?, ?, ?, ?)`,
-      crypto.randomUUID(),
-      checksum,
-      now,
-      folder,
-      now,
-      statements.length,
-    );
+
+    // One migration file = one all-or-nothing unit. Without this, a crash
+    // partway through a multi-statement migration (e.g. the RedefineTables
+    // rebuild pattern this project's own history already uses twice) leaves
+    // the schema half-changed with no _prisma_migrations row recorded — the
+    // next startup would retry from the top and immediately fail ("table
+    // already exists"), permanently blocking the app with a corrupted schema.
+    await prisma.$transaction(async (tx) => {
+      for (const statement of statements) {
+        await tx.$executeRawUnsafe(statement);
+      }
+      await tx.$executeRawUnsafe(
+        `INSERT INTO "_prisma_migrations" (id, checksum, finished_at, migration_name, started_at, applied_steps_count) VALUES (?, ?, ?, ?, ?, ?)`,
+        crypto.randomUUID(),
+        checksum,
+        now,
+        folder,
+        now,
+        statements.length,
+      );
+    });
   }
 }
 

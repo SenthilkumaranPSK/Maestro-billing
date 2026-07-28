@@ -137,6 +137,7 @@ export function EditBillModal({ bill, onClose, onSaved }: EditBillModalProps) {
       }
     }
 
+    const filledServiceDates = serviceDates.filter(Boolean);
     updateMutation.mutate({
       customerId,
       billDate: bill.billDate,
@@ -157,7 +158,7 @@ export function EditBillModal({ bill, onClose, onSaved }: EditBillModalProps) {
       // actually in state, or switching back to Thermal right before Save
       // would silently wipe out Service Details the bill already had.
       serviceDescription: serviceDescription.trim() || undefined,
-      serviceDates: serviceDates.filter(Boolean).length ? serviceDates.filter(Boolean) : undefined,
+      serviceDates: filledServiceDates.length ? filledServiceDates : undefined,
       gstInclusive,
     });
   };

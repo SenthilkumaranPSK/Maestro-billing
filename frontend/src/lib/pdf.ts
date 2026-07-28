@@ -1,7 +1,7 @@
 import { PDFDocument, rgb } from 'pdf-lib';
 import type { Bill, Settings } from '@/types';
 import { normalizePaperWidth } from '@/lib/thermal';
-import { buildThermalLayout, type ThermalRow, type Measure } from '@/lib/thermalLayout';
+import { buildThermalLayout, thermalRowHeight, type Measure } from '@/lib/thermalLayout';
 import { embedBrandFonts } from '@/lib/brandFont';
 
 /**
@@ -101,18 +101,7 @@ export async function generateBillPDF(
 
   // Mirrors the draw loop's own y-advancement exactly, computed upfront
   // since the page height has to be fixed before anything is drawn.
-  const rowHeight = (row: ThermalRow): number => {
-    switch (row.kind) {
-      case 'blank':
-        return LINE_HEIGHT * 0.6;
-      case 'divider':
-        return LINE_HEIGHT * 0.5;
-      case 'itemRow':
-        return row.nameLines.length * LINE_HEIGHT + (row.totalsOnLastLine ? 0 : LINE_HEIGHT);
-      default:
-        return LINE_HEIGHT;
-    }
-  };
+  const rowHeight = (row: (typeof layout.rows)[number]) => thermalRowHeight(row, LINE_HEIGHT);
   const contentHeight = layout.rows.reduce((sum, r) => sum + rowHeight(r), 0);
 
   const topPad = 14;

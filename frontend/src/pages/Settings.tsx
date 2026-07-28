@@ -10,6 +10,7 @@ import { backupsApi } from '@/api/backups';
 import { settingsApi } from '@/api/settings';
 import { useToast } from '@/hooks/use-toast';
 import { formatDateTime } from '@/lib/utils';
+import { shouldShowWhatsappOnBilling } from '@/types';
 
 export default function SettingsPage() {
   const { toast } = useToast();
@@ -38,7 +39,7 @@ export default function SettingsPage() {
   // Missing (older installs) or anything other than the literal string
   // 'false' means "show" — this has to default to today's behaviour so an
   // upgrade never silently hides a feature nobody asked to hide.
-  const showWhatsappOnBilling = settingsData?.general?.show_whatsapp_on_billing !== 'false';
+  const showWhatsappOnBilling = shouldShowWhatsappOnBilling(settingsData?.general);
 
   const setShowWhatsappMutation = useMutation({
     mutationFn: (value: boolean) => settingsApi.update('show_whatsapp_on_billing', String(value), 'general'),
