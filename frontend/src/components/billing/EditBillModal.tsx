@@ -15,11 +15,12 @@ import { customersApi } from '@/api/customers';
 import { useToast } from '@/hooks/use-toast';
 import { useClosingTransition } from '@/hooks/use-closing-transition';
 import { computeLineTotals } from '@/lib/billMath';
+import { newId } from '@/lib/utils';
 import type { Bill, BillItemForm } from '@/types';
 import { paisaToRupee, rupeeToPaisa, formatCurrency } from '@/types';
 
 const newEmptyItem = (): BillItemForm => ({
-  _id: crypto.randomUUID(),
+  _id: newId(),
   productName: '',
   unit: 'piece',
   qty: 1,
@@ -47,7 +48,7 @@ export function EditBillModal({ bill, onClose, onSaved }: EditBillModalProps) {
   });
   const [items, setItems] = useState<BillItemForm[]>(
     bill.items.map((i) => ({
-      _id: crypto.randomUUID(),
+      _id: newId(),
       productId: i.productId,
       productName: i.productName,
       hsnSac: i.hsnSac,

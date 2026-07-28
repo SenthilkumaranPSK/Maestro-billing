@@ -19,7 +19,7 @@ const loadPdfLib = () => import('@/lib/pdf');
 const loadA4Lib = () => import('@/lib/a4invoice');
 import { whatsappApi } from '@/api/whatsapp';
 import { useToast } from '@/hooks/use-toast';
-import { isValidIndianPhone } from '@/lib/utils';
+import { isValidIndianPhone, newId } from '@/lib/utils';
 import { computeLineTotals } from '@/lib/billMath';
 import type { BillItemForm, Bill, Settings } from '@/types';
 import { rupeeToPaisa, paisaToRupee, formatCurrency, shouldShowWhatsappOnBilling } from '@/types';
@@ -78,7 +78,7 @@ function whatsappErrorMessage(msg: string): string {
 }
 
 const newEmptyItem = (): BillItemForm => ({
-  _id: crypto.randomUUID(),
+  _id: newId(),
   productName: '',
   unit: 'piece',
   qty: 1,

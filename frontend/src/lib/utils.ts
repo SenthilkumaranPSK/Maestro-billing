@@ -5,6 +5,18 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+// A disposable React list key — never sent to the server, never used for
+// anything security-sensitive. `crypto.randomUUID()` only exists in a
+// "secure context" (HTTPS or localhost); connecting to the Main PC over
+// plain LAN HTTP in two-PC mode is not one, so it silently doesn't exist
+// there and crashed the instant a page tried to create a new bill item
+// ("crypto.randomUUID is not a function"). This never needed cryptographic
+// randomness in the first place, so it no longer depends on the Web Crypto
+// API at all.
+export function newId(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
 export function formatDate(dateStr: string): string {
   return new Date(dateStr).toLocaleDateString('en-IN', {
     day: '2-digit',
