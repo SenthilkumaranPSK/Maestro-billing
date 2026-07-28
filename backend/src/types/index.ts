@@ -25,6 +25,8 @@ export interface CreateBillInput {
   serviceDescription?: string;
   serviceFrom?: string;
   serviceTo?: string;
+  // See Bill.serviceDates in schema.prisma
+  serviceDates?: string[];
   // See Bill.gstInclusive in schema.prisma
   gstInclusive?: boolean;
 }

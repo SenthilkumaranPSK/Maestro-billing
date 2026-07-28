@@ -25,6 +25,7 @@ async function main() {
     { key: 'thermal_paper_width', value: '80', group: 'printer' },
     { key: 'currency_symbol', value: '₹', group: 'general' },
     { key: 'currency_code', value: 'INR', group: 'general' },
+    { key: 'show_whatsapp_on_billing', value: 'true', group: 'general' },
   ];
 
   for (const s of defaults) {

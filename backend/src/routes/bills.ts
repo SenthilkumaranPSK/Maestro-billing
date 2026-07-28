@@ -8,6 +8,25 @@ import {
 import { BillService } from '../services/BillService';
 import { requireAppHeader } from '../middleware/requireAppHeader';
 
+// serviceDates is stored as a JSON-encoded string column (SQLite has no
+// native array type) — parsed back into a real array here, at the response
+// boundary, so every consumer of the API (list, get, create, update) sees
+// the same shape regardless of which Prisma call produced the row.
+function withParsedServiceDates<T extends { serviceDates: string | null }>(
+  bill: T,
+): Omit<T, 'serviceDates'> & { serviceDates: string[] } {
+  let serviceDates: string[] = [];
+  if (bill.serviceDates) {
+    try {
+      const parsed = JSON.parse(bill.serviceDates);
+      if (Array.isArray(parsed)) serviceDates = parsed.filter((d): d is string => typeof d === 'string');
+    } catch {
+      // malformed JSON in an old row — treat as no service dates
+    }
+  }
+  return { ...bill, serviceDates };
+}
+
 export async function billRoutes(fastify: FastifyInstance) {
   const prisma = fastify.prisma;
   const billService = new BillService(prisma);
@@ -74,7 +93,7 @@ export async function billRoutes(fastify: FastifyInstance) {
     // client-side to show their truncation warning — exposed here too so a
     // caller doesn't have to derive it itself.
     const capped = total > bills.length;
-    return reply.send({ success: true, data: bills, meta: { total, page, limit, capped } });
+    return reply.send({ success: true, data: bills.map(withParsedServiceDates), meta: { total, page, limit, capped } });
   });
 
   fastify.get('/:id', async (request, reply) => {
@@ -84,7 +103,7 @@ export async function billRoutes(fastify: FastifyInstance) {
     if (!bill) {
       return reply.status(404).send({ success: false, error: 'Bill not found' });
     }
-    return reply.send({ success: true, data: bill });
+    return reply.send({ success: true, data: withParsedServiceDates(bill) });
   });
 
   fastify.post('/', { preHandler: requireAppHeader }, async (request, reply) => {
@@ -117,7 +136,7 @@ export async function billRoutes(fastify: FastifyInstance) {
       fastify.log.error({ err, billId: bill.id }, 'Failed to write audit log for created bill');
     }
 
-    return reply.status(201).send({ success: true, data: bill });
+    return reply.status(201).send({ success: true, data: withParsedServiceDates(bill) });
   });
 
   // Full edit — replaces items, recalculates totals; any non-cancelled bill
@@ -152,7 +171,7 @@ export async function billRoutes(fastify: FastifyInstance) {
       fastify.log.error({ err, billId: bill.id }, 'Failed to write audit log for updated bill');
     }
 
-    return reply.send({ success: true, data: bill });
+    return reply.send({ success: true, data: withParsedServiceDates(bill) });
   });
 
   fastify.delete('/:id', { preHandler: requireAppHeader }, async (request, reply) => {

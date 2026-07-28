@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { User, Phone, UserCheck, FileText } from 'lucide-react';
+import { User, Phone, UserCheck, FileText, MapPin } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { Input } from '@/components/ui/input';
 import { customersApi } from '@/api/customers';
@@ -9,15 +9,24 @@ export interface CustomerInfo {
   name: string;
   phone: string;
   gstin?: string;
+  // A4-only (see showAddress below) — the thermal receipt has no room for it
+  // and never prints it, so there is no reason to ask for it there.
+  address?: string;
 }
 
 interface CustomerBarProps {
   value: CustomerInfo;
   onChange: (info: CustomerInfo) => void;
   disabled?: boolean;
+  // Shows the address input. Only meaningful for the A4 "Service Bill"
+  // invoice, which is the only layout that prints a customer address
+  // (lib/a4invoice.ts's "Service Bill To" block) — the thermal receipt's
+  // layout has no field for it, so asking for it there would just be a
+  // field nobody's answer ever shows up on.
+  showAddress?: boolean;
 }
 
-export function CustomerBar({ value, onChange, disabled }: CustomerBarProps) {
+export function CustomerBar({ value, onChange, disabled, showAddress }: CustomerBarProps) {
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const barRef = useRef<HTMLDivElement>(null);
@@ -51,8 +60,8 @@ export function CustomerBar({ value, onChange, disabled }: CustomerBarProps) {
     onChange({ ...value, phone, id: undefined });
   };
 
-  const handleSelect = (c: { id: number; name: string; phone: string; gstin?: string }) => {
-    onChange({ id: c.id, name: c.name, phone: c.phone, gstin: c.gstin ?? '' });
+  const handleSelect = (c: { id: number; name: string; phone: string; gstin?: string; address?: string }) => {
+    onChange({ id: c.id, name: c.name, phone: c.phone, gstin: c.gstin ?? '', address: c.address ?? '' });
     setSearchTerm('');
     setShowSuggestions(false);
   };
@@ -106,6 +115,22 @@ export function CustomerBar({ value, onChange, disabled }: CustomerBarProps) {
           />
         </div>
       </div>
+
+      {/* Address — A4 invoice only, see showAddress on CustomerBarProps */}
+      {showAddress && (
+        <div className="relative mt-2">
+          <MapPin className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground pointer-events-none" />
+          <Input
+            className="pl-9 text-sm"
+            placeholder="Customer address (optional — printed on the A4 invoice)"
+            value={value.address ?? ''}
+            onChange={(e) => onChange({ ...value, address: e.target.value })}
+            disabled={disabled}
+            autoComplete="off"
+            maxLength={500}
+          />
+        </div>
+      )}
 
       {/* Suggestions dropdown */}
       {showSuggestions && suggestions && suggestions.data.length > 0 && (

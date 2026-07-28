@@ -2,7 +2,7 @@ import { X, FileText, Printer, Pencil } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { LayoutToggle, type BillLayout } from '@/components/billing/LayoutToggle';
+import { LayoutToggle, guessBillLayout, type BillLayout } from '@/components/billing/LayoutToggle';
 import { formatCurrency, billStatusVariant, type Bill, type Settings, type BillStatus } from '@/types';
 import { formatDate } from '@/lib/utils';
 import { useClosingTransition } from '@/hooks/use-closing-transition';
@@ -22,7 +22,10 @@ interface BillDetailModalProps {
 }
 
 export function BillDetailModal({ bill, settings, onClose, onEdit }: BillDetailModalProps) {
-  const [layout, setLayout] = useState<BillLayout>('thermal');
+  // Best-effort guess (A4-only fields present -> 'a4'), not a hardcoded
+  // 'thermal' — see guessBillLayout for why. Still fully editable via the
+  // toggle below; this only fixes the default a bare Print/PDF click uses.
+  const [layout, setLayout] = useState<BillLayout>(() => guessBillLayout(bill));
   const { closing, requestClose } = useClosingTransition(onClose);
   const { toast } = useToast();
 

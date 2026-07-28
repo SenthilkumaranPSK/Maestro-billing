@@ -1,37 +1,9 @@
-import { PDFDocument, PDFFont, rgb, StandardFonts } from 'pdf-lib';
-import fontkit from '@pdf-lib/fontkit';
+import { PDFDocument, PDFFont, rgb } from 'pdf-lib';
 import type { Bill, Settings } from '@/types';
 import { paisaToRupee } from '@/types';
 import { amountInWordsINR } from '@/lib/amountInWords';
 import { bytesToBase64 } from '@/lib/pdf';
-
-// The studio's brand font (AvantGarde Bk BT — "Book" for body text, "Demi"
-// for headers/emphasis). Fetched once per session, same caching pattern as
-// the logo in lib/pdf.ts. Falls back to Helvetica if the files are ever
-// missing so invoice generation never hard-fails on a fresh checkout.
-let avantGardeBookCache: ArrayBuffer | null | undefined;
-let avantGardeDemiCache: ArrayBuffer | null | undefined;
-async function fetchFontBytes(path: string): Promise<ArrayBuffer | null> {
-  try {
-    const response = await fetch(path);
-    if (response.ok) return await response.arrayBuffer();
-  } catch {
-    // fall through to null — caller falls back to a standard font
-  }
-  return null;
-}
-async function embedBrandFonts(doc: PDFDocument): Promise<{ regular: PDFFont; bold: PDFFont }> {
-  doc.registerFontkit(fontkit);
-  if (avantGardeBookCache === undefined) avantGardeBookCache = await fetchFontBytes('/fonts/AvantGarde-Book.ttf');
-  if (avantGardeDemiCache === undefined) avantGardeDemiCache = await fetchFontBytes('/fonts/AvantGarde-Demi.ttf');
-  const regular = avantGardeBookCache
-    ? await doc.embedFont(avantGardeBookCache)
-    : await doc.embedFont(StandardFonts.Helvetica);
-  const bold = avantGardeDemiCache
-    ? await doc.embedFont(avantGardeDemiCache)
-    : await doc.embedFont(StandardFonts.HelveticaBold);
-  return { regular, bold };
-}
+import { embedBrandFonts } from '@/lib/brandFont';
 
 // Same caching/fallback pattern as lib/pdf.ts's thermal-receipt logo — fetch
 // and decode once per session, prefer the small pre-downscaled copy so the
@@ -70,10 +42,15 @@ const PAGE_W = 595.28; // A4, pt
 const PAGE_H = 841.89;
 const MARGIN = 32;
 
+function hexRgb(hex: string): ReturnType<typeof rgb> {
+  const n = parseInt(hex, 16);
+  return rgb(((n >> 16) & 0xff) / 255, ((n >> 8) & 0xff) / 255, (n & 0xff) / 255);
+}
+
 const BLACK = rgb(0.08, 0.08, 0.08);
-const BRAND = rgb(0.53, 0.74, 0.19); // big studio-owner name
-const ACCENT = rgb(0.78, 0.1, 0.55); // GSTIN/Invoice/Date + signature block
-const BODY = rgb(0.1, 0.42, 0.28); // customer/service/item/bank text
+const BRAND = hexRgb('b2df00'); // "MAESTRO YUVARAJ V"
+const ACCENT = hexRgb('b400ff'); // GSTIN/Invoice/Date + signature block (the "pink")
+const BODY = hexRgb('397601'); // customer/service/item/bank text (the other "green")
 
 // No Settings field for this yet (see conversation) — filled in from the
 // reference invoice. Revisit if the studio needs to edit these from the UI.
@@ -138,10 +115,14 @@ export async function generateA4InvoicePDF(bill: Bill, settings: Partial<Setting
   const outerTop = PAGE_H - MARGIN;
   const outerBottom = MARGIN;
 
-  const hline = (yPos: number, x1 = left, x2 = right, thickness = 0.75) =>
+  // Thinner throughout, per the studio's request for a more elegant look —
+  // was 0.75/1.2/1 originally, then 0.4/0.7/0.6 (grid lines / header divider
+  // / outer border); asked to go thinner still.
+  const THIN = 0.25;
+  const hline = (yPos: number, x1 = left, x2 = right, thickness = THIN) =>
     page.drawLine({ start: { x: x1, y: yPos }, end: { x: x2, y: yPos }, thickness, color: BLACK });
   const vline = (xPos: number, y1: number, y2: number) =>
-    page.drawLine({ start: { x: xPos, y: y1 }, end: { x: xPos, y: y2 }, thickness: 0.75, color: BLACK });
+    page.drawLine({ start: { x: xPos, y: y1 }, end: { x: xPos, y: y2 }, thickness: THIN, color: BLACK });
 
   interface TextOpts {
     size?: number;
@@ -189,22 +170,17 @@ export async function generateA4InvoicePDF(bill: Bill, settings: Partial<Setting
   // invoice (e.g. "Service Bill To :") already uses.
   const headerLeft = left + 10;
 
+  // The logo used to sit here, top-left of the header. Moved down to sit just
+  // above the signature line instead (see the bank/signature block below) —
+  // fetched once here and reused there, so it's still only decoded once.
   const logoBytes = await fetchLogoBytes();
-  let logoH = 0;
-  let logoW = 0;
-  if (logoBytes) {
-    const logoImage = await doc.embedPng(logoBytes);
-    logoH = 62;
-    logoW = logoH * (logoImage.width / logoImage.height);
-    page.drawImage(logoImage, { x: headerLeft, y: headerTop - logoH, width: logoW, height: logoH });
-  }
-  // Name/address/mobile is centered under the logo's own width, rather than
-  // left-aligned to any edge of it — this centers each line relative to the
-  // others too, since they all share the same centering box. If the logo
-  // asset ever fails to load, logoW is 0 — falling back to a fixed width
-  // keeps text wrapping/centering sane instead of a 0-width box forcing
-  // every single word onto its own line.
-  const ownerBlockW = logoW || 220;
+  const logoImage = logoBytes ? await doc.embedPng(logoBytes) : null;
+
+  // Name/address/mobile is centered within a fixed-width block — this used to
+  // be sized to the header logo's own width (logoW || 220), but with the logo
+  // gone from the header there's nothing left to size against, so it's just
+  // the same 220pt fallback the "no logo" case already used.
+  const ownerBlockW = 220;
 
   // Right column: block is anchored to the right side of the page, but the
   // lines are center-aligned to each other within that block (not each one
@@ -222,26 +198,34 @@ export async function generateA4InvoicePDF(bill: Bill, settings: Partial<Setting
     ry -= RIGHT_LINE_GAP;
   }
 
-  // Name/address/mobile, tightly packed and bottom-aligned to the header box
-  // — computed bottom-up so the last line always sits a fixed 4pt above the
-  // divider regardless of how many lines the address wraps to.
+  // Name/address/mobile — tightly packed and vertically CENTERED in the
+  // header box (previously bottom-anchored to the divider; centered instead
+  // now that there's no header logo to sit flush beneath), while staying
+  // positioned on the left side of the page (headerLeft, unchanged) with
+  // each line still centered relative to the others within that block. This
+  // mirrors how the right-hand GSTIN/Invoice/Date column is already
+  // vertically centered in the same box.
   const addressLines = studioAddress
     ? wrapText(regular, studioAddress.replace(/\n/g, ', '), 9.5, ownerBlockW)
     : [];
   const ownerLines: Array<{ text: string; size: number; font: PDFFont; color: ReturnType<typeof rgb> }> = [
-    { text: studioOwner, size: 13, font: bold, color: BRAND },
+    { text: studioOwner, size: 17, font: bold, color: BRAND },
     ...addressLines.map((line) => ({ text: line, size: 9.5, font: regular, color: ACCENT })),
     ...(studioPhone ? [{ text: `Mobile : ${studioPhone}`, size: 9.5, font: regular, color: ACCENT }] : []),
   ];
-  let ly = headerBottom + 4;
-  for (let i = ownerLines.length - 1; i >= 0; i--) {
-    const ln = ownerLines[i]!;
+  const OWNER_LINE_GAP = 2;
+  const ownerBlockH = ownerLines.reduce((sum, ln) => sum + ln.size + OWNER_LINE_GAP, 0) - OWNER_LINE_GAP;
+  // Baseline-from-block-top approximation (0.8 * first line's size), same
+  // convention used elsewhere in this codebase for centering text blocks
+  // without a full font-metrics ascent lookup.
+  let ly = (headerTop + headerBottom) / 2 + ownerBlockH / 2 - ownerLines[0]!.size * 0.8;
+  for (const ln of ownerLines) {
     text(ln.text, headerLeft, ly, { size: ln.size, font: ln.font, color: ln.color, align: 'center', maxWidth: ownerBlockW });
-    ly += ln.size + 2;
+    ly -= ln.size + OWNER_LINE_GAP;
   }
 
   y = headerBottom;
-  hline(y, left, right, 1.2);
+  hline(y, left, right, 0.45);
   y -= 18;
 
   // ── "Service Bill From" / "Tax Invoice" row ─────────────────────────────
@@ -270,6 +254,11 @@ export async function generateA4InvoicePDF(bill: Bill, settings: Partial<Setting
   const custNameLines = bill.customer ? wrapText(bold, displayCustName, 9.5, colA_W - 16) : [];
   const custAddressLines = bill.customer?.address ? wrapText(regular, bill.customer.address, 9, colA_W - 16) : [];
   const serviceDescLines = bill.serviceDescription ? wrapText(regular, bill.serviceDescription, 9, colB_W - 16) : [];
+  // Prefer the new arbitrary serviceDates list; fall back to the old from/to
+  // range for a bill saved before that field existed.
+  const serviceDateList: string[] = bill.serviceDates?.length
+    ? bill.serviceDates
+    : [bill.serviceFrom, bill.serviceTo].filter((d): d is string => !!d);
 
   const showCustPhone = !!bill.customer?.phone && !isPlaceholderCustomer;
 
@@ -277,7 +266,7 @@ export async function generateA4InvoicePDF(bill: Bill, settings: Partial<Setting
     ? 14 + custNameLines.length * 12.5 + custAddressLines.length * 12 + (showCustPhone ? 12 : 0) + (bill.customer.gstin ? 12 : 0)
     : 14 + 13;
   const colB_ContentH = 14 + serviceDescLines.length * 12;
-  const colC_ContentH = 14 + (bill.serviceFrom || bill.serviceTo ? [bill.serviceFrom, bill.serviceTo].filter(Boolean).length : 1) * 12;
+  const colC_ContentH = 14 + (serviceDateList.length || 1) * 12;
 
   // Sized to whatever content actually needs (40pt floor just keeps the box
   // from looking clipped when every column is at its shortest) — previously
@@ -325,13 +314,10 @@ export async function generateA4InvoicePDF(bill: Bill, settings: Partial<Setting
   cy = infoTop - 14;
   text('Service Date :', colC_X + 8, cy, { size: 9.5, font: bold });
   cy -= 14;
-  if (bill.serviceFrom || bill.serviceTo) {
-    if (bill.serviceFrom) {
-      text(formatShortDate(new Date(bill.serviceFrom)), colC_X + 8, cy, { size: 9, color: BODY });
+  if (serviceDateList.length) {
+    for (const d of serviceDateList) {
+      text(formatShortDate(new Date(d)), colC_X + 8, cy, { size: 9, color: BODY });
       cy -= 12;
-    }
-    if (bill.serviceTo) {
-      text(formatShortDate(new Date(bill.serviceTo)), colC_X + 8, cy, { size: 9, color: BODY });
     }
   } else {
     text(formatShortDate(new Date(bill.billDate)), colC_X + 8, cy, { size: 9, color: BODY });
@@ -392,7 +378,11 @@ export async function generateA4InvoicePDF(bill: Bill, settings: Partial<Setting
   // divides it by the real row count, so extra rows just make each one
   // proportionally shorter instead of overflowing.
   const totalsBoxH = 22 * 4;
-  const bankBoxH = 130;
+  // Sized to what the bank-details block actually needs (16pt down to its
+  // header, 15pt gap, then 6 lines at 12.5pt = 106pt) plus a modest 6pt of
+  // bottom padding — was a flat 130, which left a visible gap of blank space
+  // under the bank details on every invoice regardless of content.
+  const bankBoxH = 112;
   const bankBoxBottom = outerBottom;
   const bankBoxTop = bankBoxBottom + bankBoxH;
   const totalsBoxBottom = bankBoxTop;
@@ -463,11 +453,8 @@ export async function generateA4InvoicePDF(bill: Bill, settings: Partial<Setting
   // differs (see billMath.ts), never how the invoice is printed.
   const gstRates = [...new Set(bill.items.filter((i) => i.gstRate > 0).map((i) => i.gstRate))];
   const halfRate = gstRates.length === 1 ? gstRates[0]! / 2 : undefined;
-  // [label, amount, mid?] — mid is the total-quantity note shown next to Sub
-  // Total, matching the thermal receipt's equivalent 3-column row.
-  const totalRows: Array<[string, number, string?]> = [];
-  const totalQty = bill.items.reduce((s, i) => s + i.qty, 0);
-  totalRows.push(['Sub Total', bill.subTotal, `${totalQty} No`]);
+  const totalRows: Array<[string, number]> = [];
+  totalRows.push(['Sub Total', bill.subTotal]);
   if (bill.gstAmount > 0) {
     const half = Math.floor(bill.gstAmount / 2);
     totalRows.push([halfRate !== undefined ? `CGST @ ${halfRate}%` : 'CGST', half]);
@@ -486,15 +473,12 @@ export async function generateA4InvoicePDF(bill: Bill, settings: Partial<Setting
   const totalsRowH = totalsBoxH / totalRows.length;
   vline(totalsX, y - totalsBoxH, y);
   let tty = y;
-  totalRows.forEach(([label, amount, mid], i) => {
+  totalRows.forEach(([label, amount], i) => {
     const isLast = i === totalRows.length - 1;
     if (i > 0) hline(tty, totalsX, right);
     const f = isLast ? bold : regular;
     const size = isLast ? 10 : 9.5;
     text(label, totalsX + 8, tty - totalsRowH / 2 - 3, { size, font: f, color: isLast ? BLACK : BLACK });
-    if (mid) {
-      text(mid, totalsX + (right - totalsX) * 0.45, tty - totalsRowH / 2 - 3, { size, font: f, color: BODY });
-    }
     const amtStr = `${amount < 0 ? '-' : ''}Rs ${formatRupees(Math.abs(amount))}`;
     text(amtStr, right - 8, tty - totalsRowH / 2 - 3, { size, font: f, color: BODY, align: 'right' });
     tty -= totalsRowH;
@@ -525,12 +509,29 @@ export async function generateA4InvoicePDF(bill: Bill, settings: Partial<Setting
     by -= 12.5;
   }
 
-  // Both lines sit at the bottom of the box together (the blank space for an
-  // actual pen signature is above them, not between them).
-  const sigX = left + bankColW;
-  const sigW = contentW - bankColW;
-  text(`For ${studioName.toUpperCase()}`, sigX, y - bankBoxH + 30, { size: 9.5, font: bold, color: ACCENT, align: 'center', maxWidth: sigW });
-  text('Authorised Signature', sigX, y - bankBoxH + 16, { size: 9, color: ACCENT, align: 'center', maxWidth: sigW });
+  // Signature block: the studio logo (small — sized to the footprint the
+  // removed "For <studio name>" text used to occupy, not a full-size header
+  // logo) sits directly above "Authorised Signature", both centered within
+  // this half of the box (not right-aligned to the page edge) — reads as a
+  // proper signature block rather than text hugging the margin. The blank
+  // space above them is still the room for an actual pen signature.
+  const sigColLeft = left + bankColW + 8;
+  const sigColRight = right - 8;
+  const sigColW = sigColRight - sigColLeft;
+  const sigColCenter = (sigColLeft + sigColRight) / 2;
+  const sigTextY = y - bankBoxH + 16;
+  if (logoImage) {
+    const forTextWidth = bold.widthOfTextAtSize(`For ${studioName.toUpperCase()}`, 9.5);
+    const sigLogoW = Math.min(forTextWidth, sigColW);
+    const sigLogoH = sigLogoW * (logoImage.height / logoImage.width);
+    page.drawImage(logoImage, {
+      x: sigColCenter - sigLogoW / 2,
+      y: sigTextY + 11 + 4, // clear the signature text's own line + a small gap
+      width: sigLogoW,
+      height: sigLogoH,
+    });
+  }
+  text('Authorised Signature', sigColLeft, sigTextY, { size: 9, color: ACCENT, align: 'center', maxWidth: sigColW });
 
   y -= bankBoxH;
 
@@ -541,7 +542,7 @@ export async function generateA4InvoicePDF(bill: Bill, settings: Partial<Setting
     width: contentW,
     height: outerTop - outerBottom,
     borderColor: BLACK,
-    borderWidth: 1,
+    borderWidth: 0.4,
   });
 
   return doc.save();

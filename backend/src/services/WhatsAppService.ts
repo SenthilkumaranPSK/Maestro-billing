@@ -79,6 +79,8 @@ export class WhatsAppService {
   private initializing = false;
   private shuttingDown = false;
   private reconnectTimer: NodeJS.Timeout | null = null;
+  // Guards the authenticated -> ready gap (see the 'authenticated' handler).
+  private readyWatchdog: NodeJS.Timeout | null = null;
   // Tracks the in-flight initialize() call so shutdown() can wait for it —
   // otherwise a browser that doInitialize() is mid-launch on assigns itself
   // to this.browser *after* shutdown already closed everything, leaking it.
@@ -111,6 +113,10 @@ export class WhatsAppService {
 
   private async doInitialize() {
     if (this.shuttingDown) return;
+    if (this.readyWatchdog) {
+      clearTimeout(this.readyWatchdog);
+      this.readyWatchdog = null;
+    }
     if (this.client) {
       await withTimeout(this.client.destroy(), 10_000).catch((err: unknown) => {
         console.error('Failed to destroy previous WhatsApp client:', err);
@@ -185,13 +191,39 @@ export class WhatsAppService {
     });
 
     this.client.on('ready', () => {
+      if (this.readyWatchdog) {
+        clearTimeout(this.readyWatchdog);
+        this.readyWatchdog = null;
+      }
       this.status = 'CONNECTED';
       this.qrCodeData = null;
       console.log('WhatsApp client is ready and connected!');
     });
 
     this.client.on('authenticated', () => {
+      // The phone has confirmed the scan — the QR shown in Settings is now
+      // dead (WhatsApp Web QRs are single-use), so leaving status at
+      // QR_READY made the app keep showing it, looking exactly like the scan
+      // hadn't worked even though it had. Move to CONNECTING (Settings
+      // already renders this as "Starting WhatsApp…") and drop the stale
+      // image immediately — 'ready' will flip it to CONNECTED shortly after.
+      this.status = 'CONNECTING';
+      this.qrCodeData = null;
       console.log('WhatsApp client authenticated successfully');
+
+      // authenticated -> ready is a known whatsapp-web.js quirk that can hang
+      // silently for minutes on a resumed session (see the loading_screen log
+      // below) — without a bound, an operator who scanned successfully could
+      // be stuck on "Starting WhatsApp…" indefinitely with no way back except
+      // restarting the whole app. If ready hasn't followed within 2 minutes,
+      // treat it as stuck and force a clean reinitialize; the saved session
+      // (LocalAuth) means this resumes rather than asking for a fresh QR scan.
+      if (this.readyWatchdog) clearTimeout(this.readyWatchdog);
+      this.readyWatchdog = setTimeout(() => {
+        this.readyWatchdog = null;
+        console.warn('WhatsApp stuck between authenticated and ready for 2 minutes — reinitializing');
+        this.scheduleReconnect();
+      }, 120_000);
     });
 
     // Visibility into the authenticated → ready gap, which can otherwise hang
@@ -205,12 +237,20 @@ export class WhatsAppService {
     });
 
     this.client.on('auth_failure', () => {
+      if (this.readyWatchdog) {
+        clearTimeout(this.readyWatchdog);
+        this.readyWatchdog = null;
+      }
       this.status = 'DISCONNECTED';
       this.qrCodeData = null;
       console.warn('WhatsApp authentication failed');
     });
 
     this.client.on('disconnected', () => {
+      if (this.readyWatchdog) {
+        clearTimeout(this.readyWatchdog);
+        this.readyWatchdog = null;
+      }
       this.status = 'DISCONNECTED';
       this.qrCodeData = null;
       console.warn('WhatsApp client disconnected. Retrying initialization...');
@@ -245,6 +285,10 @@ export class WhatsAppService {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
+    }
+    if (this.readyWatchdog) {
+      clearTimeout(this.readyWatchdog);
+      this.readyWatchdog = null;
     }
     // Let any in-flight initialize() finish assigning this.client/this.browser
     // before we tear them down, so a browser it just launched can't outlive

@@ -21,6 +21,7 @@ export interface CreateBillPayload {
   serviceDescription?: string;
   serviceFrom?: string;
   serviceTo?: string;
+  serviceDates?: string[];
   gstInclusive?: boolean;
 }
 

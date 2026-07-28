@@ -1,7 +1,32 @@
 import { Receipt, FileText } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import type { Bill } from '@/types';
 
 export type BillLayout = 'thermal' | 'a4';
+
+/**
+ * Best-effort guess at which layout a saved bill was actually created in.
+ *
+ * There is no stored "layout" field on Bill — both templates render off the
+ * same data, and the toggle is purely a print-time choice that defaults to
+ * 'thermal' on every fresh render (History rows, BillDetailModal). For a bill
+ * that was genuinely created in A4 mode, that meant Print/Download from Bill
+ * History silently gave the thermal receipt unless the operator remembered to
+ * click A4 first — reported as "downloading a PDF only gives the thermal
+ * preview, even for an A4 bill".
+ *
+ * serviceDescription/serviceFrom/serviceTo/serviceDates are A4-only fields
+ * (see BillingPage's Service Details section, shown only when layout ===
+ * 'a4') — any of them being set is strong evidence the bill was an A4
+ * "Service Bill" invoice. This only changes the toggle's INITIAL value; it
+ * stays fully editable, so a wrong guess costs one click, not a wrong
+ * download.
+ */
+export function guessBillLayout(
+  bill: Pick<Bill, 'serviceDescription' | 'serviceFrom' | 'serviceTo' | 'serviceDates'>,
+): BillLayout {
+  return bill.serviceDescription || bill.serviceFrom || bill.serviceTo || bill.serviceDates?.length ? 'a4' : 'thermal';
+}
 
 interface LayoutToggleProps {
   value: BillLayout;

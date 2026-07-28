@@ -142,6 +142,7 @@ export class BillService {
             serviceDescription: input.serviceDescription,
             serviceFrom: input.serviceFrom ? new Date(input.serviceFrom) : null,
             serviceTo: input.serviceTo ? new Date(input.serviceTo) : null,
+            serviceDates: input.serviceDates?.length ? JSON.stringify(input.serviceDates) : null,
             gstInclusive: input.gstInclusive ?? false,
             items: {
               create: computedItems.map((item) => ({
@@ -215,6 +216,7 @@ export class BillService {
           serviceDescription: input.serviceDescription ?? null,
           serviceFrom: input.serviceFrom ? new Date(input.serviceFrom) : null,
           serviceTo: input.serviceTo ? new Date(input.serviceTo) : null,
+          serviceDates: input.serviceDates?.length ? JSON.stringify(input.serviceDates) : null,
           gstInclusive: input.gstInclusive ?? false,
           items: {
             create: computedItems.map((item) => ({

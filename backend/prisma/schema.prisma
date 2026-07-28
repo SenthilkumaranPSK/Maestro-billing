@@ -86,12 +86,19 @@ model Bill {
   paymentMode    String?   @map("payment_mode")  // CASH | UPI | CARD | CHEQUE
   notes          String?
   // A4 "Service Bill" layout only — a one-line summary of the engagement (e.g.
-  // "Product Video Shoot Services") and the date range it covers, shown above
-  // the item table instead of the single bill date. Optional; the thermal
-  // receipt layout never shows these.
+  // "Product Video Shoot Services") shown above the item table instead of the
+  // single bill date. Optional; the thermal receipt layout never shows these.
   serviceDescription String? @map("service_description")
+  // Deprecated in favour of serviceDates below (superseded — the UI used to
+  // offer only a single from/to date range, now an arbitrary list of dates).
+  // Left in place, unwritten by new bills, purely so older bills already
+  // storing a range keep rendering correctly.
   serviceFrom        DateTime? @map("service_from")
   serviceTo          DateTime? @map("service_to")
+  // JSON-encoded array of "YYYY-MM-DD" strings — an arbitrary list of service
+  // dates (not necessarily contiguous), replacing the old from/to range so a
+  // multi-day shoot with gaps can list each actual date worked.
+  serviceDates       String?   @map("service_dates")
   // Whether item prices were entered GST-inclusive (tax extracted from the
   // entered price) or GST-exclusive (tax added on top, the pre-existing
   // default). subTotal/gstAmount/grandTotal always end up populated the same

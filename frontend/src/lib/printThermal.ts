@@ -1,25 +1,29 @@
 import type { Bill, Settings } from '@/types';
 import { printerApi } from '@/api/printer';
 
-export type ThermalPrintRoute = 'raw' | 'pdf';
+export type ThermalPrintRoute = 'raw' | 'raw-fallback' | 'pdf';
 
 /**
  * Print a thermal receipt by the best route available.
  *
- * Raw ESC/POS whenever the configured thermal printer is actually connected:
- * the printer then renders text with its own built-in font and the logo as
- * dots we quantised ourselves, so nothing is rasterised or rescaled on the way
- * out. Printing the PDF instead hands the page to the browser's print
- * pipeline, which antialiases it — and on a 1-bit thermal head those greys
- * dither into visible fuzz, which is what made receipts look blurry.
+ * Raw ESC/POS whenever the configured thermal printer is actually connected.
+ * The receipt is rendered in the studio's brand font (AvantGarde) onto a
+ * canvas and sent as a dithered raster image (lib/thermalRaster.ts) — the
+ * printer has no way to use an arbitrary TTF as ESC/POS text, so a custom
+ * font on paper is only possible as an image, same mechanism (and same
+ * dithering trade-off) as the studio logo already used.
  *
  * The PDF path is kept for when there is no thermal printer attached, where
  * the browser dialog is genuinely useful (print to any printer, or to PDF).
  *
- * Deliberately NOT a silent fallback: if the thermal printer is connected but
- * the raw send fails, this throws. Quietly printing the blurry PDF version
- * instead would hide a real hardware/driver problem behind output the studio
- * already told us looks wrong.
+ * Deliberately NOT a silent fallback to the PDF path if the thermal printer
+ * is connected but the raw send fails: that would hide a real hardware/driver
+ * problem behind output that goes through a completely different pipeline.
+ * The ONE silent fallback that does exist — brand-font rasterizing failing
+ * (font not loaded, no canvas) drops back to the plain-text ESC/POS path,
+ * still on the same printer, just without the brand font — exists because
+ * that failure has nothing to do with the printer or the bill data, and
+ * printing a plainer-looking receipt beats printing nothing.
  */
 export async function printThermalReceipt(
   bill: Bill,
@@ -36,19 +40,32 @@ export async function printThermalReceipt(
   }
 
   if (useRaw) {
-    const [{ buildEscPosCommands, normalizePaperWidth, getEscPosGeometry }, { buildLogoRaster }] =
+    const [{ getEscPosGeometry, normalizePaperWidth, buildEscPosRasterEnvelope, buildEscPosCommands }, { buildLogoRaster }] =
       await Promise.all([import('@/lib/thermal'), import('@/lib/escposLogo')]);
 
     const paper = normalizePaperWidth(settings.printer?.thermal_paper_width);
-    // Built to the PRINT AREA width, not the head's full width: the stream
-    // sets a left margin, so a raster sized to the whole head would start at
-    // that margin and run off the right edge.
-    // Same asset the PDF receipt uses. buildLogoRaster returns null rather
-    // than throwing if it can't be loaded — a receipt without the logo still
-    // beats no receipt.
-    const logo = await buildLogoRaster('/Logo-receipt.png', getEscPosGeometry(paper).printDots);
+    const { printDots } = getEscPosGeometry(paper);
+
+    // Same logo asset/handling as before — this part never depended on the
+    // brand font (it's already a rasterized PNG), so it's unaffected by
+    // whether the AvantGarde text-rendering step below succeeds.
+    const logo = await buildLogoRaster('/Logo-receipt.png', printDots);
+
+    const { renderThermalReceiptRaster } = await import('@/lib/thermalRaster');
+    const textChunks = await renderThermalReceiptRaster(bill, settings);
+
+    if (textChunks) {
+      const blocks = logo ? [logo, ...textChunks] : textChunks;
+      await printerApi.printRaw(buildEscPosRasterEnvelope(blocks, paper));
+      return 'raw';
+    }
+
+    // Brand font couldn't be rasterized (not loaded, no canvas support) —
+    // fall back to the printer's own crisp built-in font rather than not
+    // printing at all. Still includes the logo, since that never depended on
+    // the font.
     await printerApi.printRaw(buildEscPosCommands(bill, settings, logo));
-    return 'raw';
+    return 'raw-fallback';
   }
 
   const { printBillPDF } = await import('@/lib/pdf');

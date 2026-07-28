@@ -1,15 +1,23 @@
-import { PDFDocument, rgb, StandardFonts, PDFFont } from 'pdf-lib';
+import { PDFDocument, rgb } from 'pdf-lib';
 import type { Bill, Settings } from '@/types';
-import { buildReceiptPreview, normalizePaperWidth, getCharWidth } from '@/lib/thermal';
+import { normalizePaperWidth } from '@/lib/thermal';
+import { buildThermalLayout, type ThermalRow, type Measure } from '@/lib/thermalLayout';
+import { embedBrandFonts } from '@/lib/brandFont';
 
 /**
- * The downloadable/WhatsApp PDF uses the SAME receipt template as the thermal
- * printer (buildReceiptPreview) — one look everywhere. The page is sized like
- * the paper roll: 80mm (or 58mm) wide, height fitted to the content.
+ * The downloadable/WhatsApp PDF uses the SAME receipt layout DECISIONS as the
+ * physical thermal print (lib/thermalLayout.ts's buildThermalLayout) — one
+ * look everywhere, even though this renders in points via pdf-lib and the
+ * physical print renders in printer dots via a canvas
+ * (lib/thermalRaster.ts). Both pass the shared layout builder a `measure()`
+ * callback in their own units; the layout only ever compares widths within
+ * one caller's unit system, so the same algorithm positions correctly for
+ * both without the two ever needing to share a literal pixel constant.
  *
- * Courier (monospace) is required: the receipt lines are pre-padded with
- * spaces by rpad() to align the amount column, which only lines up when every
- * character has the same width.
+ * Body text is the studio's brand font (AvantGarde), not Courier — Courier
+ * was required back when lines were pre-padded with spaces to align columns,
+ * which only works in a monospace font. Column positions are now computed
+ * from real measured text widths instead, so any proportional font works.
  */
 
 const MM_TO_PT = 72 / 25.4;
@@ -37,16 +45,8 @@ async function fetchLogoBytes(): Promise<ArrayBuffer | null> {
   }
   return logoBytesCache;
 }
-// Slightly larger than the previous 8/8.5 so the printed block claims a bit
-// more of the paper's physical width, trimming a little of the blank margin
-// off both the left and right edges (a monospace block can only be trimmed
-// symmetrically by growing the text itself — there's no per-character
-// spacing control available here). Kept modest: on 58mm paper the idle
-// margin is already tight (see LEFT_SHIFT below), so this can't grow much
-// further without eating into the printer-cutoff compensation budget.
 const FONT_SIZE = 8.2;
 const LINE_HEIGHT = 8.7;
-const COURIER_CHAR_WIDTH = 0.6 * FONT_SIZE; // Courier glyphs are 0.6em wide
 
 export async function generateBillPDF(
   bill: Bill,
@@ -60,54 +60,30 @@ export async function generateBillPDF(
   // downloaded/viewed copy for no reason. Only printBillPDF passes true.
   compensatePrinterMargin = false,
 ): Promise<Uint8Array> {
-  const lines = buildReceiptPreview(bill, settings);
   const paperWidth = normalizePaperWidth(settings.printer?.thermal_paper_width);
-
   const pageWidth = (paperWidth === '58' ? 58 : 80) * MM_TO_PT;
-  // Single source of truth: rpad() pads lines to this width in thermal.ts —
-  // a divergent copy here would shift the amount column off the page.
-  const charWidth = getCharWidth(paperWidth);
-  const textWidth = charWidth * COURIER_CHAR_WIDTH;
-  const marginX = Math.max(4, (pageWidth - textWidth) / 2);
 
-  // Bias the existing left/right margin budget toward the left, instead of
-  // it being split evenly. This can only ever borrow from margin that's
-  // already idle — it can't add net-new space, because the page is exactly
-  // the width of the physical paper roll (58/80mm); shifting past the
-  // natural margin would print off the paper's edge. (An earlier version of
-  // this used `0.5 * MM_TO_PT`, which is 0.5 MILLIMETRES, not 0.5cm — a
-  // units bug that made that fix ~10x too small to notice. Fixed here.)
-  // Requested total so far: 1cm, capped to whatever's actually safely
-  // available on this paper width. Beyond that cap, the only real fix left is
-  // the printer driver's own left-offset/margin setting, which PDF content
-  // has no way to reach.
-  //
-  // The cap used to be `marginX - 2pt`, i.e. "take everything except 2pt".
-  // On 80mm paper marginX is only ~10pt, so that handed 8 of the 10 available
-  // points to the left side and left ~0.7mm on the right — the studio saw it
-  // as a big gap down the left, and the Amt column (the rightmost thing on
-  // the receipt) ended up close enough to the paper edge to risk being
-  // clipped. Rendering the two variants side by side made it obvious: the
-  // print copy was visibly lopsided next to the download copy.
-  //
-  // Now it borrows at most a fixed share of the idle margin, so a real right
-  // margin always survives no matter how tight the paper is. Still biased
-  // left-to-right (which is the point), just not to the exclusion of the
-  // other edge.
+  // 3mm each side — the same margin convention the physical raster print
+  // uses (lib/thermal.ts's ESCPOS_MARGIN_MM), so the PDF and the printed
+  // receipt frame their content identically.
+  const marginX = 3 * MM_TO_PT;
+  const printWidth = pageWidth - marginX * 2;
+
+  // Bias content rightward for an actual physical thermal printer, whose
+  // head can cut off content right at the paper's left edge. Can only ever
+  // borrow from the fixed margin above, never shrink printWidth itself, so a
+  // real right margin always survives no matter how tight the paper is.
   const REQUESTED_SHIFT = 1.0 * 10 * MM_TO_PT; // 1cm
-  const MAX_SHIFT_FRACTION = 0.4; // never give away more than 40% of the slack
+  const MAX_SHIFT_FRACTION = 0.4; // never give away more than 40% of the margin
   const LEFT_SHIFT = compensatePrinterMargin
     ? Math.max(0, Math.min(REQUESTED_SHIFT, marginX * MAX_SHIFT_FRACTION))
     : 0;
 
   const pdfDoc = await PDFDocument.create();
-  // Regular weight for body text, bold only for headers/emphasis lines
-  // (line.bold) — using CourierBold everywhere, plus a 3-4x overlapping
-  // stroke-offset "faux bold" on top of that, made every receipt print
-  // noticeably over-inked/heavy. A single draw at the font's real weight is
-  // enough on this printer; revisit if the studio reports faint print.
-  const regularFont = await pdfDoc.embedFont(StandardFonts.Courier);
-  const boldFont = await pdfDoc.embedFont(StandardFonts.CourierBold);
+  const { regular: regularFont, bold: boldFont } = await embedBrandFonts(pdfDoc);
+  const measure: Measure = (text, bold = false) => (bold ? boldFont : regularFont).widthOfTextAtSize(text, FONT_SIZE);
+
+  const layout = buildThermalLayout(bill, settings, printWidth, measure);
 
   // Try the studio logo for the top of the receipt (same as thermal preview).
   let logo: { image: Awaited<ReturnType<PDFDocument['embedPng']>>; w: number; h: number } | null = null;
@@ -123,10 +99,26 @@ export async function generateBillPDF(
     // no logo — receipt still fine
   }
 
+  // Mirrors the draw loop's own y-advancement exactly, computed upfront
+  // since the page height has to be fixed before anything is drawn.
+  const rowHeight = (row: ThermalRow): number => {
+    switch (row.kind) {
+      case 'blank':
+        return LINE_HEIGHT * 0.6;
+      case 'divider':
+        return LINE_HEIGHT * 0.5;
+      case 'itemRow':
+        return row.nameLines.length * LINE_HEIGHT + (row.totalsOnLastLine ? 0 : LINE_HEIGHT);
+      default:
+        return LINE_HEIGHT;
+    }
+  };
+  const contentHeight = layout.rows.reduce((sum, r) => sum + rowHeight(r), 0);
+
   const topPad = 14;
   const bottomPad = 14;
   const logoBlock = logo ? logo.h + 8 : 0;
-  const pageHeight = topPad + logoBlock + lines.length * LINE_HEIGHT + bottomPad;
+  const pageHeight = topPad + logoBlock + contentHeight + bottomPad;
 
   const page = pdfDoc.addPage([pageWidth, pageHeight]);
   let y = pageHeight - topPad;
@@ -143,39 +135,78 @@ export async function generateBillPDF(
 
   const BLACK = rgb(0, 0, 0);
   const GRAY = rgb(0.45, 0.45, 0.45);
-  // Where an underscore glyph sits within its own em box (near the very
-  // bottom, at descender level) — a whole line of them, drawn at the normal
-  // text baseline, reads as if there's a gap ABOVE the divider rather than a
-  // line sitting mid-row like the a4invoice.ts dividers (real drawLine
-  // calls there, not text). Every divider line below is drawn the same way
-  // instead, positioned mid-row, which removes that illusion.
-  const DIVIDER_Y_OFFSET = FONT_SIZE * 0.32;
 
-  for (const line of lines) {
-    y -= LINE_HEIGHT;
-    if (!line.text) continue;
+  const drawAt = (text: string, x: number, yPos: number, bold: boolean) => {
+    if (!text) return;
+    page.drawText(text, { x: x + LEFT_SHIFT, y: yPos, size: FONT_SIZE, font: bold ? boldFont : regularFont, color: BLACK });
+  };
+  const rightX = (text: string, edge: number, bold: boolean) => edge - measure(text, bold);
+  const centerX = (text: string, bold: boolean) => (printWidth - measure(text, bold)) / 2;
+  const { columns } = layout;
 
-    if (line.separator) {
-      page.drawLine({
-        start: { x: marginX + LEFT_SHIFT, y: y + DIVIDER_Y_OFFSET },
-        end: { x: marginX + textWidth + LEFT_SHIFT, y: y + DIVIDER_Y_OFFSET },
-        thickness: 0.75,
-        color: GRAY,
-      });
-      continue;
+  for (const row of layout.rows) {
+    switch (row.kind) {
+      case 'blank': {
+        y -= rowHeight(row);
+        break;
+      }
+      case 'divider': {
+        const h = rowHeight(row);
+        y -= h;
+        const lineY = y + h / 2;
+        page.drawLine({
+          start: { x: marginX + LEFT_SHIFT, y: lineY },
+          end: { x: marginX + printWidth + LEFT_SHIFT, y: lineY },
+          thickness: 0.75,
+          color: GRAY,
+        });
+        break;
+      }
+      case 'line': {
+        y -= LINE_HEIGHT;
+        const bold = !!row.bold;
+        const x =
+          row.align === 'center' ? centerX(row.text, bold) : row.align === 'right' ? rightX(row.text, printWidth, bold) : 0;
+        drawAt(row.text, marginX + x, y, bold);
+        break;
+      }
+      case 'split': {
+        y -= LINE_HEIGHT;
+        const bold = !!row.bold;
+        if (row.left) drawAt(row.left, marginX, y, bold);
+        if (row.right) drawAt(row.right, marginX + rightX(row.right, printWidth, bold), y, bold);
+        break;
+      }
+      case 'itemHeader': {
+        y -= LINE_HEIGHT;
+        drawAt('SN', marginX, y, true);
+        drawAt('Product', marginX + columns.productX, y, true);
+        drawAt('Qty', marginX + rightX('Qty', columns.qtyRight, true), y, true);
+        drawAt('Price', marginX + rightX('Price', columns.priceRight, true), y, true);
+        drawAt('Amt', marginX + rightX('Amt', columns.amtRight, true), y, true);
+        break;
+      }
+      case 'itemRow': {
+        row.nameLines.forEach((nameLine, i) => {
+          y -= LINE_HEIGHT;
+          if (i === 0) drawAt(row.sn, marginX, y, false);
+          drawAt(nameLine, marginX + columns.productX, y, false);
+          const isLastNameLine = i === row.nameLines.length - 1;
+          if (isLastNameLine && row.totalsOnLastLine) {
+            drawAt(row.qty, marginX + rightX(row.qty, columns.qtyRight, false), y, false);
+            drawAt(row.price, marginX + rightX(row.price, columns.priceRight, false), y, false);
+            drawAt(row.amt, marginX + rightX(row.amt, columns.amtRight, false), y, false);
+          }
+        });
+        if (!row.totalsOnLastLine) {
+          y -= LINE_HEIGHT;
+          drawAt(row.qty, marginX + rightX(row.qty, columns.qtyRight, false), y, false);
+          drawAt(row.price, marginX + rightX(row.price, columns.priceRight, false), y, false);
+          drawAt(row.amt, marginX + rightX(row.amt, columns.amtRight, false), y, false);
+        }
+        break;
+      }
     }
-
-    const font: PDFFont = line.bold ? boldFont : regularFont;
-    const size = FONT_SIZE;
-
-    let x = marginX;
-    if (line.center) {
-      const w = font.widthOfTextAtSize(line.text, size);
-      x = (pageWidth - w) / 2;
-    }
-    x += LEFT_SHIFT;
-
-    page.drawText(line.text, { x, y, size, font, color: BLACK });
   }
 
   return pdfDoc.save();

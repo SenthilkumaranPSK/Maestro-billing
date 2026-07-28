@@ -88,6 +88,9 @@ export interface Bill {
   serviceDescription?: string;
   serviceFrom?: string;
   serviceTo?: string;
+  // Arbitrary list of service dates, replacing the old from/to range — see
+  // backend schema.prisma Bill.serviceDates.
+  serviceDates?: string[];
   // Whether item prices were entered GST-inclusive (tax extracted from the
   // sticker price) or GST-exclusive (tax added on top, the default).
   gstInclusive: boolean;
@@ -131,6 +134,10 @@ export interface Settings {
   general: {
     currency_symbol: string;
     currency_code: string;
+    // 'false' hides the WhatsApp checkbox/buttons on the New Bill screen.
+    // Missing (older installs that predate this setting) or any other value
+    // means "show" — this must default to today's behaviour, not opt-in.
+    show_whatsapp_on_billing: string;
   };
 }
 

@@ -96,6 +96,8 @@ export const createBillSchema = z.object({
   serviceDescription: z.string().max(500, 'Service description too long').optional(),
   serviceFrom: z.string().refine(isValidDateString, 'Invalid service-from date').optional(),
   serviceTo: z.string().refine(isValidDateString, 'Invalid service-to date').optional(),
+  // Arbitrary list of service dates, replacing the old from/to range.
+  serviceDates: z.array(z.string().refine(isValidDateString, 'Invalid service date')).max(20, 'Too many service dates').optional(),
   gstInclusive: z.boolean().optional(),
 });
 

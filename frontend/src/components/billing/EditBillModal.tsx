@@ -43,6 +43,7 @@ export function EditBillModal({ bill, onClose, onSaved }: EditBillModalProps) {
     name: bill.customer?.name ?? '',
     phone: bill.customer?.phone ?? '',
     gstin: bill.customer?.gstin ?? '',
+    address: bill.customer?.address ?? '',
   });
   const [items, setItems] = useState<BillItemForm[]>(
     bill.items.map((i) => ({
@@ -65,12 +66,17 @@ export function EditBillModal({ bill, onClose, onSaved }: EditBillModalProps) {
   // Service Details fields + HSN/SAC column, Thermal stays compact. Default
   // guessed from whether this bill already has service info on it.
   const [layout, setLayout] = useState<BillLayout>(
-    bill.serviceDescription || bill.serviceFrom || bill.serviceTo ? 'a4' : 'thermal',
+    bill.serviceDescription || bill.serviceFrom || bill.serviceTo || bill.serviceDates?.length ? 'a4' : 'thermal',
   );
   const [gstInclusive, setGstInclusive] = useState(bill.gstInclusive);
   const [serviceDescription, setServiceDescription] = useState(bill.serviceDescription ?? '');
-  const [serviceFrom, setServiceFrom] = useState(bill.serviceFrom?.slice(0, 10) ?? '');
-  const [serviceTo, setServiceTo] = useState(bill.serviceTo?.slice(0, 10) ?? '');
+  // Prefer the new serviceDates list; fall back to the old from/to range for
+  // a bill saved before this field existed, so editing it doesn't lose data.
+  const [serviceDates, setServiceDates] = useState<string[]>(() => {
+    if (bill.serviceDates?.length) return bill.serviceDates;
+    const legacy = [bill.serviceFrom?.slice(0, 10), bill.serviceTo?.slice(0, 10)].filter(Boolean) as string[];
+    return legacy.length ? legacy : [''];
+  });
 
   // Integer-paise totals mirroring the backend's per-item rounding — see
   // lib/billMath for the same math.
@@ -122,6 +128,7 @@ export function EditBillModal({ bill, onClose, onSaved }: EditBillModalProps) {
           name: customer.name.trim(),
           phone: customer.phone.trim(),
           gstin: customer.gstin?.trim() || undefined,
+          address: customer.address?.trim() || undefined,
         });
         customerId = created.id;
         qc.invalidateQueries({ queryKey: ['customers'] });
@@ -150,8 +157,7 @@ export function EditBillModal({ bill, onClose, onSaved }: EditBillModalProps) {
       // actually in state, or switching back to Thermal right before Save
       // would silently wipe out Service Details the bill already had.
       serviceDescription: serviceDescription.trim() || undefined,
-      serviceFrom: serviceFrom || undefined,
-      serviceTo: serviceTo || undefined,
+      serviceDates: serviceDates.filter(Boolean).length ? serviceDates.filter(Boolean) : undefined,
       gstInclusive,
     });
   };
@@ -183,7 +189,7 @@ export function EditBillModal({ bill, onClose, onSaved }: EditBillModalProps) {
             <CardContent className="pt-4 pb-4 grid grid-cols-12 gap-4 items-end">
               <div className="col-span-8">
                 <Label className="text-xs text-muted-foreground mb-1.5 block">Customer</Label>
-                <CustomerBar value={customer} onChange={setCustomer} />
+                <CustomerBar value={customer} onChange={setCustomer} showAddress={layout === 'a4'} />
               </div>
               <div className="col-span-4">
                 <Label className="text-xs text-muted-foreground mb-1.5 block">Date</Label>
@@ -206,13 +212,41 @@ export function EditBillModal({ bill, onClose, onSaved }: EditBillModalProps) {
                     <Label className="text-xs text-muted-foreground mb-1.5 block">Service Description</Label>
                     <ServiceDescriptionInput value={serviceDescription} onChange={setServiceDescription} />
                   </div>
-                  <div className="col-span-3">
-                    <Label className="text-xs text-muted-foreground mb-1.5 block">Service From</Label>
-                    <Input type="date" value={serviceFrom} onChange={(e) => setServiceFrom(e.target.value)} />
-                  </div>
-                  <div className="col-span-3">
-                    <Label className="text-xs text-muted-foreground mb-1.5 block">Service To</Label>
-                    <Input type="date" value={serviceTo} onChange={(e) => setServiceTo(e.target.value)} />
+                  <div className="col-span-6">
+                    <Label className="text-xs text-muted-foreground mb-1.5 block">Service Date(s)</Label>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {serviceDates.map((date, idx) => (
+                        <div key={idx} className="flex items-center gap-1">
+                          <Input
+                            type="date"
+                            className="w-auto"
+                            value={date}
+                            onChange={(e) =>
+                              setServiceDates((prev) => prev.map((d, i) => (i === idx ? e.target.value : d)))
+                            }
+                          />
+                          {serviceDates.length > 1 && (
+                            <button
+                              type="button"
+                              title="Remove date"
+                              onClick={() => setServiceDates((prev) => prev.filter((_, i) => i !== idx))}
+                              className="text-slate-400 hover:text-red-600 p-1"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-9"
+                        onClick={() => setServiceDates((prev) => [...prev, ''])}
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                      </Button>
+                    </div>
                   </div>
                 </div>
               </CardContent>

@@ -1,5 +1,5 @@
 import { useState, useEffect, useDeferredValue } from 'react';
-import { Search, FileText, Eye, Pencil, Ban, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Search, FileText, Printer, Eye, Pencil, Ban, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link, useLocation } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
@@ -15,7 +15,7 @@ import {
 } from '@/components/ui/select';
 import { BillDetailModal } from '@/components/billing/BillDetailModal';
 import { EditBillModal } from '@/components/billing/EditBillModal';
-import { LayoutToggle, type BillLayout } from '@/components/billing/LayoutToggle';
+import { LayoutToggle, guessBillLayout, type BillLayout } from '@/components/billing/LayoutToggle';
 import { billsApi } from '@/api/bills';
 import { settingsApi } from '@/api/settings';
 // pdf-lib is heavy (~400KB) — loaded on demand so the app starts fast.
@@ -99,13 +99,37 @@ export default function HistoryPage() {
 
   const totalPages = Math.ceil((data?.meta.total ?? 0) / LIMIT);
 
+  // Falls back to a guess (A4-only fields present -> 'a4'), not a hardcoded
+  // 'thermal', so a bill that was actually created in A4 mode doesn't
+  // silently download/print as the thermal receipt just because nobody
+  // clicked the row's A4 toggle first. See guessBillLayout for the reasoning.
+  const layoutFor = (bill: Bill): BillLayout => rowLayout[bill.id] ?? guessBillLayout(bill);
+
   const handleDownloadPDF = async (bill: Bill) => {
-    if ((rowLayout[bill.id] ?? 'thermal') === 'a4') {
+    if (layoutFor(bill) === 'a4') {
       const { downloadA4InvoicePDF } = await loadA4Lib();
       await downloadA4InvoicePDF(bill, settings ?? {});
     } else {
       const { downloadBillPDF } = await loadPdfLib();
       await downloadBillPDF(bill, settings ?? {});
+    }
+  };
+
+  const handlePrint = async (bill: Bill) => {
+    if (layoutFor(bill) === 'a4') {
+      const { printA4InvoicePDF } = await loadA4Lib();
+      await printA4InvoicePDF(bill, settings ?? {});
+      return;
+    }
+    try {
+      const { printThermalReceipt } = await import('@/lib/printThermal');
+      await printThermalReceipt(bill, settings ?? {});
+    } catch (err) {
+      toast({
+        title: 'Could not print the receipt',
+        description: err instanceof Error ? err.message : String(err),
+        variant: 'destructive',
+      });
     }
   };
 
@@ -217,9 +241,12 @@ export default function HistoryPage() {
                         )}
                         <LayoutToggle
                           compact
-                          value={rowLayout[bill.id] ?? 'thermal'}
+                          value={layoutFor(bill)}
                           onChange={(v) => setRowLayout((prev) => ({ ...prev, [bill.id]: v }))}
                         />
+                        <Button variant="ghost" size="icon" className="h-7 w-7" title="Print" onClick={() => handlePrint(bill)}>
+                          <Printer className="h-3.5 w-3.5" />
+                        </Button>
                         <Button variant="ghost" size="icon" className="h-7 w-7" title="Download PDF" onClick={() => handleDownloadPDF(bill)}>
                           <FileText className="h-3.5 w-3.5" />
                         </Button>

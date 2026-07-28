@@ -20,6 +20,7 @@ import { errorHandler } from './middleware/errorHandler';
 import { WhatsAppService } from './services/WhatsAppService';
 import { BackupService, getConfiguredBackupDir } from './services/BackupService';
 import { ReportService, previousMonthYm } from './services/ReportService';
+import { runPendingMigrations } from './utils/runMigrations';
 
 const prisma = new PrismaClient();
 const whatsapp = new WhatsAppService();
@@ -36,6 +37,12 @@ process.on('uncaughtException', (err) => {
 
 async function main() {
   const isDev = process.env.NODE_ENV !== 'production';
+
+  // Bring an existing database up to the current schema before anything
+  // else touches it — an installer upgrade replaces this app's code but
+  // never the user's already-installed database file. See runMigrations.ts.
+  const migrationsDir = path.resolve(__dirname, '..', 'prisma', 'migrations');
+  await runPendingMigrations(prisma, migrationsDir);
 
   const app = Fastify({
     bodyLimit: 10_485_760, // 10 MB

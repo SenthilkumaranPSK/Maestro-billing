@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, Printer, FileText, Save, RotateCcw, CalendarDays } from 'lucide-react';
+import { Plus, Printer, FileText, Save, RotateCcw, CalendarDays, X } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -103,8 +103,9 @@ export default function BillingPage() {
   // A4-only fields — optional, shown collapsed since most bills never need
   // them (per-unit retail sales rather than a dated service engagement).
   const [serviceDescription, setServiceDescription] = useState('');
-  const [serviceFrom, setServiceFrom] = useState('');
-  const [serviceTo, setServiceTo] = useState('');
+  // Arbitrary list of service dates (replacing the old single from/to range)
+  // — always at least one input shown, "+" appends another.
+  const [serviceDates, setServiceDates] = useState<string[]>(['']);
   // Whole-bill GST pricing mode — see components/billing/GstModeToggle.
   const [gstInclusive, setGstInclusive] = useState(false);
 
@@ -119,6 +120,10 @@ export default function BillingPage() {
     queryKey: ['settings'],
     queryFn: settingsApi.get,
   });
+  // Settings → WhatsApp Integration → "Show WhatsApp option on the New Bill
+  // screen". Missing (older installs) or anything but the literal string
+  // 'false' means show — must default to today's behaviour on upgrade.
+  const showWhatsapp = settings?.general?.show_whatsapp_on_billing !== 'false';
 
   // Thermal printer availability — polled so plugging the printer in (or
   // turning it on) is reflected without a page reload.
@@ -224,6 +229,7 @@ export default function BillingPage() {
           name: customer.name.trim(),
           phone: customer.phone.trim(),
           gstin: customer.gstin?.trim() || undefined,
+          address: customer.address?.trim() || undefined,
         });
         customerId = created.id;
         qc.invalidateQueries({ queryKey: ['customers'] });
@@ -251,8 +257,7 @@ export default function BillingPage() {
       // actually in state, or switching back to Thermal right before Save
       // would silently wipe out Service Details the operator already typed.
       serviceDescription: serviceDescription.trim() || undefined,
-      serviceFrom: serviceFrom || undefined,
-      serviceTo: serviceTo || undefined,
+      serviceDates: serviceDates.filter(Boolean).length ? serviceDates.filter(Boolean) : undefined,
       gstInclusive,
     });
   };
@@ -268,7 +273,7 @@ export default function BillingPage() {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [savedBill, items, customer, createBillMutation.isPending, layout, gstInclusive, serviceDescription, serviceFrom, serviceTo]);
+  }, [savedBill, items, customer, createBillMutation.isPending, layout, gstInclusive, serviceDescription, serviceDates]);
 
   const handleWhatsAppShare = async () => {
     if (!savedBill || !customer.phone) return;
@@ -346,17 +351,16 @@ export default function BillingPage() {
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
-  }, [savedBill, items, customer, createBillMutation.isPending, layout, gstInclusive, serviceDescription, serviceFrom, serviceTo]);
+  }, [savedBill, items, customer, createBillMutation.isPending, layout, gstInclusive, serviceDescription, serviceDates]);
 
   const handleReset = () => {
-    setCustomer({ name: '', phone: '', gstin: '' });
+    setCustomer({ name: '', phone: '', gstin: '', address: '' });
     setItems([newEmptyItem()]);
     setSendOnWhatsApp(false);
     setSavedBill(null);
     setLayout('thermal');
     setServiceDescription('');
-    setServiceFrom('');
-    setServiceTo('');
+    setServiceDates(['']);
     setGstInclusive(false);
     qc.invalidateQueries({ queryKey: ['bills', 'next-number'] });
     qc.refetchQueries({ queryKey: ['bills', 'next-number'] });
@@ -420,7 +424,7 @@ export default function BillingPage() {
                 <FileText className="w-3.5 h-3.5 mr-1.5" />
                 PDF
               </Button>
-              {customer.phone && (
+              {showWhatsapp && customer.phone && (
                 <Button
                   size="sm"
                   className="bg-whatsapp hover:bg-whatsapp-hover text-white border-0"
@@ -446,7 +450,7 @@ export default function BillingPage() {
         <CardContent className="pt-4 pb-4 grid grid-cols-12 gap-4 items-end">
           <div className="col-span-8">
             <Label className="text-xs text-muted-foreground mb-1.5 block">Customer</Label>
-            <CustomerBar value={customer} onChange={setCustomer} disabled={!!savedBill} />
+            <CustomerBar value={customer} onChange={setCustomer} disabled={!!savedBill} showAddress={layout === 'a4'} />
           </div>
           <div className="col-span-4">
             <Label className="text-xs text-muted-foreground mb-1.5 flex items-center gap-1">
@@ -476,13 +480,44 @@ export default function BillingPage() {
                   onChange={setServiceDescription}
                 />
               </div>
-              <div className="col-span-3">
-                <Label className="text-xs text-muted-foreground mb-1.5 block">Service From</Label>
-                <Input type="date" value={serviceFrom} disabled={!!savedBill} onChange={(e) => setServiceFrom(e.target.value)} />
-              </div>
-              <div className="col-span-3">
-                <Label className="text-xs text-muted-foreground mb-1.5 block">Service To</Label>
-                <Input type="date" value={serviceTo} disabled={!!savedBill} onChange={(e) => setServiceTo(e.target.value)} />
+              <div className="col-span-6">
+                <Label className="text-xs text-muted-foreground mb-1.5 block">Service Date(s)</Label>
+                <div className="flex flex-wrap items-center gap-2">
+                  {serviceDates.map((date, idx) => (
+                    <div key={idx} className="flex items-center gap-1">
+                      <Input
+                        type="date"
+                        className="w-auto"
+                        value={date}
+                        disabled={!!savedBill}
+                        onChange={(e) =>
+                          setServiceDates((prev) => prev.map((d, i) => (i === idx ? e.target.value : d)))
+                        }
+                      />
+                      {serviceDates.length > 1 && !savedBill && (
+                        <button
+                          type="button"
+                          title="Remove date"
+                          onClick={() => setServiceDates((prev) => prev.filter((_, i) => i !== idx))}
+                          className="text-slate-400 hover:text-red-600 p-1"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                  {!savedBill && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-9"
+                      onClick={() => setServiceDates((prev) => [...prev, ''])}
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                    </Button>
+                  )}
+                </div>
               </div>
             </div>
         </CardContent>
@@ -601,24 +636,26 @@ export default function BillingPage() {
           {/* Quick save button also here for convenience */}
           {!savedBill && (
             <div className="space-y-2">
-              <label
-                className={`flex items-center gap-2 rounded-md border px-3 py-2 text-sm select-none ${
-                  customer.phone.trim()
-                    ? 'cursor-pointer border-whatsapp/40 bg-emerald-50/60 text-slate-700'
-                    : 'cursor-not-allowed border-slate-200 bg-slate-50 text-muted-foreground opacity-60'
-                }`}
-                title={customer.phone.trim() ? undefined : 'Enter a customer phone number to enable'}
-              >
-                <input
-                  type="checkbox"
-                  className="h-4 w-4 accent-whatsapp"
-                  checked={sendOnWhatsApp}
-                  disabled={!customer.phone.trim()}
-                  onChange={(e) => setSendOnWhatsApp(e.target.checked)}
-                />
-                <WhatsAppIcon className="w-4 h-4 text-whatsapp shrink-0" />
-                Send on WhatsApp after saving
-              </label>
+              {showWhatsapp && (
+                <label
+                  className={`flex items-center gap-2 rounded-md border px-3 py-2 text-sm select-none ${
+                    customer.phone.trim()
+                      ? 'cursor-pointer border-whatsapp/40 bg-emerald-50/60 text-slate-700'
+                      : 'cursor-not-allowed border-slate-200 bg-slate-50 text-muted-foreground opacity-60'
+                  }`}
+                  title={customer.phone.trim() ? undefined : 'Enter a customer phone number to enable'}
+                >
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 accent-whatsapp"
+                    checked={sendOnWhatsApp}
+                    disabled={!customer.phone.trim()}
+                    onChange={(e) => setSendOnWhatsApp(e.target.checked)}
+                  />
+                  <WhatsAppIcon className="w-4 h-4 text-whatsapp shrink-0" />
+                  Send on WhatsApp after saving
+                </label>
+              )}
               <Button
                 className="w-full"
                 onClick={handleSave}
@@ -644,7 +681,7 @@ export default function BillingPage() {
                 <FileText className="w-4 h-4 mr-2" />
                 Download PDF
               </Button>
-              {customer.phone && (
+              {showWhatsapp && customer.phone && (
                 <Button
                   className="w-full bg-whatsapp hover:bg-whatsapp-hover text-white border-0"
                   onClick={handleWhatsAppShare}

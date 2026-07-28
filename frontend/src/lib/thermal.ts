@@ -88,34 +88,34 @@ function rightAlign(text: string, charWidth: number): string {
 }
 
 /**
- * Three-column row: `left` at the start, `right` right-aligned at the end,
- * `mid` squeezed into the gap between them (used only for the Sub Total row's
- * total-quantity figure). Silently drops `mid` if there isn't room for all
- * three on narrow (58mm) paper — `left`/`right` still always fit.
- */
-function rpad3(left: string, mid: string, right: string, charWidth: number): string {
-  const chars = new Array(charWidth).fill(' ');
-  const place = (s: string, start: number) => {
-    for (let i = 0; i < s.length && start + i < charWidth; i++) chars[start + i] = s[i];
-  };
-  place(left, 0);
-  const rightStart = Math.max(0, charWidth - right.length);
-  place(right, rightStart);
-  const midStart = rightStart - mid.length - 2;
-  if (midStart >= left.length + 1) place(mid, midStart);
-  return chars.join('');
-}
-
-/**
  * Whole-rupee amounts print without decimals (e.g. "5,000"); anything with a
  * paisa remainder always gets exactly 2 decimals, never a stray 1 decimal.
+ * Exported: shared with thermalLayout.ts, which needs identical formatting
+ * whether it ends up on the PDF or the physical raster print.
  */
-function formatAmt(paise: number): string {
+export function formatAmt(paise: number): string {
   const hasFraction = Math.round(paise) % 100 !== 0;
   return paisaToRupee(paise).toLocaleString('en-IN', {
     minimumFractionDigits: hasFraction ? 2 : 0,
     maximumFractionDigits: 2,
   });
+}
+
+// Product.unit is a full word ("piece", "session", …) sized for the Products
+// page and the A4 invoice, where there's room for it. The thermal receipt's
+// narrow Qty column needs it abbreviated to keep every row the same width as
+// the header, whatever unit the product is set to. Module-level (not inside
+// buildReceiptPreview) and exported so thermalLayout.ts shares the exact same
+// abbreviations rather than risking a second, drifting copy.
+const UNIT_ABBR: Record<string, string> = {
+  piece: 'Pc', photo: 'Ph', album: 'Al', set: 'Set',
+  frame: 'Fr', session: 'Ses', roll: 'Rl', print: 'Pr', no: 'No',
+};
+function capitalize(s: string): string {
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+}
+export function abbrUnit(u: string): string {
+  return UNIT_ABBR[u.toLowerCase()] ?? capitalize(u).slice(0, 3);
 }
 
 /**
@@ -259,18 +259,6 @@ export function buildReceiptPreview(
   // with zero gap.
   const colFit = (text: string, width: number) =>
     text.length >= width ? ` ${text}` : text.padStart(width, ' ');
-  const capitalize = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
-  // Product.unit is a full word ("piece", "session", …) sized for the
-  // Products page and the A4 invoice, where there's room for it. On the
-  // thermal receipt's narrow Qty column, a full word (e.g. "1 Piece")
-  // overflows and throws the Price/Amt columns out of alignment with the
-  // header above them — abbreviate to keep every row the same width as the
-  // header, whatever unit the product is set to.
-  const UNIT_ABBR: Record<string, string> = {
-    piece: 'Pc', photo: 'Ph', album: 'Al', set: 'Set',
-    frame: 'Fr', session: 'Ses', roll: 'Rl', print: 'Pr', no: 'No',
-  };
-  const abbrUnit = (u: string) => UNIT_ABBR[u.toLowerCase()] ?? capitalize(u).slice(0, 3);
 
   // Qty/Price/Amt sit in right-hand columns sized to THIS bill's widest
   // actual value, with Product taking whatever's left.
@@ -398,8 +386,7 @@ export function buildReceiptPreview(
   // differs (see billMath.ts), never how the receipt is printed.
   // Boxed like the reference layout: Sub Total on its own, then a divider,
   // then the CGST/SGST/Round Off group, then a divider before Grand Total.
-  const totalQty = bill.items.reduce((s, i) => s + i.qty, 0);
-  lines.push({ text: rpad3('Sub Total', `${totalQty} No`, `Rs ${formatAmt(bill.subTotal)}`, charWidth) });
+  lines.push({ text: rpad('Sub Total', `Rs ${formatAmt(bill.subTotal)}`, charWidth) });
   lines.push({ text: dline, separator: true, center: true });
 
   if (bill.gstAmount > 0) {
@@ -521,10 +508,14 @@ export const ESCPOS_MARGIN_MM = 3;
 /**
  * The print geometry raw ESC/POS output is laid out against.
  *
- * getCharWidth()'s 42 columns is a figure chosen for the PDF's page, NOT what
- * the printer does: a 12-dot font across 576 printable dots is 48 columns.
- * That mismatch is what broke alignment when printing raw — see
- * buildEscPosCommands below.
+ * `charWidth` here is only meaningful to the text-mode FALLBACK path
+ * (buildEscPosCommands below) — getCharWidth()'s 42 columns is a figure
+ * chosen for that printer-font case, not what the printer's own font metrics
+ * actually give at this print width (a 12-dot font across 576 printable dots
+ * is really 48 columns; that mismatch is what broke alignment the first time
+ * this path existed). The brand-font raster path
+ * (lib/thermalRaster.ts) doesn't use `charWidth` at all — it measures real
+ * text with the actual font instead.
  */
 export function getEscPosGeometry(paperWidth: '58' | '80') {
   const totalDots = getPrinterDots(paperWidth);
@@ -586,15 +577,46 @@ function escPosRule(printDots: number): Uint8Array {
 }
 
 /**
- * Build the raw ESC/POS byte stream for a receipt.
+ * Wraps one or more pre-dithered raster blocks (the studio logo, then the
+ * AvantGarde-rendered text block — see lib/thermalRaster.ts) into a
+ * complete, ready-to-send ESC/POS byte stream: init, margins, each raster
+ * block in order, feed, cut.
  *
- * This is the path that produces crisp output on the RP3160. Printing the PDF
- * instead goes through the OS print pipeline, which rasterises the page with
- * antialiasing — and a thermal head is 1-bit, so those greys dither into
- * visible fuzz.
+ * The text block is passed in as multiple chunks rather than one tall image
+ * on purpose: some ESC/POS clone firmware (this printer's included) has a
+ * raster buffer much smaller than the protocol's own 65535-dot height limit,
+ * and a tall image sent as a single GS v 0 can print garbled or truncated.
+ * Splitting into horizontal bands sidesteps that regardless of the actual
+ * buffer size, which isn't documented for this printer class.
+ */
+export function buildEscPosRasterEnvelope(
+  blocks: Array<{ bits: Uint8Array; widthBytes: number; heightDots: number }>,
+  paperWidth: '58' | '80',
+): Uint8Array {
+  const { marginDots, printDots } = getEscPosGeometry(paperWidth);
+  const parts: Uint8Array[] = [INIT, setLeftMargin(marginDots), setPrintWidth(printDots), LEFT];
+  for (const block of blocks) {
+    parts.push(escPosRaster(block.bits, block.widthBytes, block.heightDots));
+  }
+  parts.push(FEED, CUT);
+  return concat(...parts);
+}
+
+/**
+ * Build the raw ESC/POS byte stream for a receipt using the PRINTER'S OWN
+ * built-in font (text mode, not a raster image).
+ *
+ * No longer the default print path — receipts now print in the studio's
+ * AvantGarde brand font via lib/thermalRaster.ts, which requires rasterizing
+ * the whole receipt as a dithered image (see buildEscPosRasterEnvelope
+ * above). This function is kept as the fallback for when that rasterizing
+ * fails for any reason (the brand font failing to load, a canvas being
+ * unavailable) — printer-font text mode is guaranteed crisp and never
+ * depends on a font file being present, so a font hiccup degrades the
+ * receipt's look rather than blocking printing entirely.
  *
  * Two things here are deliberate and were the cause of the misaligned first
- * attempt:
+ * attempt when this WAS the default path:
  *
  * 1. The receipt is laid out at the column count that genuinely fits the
  *    print area, not the PDF's 42. Printing 42-column lines into the

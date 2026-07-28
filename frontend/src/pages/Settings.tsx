@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Smartphone, FileBarChart2, Percent, ChevronRight, Save, AlertTriangle, FolderCog } from 'lucide-react';
+import { Smartphone, FileBarChart2, Percent, ChevronRight, Save, FolderCog } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { whatsappApi } from '@/api/whatsapp';
 import { backupsApi } from '@/api/backups';
+import { settingsApi } from '@/api/settings';
 import { useToast } from '@/hooks/use-toast';
 import { formatDateTime } from '@/lib/utils';
 
@@ -29,6 +30,25 @@ export default function SettingsPage() {
     queryFn: backupsApi.list,
   });
   const backups = backupData?.backups;
+
+  const { data: settingsData } = useQuery({
+    queryKey: ['settings'],
+    queryFn: settingsApi.get,
+  });
+  // Missing (older installs) or anything other than the literal string
+  // 'false' means "show" — this has to default to today's behaviour so an
+  // upgrade never silently hides a feature nobody asked to hide.
+  const showWhatsappOnBilling = settingsData?.general?.show_whatsapp_on_billing !== 'false';
+
+  const setShowWhatsappMutation = useMutation({
+    mutationFn: (value: boolean) => settingsApi.update('show_whatsapp_on_billing', String(value), 'general'),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['settings'] });
+    },
+    onError: (err: Error) => {
+      toast({ title: 'Could not update setting', description: err.message, variant: 'destructive' });
+    },
+  });
 
   // Not versioned/behind the app's /api/v1 prefix — same root-level health
   // route desktop/main.js's waitForServer() polls at startup.
@@ -131,6 +151,22 @@ export default function SettingsPage() {
               Link your studio WhatsApp account once. After that, invoices are sent directly with the PDF attached — no manual download needed.
             </p>
           )}
+
+          <label className="flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm cursor-pointer select-none">
+            <input
+              type="checkbox"
+              className="h-4 w-4 accent-whatsapp"
+              checked={showWhatsappOnBilling}
+              disabled={setShowWhatsappMutation.isPending}
+              onChange={(e) => setShowWhatsappMutation.mutate(e.target.checked)}
+            />
+            <span>
+              Show WhatsApp option on the New Bill screen
+              <span className="block text-xs text-muted-foreground font-normal">
+                Turn off to hide the "Send on WhatsApp" checkbox and buttons while billing. Linking above still works either way.
+              </span>
+            </span>
+          </label>
         </CardContent>
       </Card>
 
@@ -202,19 +238,6 @@ export default function SettingsPage() {
             )}
           </div>
 
-          {backupData && !backupData.onSeparateDrive && (
-            <div className="flex items-start gap-2.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5 mb-3">
-              <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
-              <p className="text-xs text-amber-800">
-                <span className="font-semibold">No second drive found</span> — backups are currently
-                stored on the same drive as the live database ({backupData.backupDir}), so a failed,
-                stolen, or wiped drive would take out both together. Connect a D: or E: drive, or set
-                a Backup Location above pointing at a different drive or network folder, or regularly
-                use <span className="font-medium">Save a Copy</span> below to put one on a USB drive
-                or a cloud-synced folder.
-              </p>
-            </div>
-          )}
           {(backups?.length ?? 0) === 0 ? (
             <p className="text-sm text-muted-foreground py-3 text-center">No backups yet.</p>
           ) : (
