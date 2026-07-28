@@ -74,6 +74,11 @@ const WHATSAPP_INIT_DELAY_MS = 5000;
 // ticks, not the whole sync, so a slow-but-alive link is never interrupted.
 const READY_STALL_TIMEOUT_MS = 180_000;
 
+// Hard ceiling on the whole authenticated→ready wait, however much progress
+// is reported. Without it a client that keeps emitting 'loading_screen' but
+// never reaches 'ready' leaves the UI on "Starting WhatsApp…" forever.
+const READY_ABSOLUTE_TIMEOUT_MS = 600_000;
+
 export class WhatsAppService {
   client: Client | null = null;
   private status: WhatsAppStatus = 'DISCONNECTED';
@@ -87,6 +92,9 @@ export class WhatsAppService {
   private reconnectTimer: NodeJS.Timeout | null = null;
   // Guards the authenticated -> ready gap (see the 'authenticated' handler).
   private readyWatchdog: NodeJS.Timeout | null = null;
+  // When 'authenticated' fired, for the absolute ceiling in armReadyWatchdog.
+  // Null whenever we are not in the authenticated→ready window.
+  private authenticatedAt: number | null = null;
   // Tracks the in-flight initialize() call so shutdown() can wait for it —
   // otherwise a browser that doInitialize() is mid-launch on assigns itself
   // to this.browser *after* shutdown already closed everything, leaking it.
@@ -108,9 +116,16 @@ export class WhatsAppService {
     return this.initPromise;
   }
 
-  /** Schedules a reconnect attempt unless the app is shutting down. Shared by
-   * every failure path (disconnected event, launch failure, init rejection)
-   * so none of them silently strand the service for the rest of the day. */
+  /** Leaves the authenticated→ready window: stops the fuse AND forgets when
+   * it started, so the absolute ceiling never leaks into the next attempt. */
+  private clearReadyWatchdog() {
+    if (this.readyWatchdog) {
+      clearTimeout(this.readyWatchdog);
+      this.readyWatchdog = null;
+    }
+    this.authenticatedAt = null;
+  }
+
   /**
    * (Re)starts the authenticated→ready stall timer.
    *
@@ -125,18 +140,42 @@ export class WhatsAppService {
    * reads as "WhatsApp is broken" and is strictly worse than the original
    * hang. whatsapp-web.js emits 'loading_screen' throughout that window, so
    * a tick there is proof it is still working and the fuse is reset.
+   *
+   * A progress-only fuse can still be starved forever, though, by a client
+   * that keeps emitting 'loading_screen' without ever reaching 'ready' —
+   * which shows up as "Starting WhatsApp…" and no further updates, with no
+   * QR to fall back to and no way out but restarting the app. So there is
+   * also an absolute ceiling measured from 'authenticated': progress buys
+   * time, but not unlimited time.
    */
   private armReadyWatchdog() {
     if (this.readyWatchdog) clearTimeout(this.readyWatchdog);
+    if (this.authenticatedAt == null) this.authenticatedAt = Date.now();
+
+    const elapsed = Date.now() - this.authenticatedAt;
+    const remainingCeiling = READY_ABSOLUTE_TIMEOUT_MS - elapsed;
+    if (remainingCeiling <= 0) {
+      console.warn(
+        `WhatsApp never became ready within ${READY_ABSOLUTE_TIMEOUT_MS / 1000}s of authenticating — reinitializing`,
+      );
+      this.scheduleReconnect();
+      return;
+    }
+
+    const delay = Math.min(READY_STALL_TIMEOUT_MS, remainingCeiling);
     this.readyWatchdog = setTimeout(() => {
       this.readyWatchdog = null;
       console.warn(
-        `WhatsApp made no sync progress for ${READY_STALL_TIMEOUT_MS / 1000}s after authenticating — reinitializing`,
+        `WhatsApp stalled between authenticated and ready (no progress for ${delay / 1000}s) — reinitializing`,
       );
       this.scheduleReconnect();
-    }, READY_STALL_TIMEOUT_MS);
+    }, delay);
   }
 
+  /** Schedules a reconnect attempt unless the app is shutting down. Shared by
+   * every failure path (disconnected event, launch failure, init rejection,
+   * both watchdog limits) so none of them silently strand the service for
+   * the rest of the day. */
   private scheduleReconnect() {
     if (this.shuttingDown) return;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
@@ -145,10 +184,7 @@ export class WhatsAppService {
 
   private async doInitialize() {
     if (this.shuttingDown) return;
-    if (this.readyWatchdog) {
-      clearTimeout(this.readyWatchdog);
-      this.readyWatchdog = null;
-    }
+    this.clearReadyWatchdog();
     if (this.client) {
       await withTimeout(this.client.destroy(), 10_000).catch((err: unknown) => {
         console.error('Failed to destroy previous WhatsApp client:', err);
@@ -181,11 +217,40 @@ export class WhatsAppService {
       return;
     }
 
+    // WA_DATA_DIR lets the desktop app keep the session somewhere writable
+    // (Program Files is read-only for normal users).
+    //
+    // KNOWN LIMITATION — the WhatsApp login does not currently survive an
+    // app restart, and this is why. LocalAuth persists a session purely by
+    // setting `userDataDir` on the puppeteer options, but that is a *launch*
+    // option, and because we hand whatsapp-web.js an already-running
+    // browser's WS endpoint it takes the `puppeteer.connect()` branch
+    // (whatsapp-web.js Client.js ~line 447), which ignores it. So LocalAuth
+    // creates the folder below and nothing is ever written into it — hence
+    // the perpetually empty `.wwebjs_auth/session`.
+    //
+    // The obvious fix (launch our own browser on that same directory) was
+    // tried and reverted — see the note in the launch call above. Solving
+    // this properly means either dropping the WS-endpoint approach (which
+    // costs the stealth plugin that WhatsApp's bot-detection needs) or
+    // driving the login state ourselves; neither is a small change.
+    const authDataPath = path.join(process.env.WA_DATA_DIR ?? process.cwd(), '.wwebjs_auth');
+
     let browserWSEndpoint: string;
     try {
       const browser = await puppeteer.launch({
         headless: true,
         executablePath: browserPath,
+        // NOTE: do NOT add `userDataDir` here to try to persist the
+        // WhatsApp login. It was tried and reverted (2026-07-28), measured
+        // A/B on the same build: with it, whatsapp-web.js's Client.inject()
+        // failed every single time with "Execution context was destroyed,
+        // most likely because of a navigation" — 6/6 inits failed, the
+        // service never reached QR_READY at all, and the UI sat on
+        // "Starting WhatsApp…" forever. Without it: 0 failures, QR on the
+        // first try. Losing session persistence is bad; never being able to
+        // link at all is much worse. See the sessionDir comment below for
+        // why persistence does not work through this code path anyway.
         // No --no-sandbox: this Chrome instance renders live WhatsApp Web
         // content (messages/media from arbitrary contacts) — keep the OS
         // sandbox so a renderer exploit doesn't get direct host access.
@@ -205,7 +270,9 @@ export class WhatsAppService {
       authStrategy: new LocalAuth({
         // WA_DATA_DIR lets the desktop app keep the session in a writable
         // per-user folder (Program Files is read-only for normal users).
-        dataPath: path.join(process.env.WA_DATA_DIR ?? process.cwd(), '.wwebjs_auth'),
+        // Same root the browser above launches its profile from — see the
+        // userDataDir comment there for why that matters.
+        dataPath: authDataPath,
       }),
       puppeteer: {
         browserWSEndpoint,
@@ -223,10 +290,7 @@ export class WhatsAppService {
     });
 
     this.client.on('ready', () => {
-      if (this.readyWatchdog) {
-        clearTimeout(this.readyWatchdog);
-        this.readyWatchdog = null;
-      }
+      this.clearReadyWatchdog();
       this.status = 'CONNECTED';
       this.qrCodeData = null;
       console.log('WhatsApp client is ready and connected!');
@@ -262,10 +326,7 @@ export class WhatsAppService {
     });
 
     this.client.on('auth_failure', () => {
-      if (this.readyWatchdog) {
-        clearTimeout(this.readyWatchdog);
-        this.readyWatchdog = null;
-      }
+      this.clearReadyWatchdog();
       this.status = 'DISCONNECTED';
       this.qrCodeData = null;
       console.warn('WhatsApp authentication failed');
@@ -278,10 +339,7 @@ export class WhatsAppService {
     });
 
     this.client.on('disconnected', () => {
-      if (this.readyWatchdog) {
-        clearTimeout(this.readyWatchdog);
-        this.readyWatchdog = null;
-      }
+      this.clearReadyWatchdog();
       this.status = 'DISCONNECTED';
       this.qrCodeData = null;
       console.warn('WhatsApp client disconnected. Retrying initialization...');
@@ -317,10 +375,7 @@ export class WhatsAppService {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
-    if (this.readyWatchdog) {
-      clearTimeout(this.readyWatchdog);
-      this.readyWatchdog = null;
-    }
+    this.clearReadyWatchdog();
     // Let any in-flight initialize() finish assigning this.client/this.browser
     // before we tear them down, so a browser it just launched can't outlive
     // this call (doInitialize() itself no-ops further work once shuttingDown

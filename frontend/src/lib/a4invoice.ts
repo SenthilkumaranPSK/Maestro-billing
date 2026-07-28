@@ -113,7 +113,11 @@ export async function generateA4InvoicePDF(bill: Bill, settings: Partial<Setting
   const right = PAGE_W - MARGIN;
   const contentW = right - left;
   const outerTop = PAGE_H - MARGIN;
-  const outerBottom = MARGIN;
+  // The lowest the invoice may reach. NOT where it necessarily ends — the
+  // outer border's real bottom (`outerBottom`) is computed further down from
+  // how tall the item table actually needs to be, so a short bill produces a
+  // shorter invoice rather than a stretched one.
+  const pageBottomLimit = MARGIN;
 
   // Thinner throughout, per the studio's request for a more elegant look —
   // was 0.75/1.2/1 originally, then 0.4/0.7/0.6 (grid lines / header divider
@@ -378,17 +382,23 @@ export async function generateA4InvoicePDF(bill: Bill, settings: Partial<Setting
   // divides it by the real row count, so extra rows just make each one
   // proportionally shorter instead of overflowing.
   const totalsBoxH = 22 * 4;
+  // ITEM TABLE HEIGHT (see the note above about what changed and why).
+  //
+  // These blocks used to be pinned to the bottom of the page, with the item
+  // table stretched to fill whatever was left. On a one- or two-item bill
+  // that left a large empty rectangle inside the table border — reported as
+  // "the white box coming below the bill". The table is now sized to its
+  // own content, and the totals / bank / signature blocks (and the outer
+  // border itself) follow it up the page, so a short bill simply produces a
+  // shorter invoice with plain unused paper beneath it.
+  //
+  // The page-bottom limit still caps it: a long bill fills the page and then
+  // compresses proportionally, exactly as before.
   // Sized to what the bank-details block actually needs (16pt down to its
   // header, 15pt gap, then 6 lines at 12.5pt = 106pt) plus a modest 6pt of
   // bottom padding — was a flat 130, which left a visible gap of blank space
   // under the bank details on every invoice regardless of content.
   const bankBoxH = 112;
-  const bankBoxBottom = outerBottom;
-  const bankBoxTop = bankBoxBottom + bankBoxH;
-  const totalsBoxBottom = bankBoxTop;
-  const totalsBoxTop = totalsBoxBottom + totalsBoxH;
-  const tableBottom = totalsBoxTop;
-  const availableTableH = tableHeaderBottom - tableBottom;
 
   const LINE_H = 11;
   const ROW_PAD = 8;
@@ -398,11 +408,29 @@ export async function generateA4InvoicePDF(bill: Bill, settings: Partial<Setting
   );
   const naturalRowHeights = itemLines.map((lines) => Math.max(BASE_ROW_H, lines.length * LINE_H + ROW_PAD));
   const naturalTotalH = naturalRowHeights.reduce((s, h) => s + h, 0);
+
+  // Most the table could occupy before the blocks below it would run past
+  // the page's bottom margin.
+  const maxTableH = tableHeaderBottom - (pageBottomLimit + bankBoxH + totalsBoxH);
+  // A floor so a single short item still reads as a table rather than one
+  // cramped line squeezed against its own border.
+  const MIN_TABLE_H = BASE_ROW_H * 2;
+  const tableH = Math.min(Math.max(naturalTotalH, MIN_TABLE_H), maxTableH);
+
+  const tableBottom = tableHeaderBottom - tableH;
+  const totalsBoxTop = tableBottom;
+  const totalsBoxBottom = totalsBoxTop - totalsBoxH;
+  const bankBoxTop = totalsBoxBottom;
+  const bankBoxBottom = bankBoxTop - bankBoxH;
+  // The invoice's real bottom edge — follows the content up the page on a
+  // short bill instead of always sitting at the page margin.
+  const outerBottom = bankBoxBottom;
+
   // A very long bill (many items / long names) won't fit one A4 page at
   // natural size — compress proportionally as a last resort rather than
   // overlapping the totals/bank blocks. True pagination is a future
   // improvement if that turns out to be a common case.
-  const scale = naturalTotalH > availableTableH && naturalTotalH > 0 ? availableTableH / naturalTotalH : 1;
+  const scale = naturalTotalH > tableH && naturalTotalH > 0 ? tableH / naturalTotalH : 1;
 
   let ty = tableHeaderBottom;
   bill.items.forEach((item, i) => {

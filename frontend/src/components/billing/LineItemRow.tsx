@@ -31,9 +31,19 @@ interface LineItemRowProps {
    * exclusive regardless of the bill's actual GST mode.
    */
   gstInclusive?: boolean;
+  /**
+   * Locks the row. Used once a bill has been SAVED: the rest of the form
+   * (customer, service details, add/remove row) already locks at that point,
+   * but these fields didn't — so qty/price stayed editable while Print, PDF
+   * and WhatsApp all render from the saved server response. Editing them
+   * moved the on-screen Summary and changed nothing that actually printed,
+   * which reads as "the price and qty cannot be changed". Editing a bill
+   * after saving is what Bill History → Edit Bill is for.
+   */
+  disabled?: boolean;
 }
 
-export function LineItemRow({ index, item, onChange, onRemove, includeInactive = false, onRequestNewRow, showHsnSac = false, gstInclusive = false }: LineItemRowProps) {
+export function LineItemRow({ index, item, onChange, onRemove, includeInactive = false, onRequestNewRow, showHsnSac = false, gstInclusive = false, disabled = false }: LineItemRowProps) {
   const [productSearch, setProductSearch] = useState(item.productName);
   const [showDropdown, setShowDropdown] = useState(false);
   const ref = useRef<HTMLTableCellElement>(null);
@@ -103,6 +113,7 @@ export function LineItemRow({ index, item, onChange, onRemove, includeInactive =
             }}
             onFocus={() => setShowDropdown(true)}
             placeholder="Product name…"
+            disabled={disabled}
           />
           {showDropdown && (
             <div className="absolute z-50 w-full min-w-[250px] mt-1 bg-white border rounded-lg shadow-soft-md overflow-y-auto max-h-60 animate-in fade-in-0 zoom-in-95 duration-150">
@@ -147,6 +158,7 @@ export function LineItemRow({ index, item, onChange, onRemove, includeInactive =
           value={item.qty}
           min={1}
           step={1}
+          disabled={disabled}
           onChange={(e) => onChange({ ...item, qty: parseFloat(e.target.value) || 0 })}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && onRequestNewRow) {
@@ -167,6 +179,7 @@ export function LineItemRow({ index, item, onChange, onRemove, includeInactive =
           value={item.unitPrice}
           min={0}
           step={1}
+          disabled={disabled}
           onChange={(e) => onChange({ ...item, unitPrice: parseFloat(e.target.value) || 0 })}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && onRequestNewRow) {
@@ -189,6 +202,7 @@ export function LineItemRow({ index, item, onChange, onRemove, includeInactive =
             className="h-8 text-sm font-mono"
             placeholder="HSN/SAC"
             value={item.hsnSac ?? ''}
+            disabled={disabled}
             onChange={(e) => onChange({ ...item, hsnSac: e.target.value })}
           />
         </td>

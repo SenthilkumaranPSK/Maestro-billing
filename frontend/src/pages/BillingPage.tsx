@@ -572,6 +572,12 @@ export default function BillingPage() {
                         item={item}
                         showHsnSac={layout === 'a4'}
                         gstInclusive={gstInclusive}
+                        // Matches the rest of the form, which already locks
+                        // once saved. Print/PDF/WhatsApp all render from
+                        // `savedBill`, so edits here changed the Summary and
+                        // nothing that actually prints. Use Bill History →
+                        // Edit Bill to change a saved bill.
+                        disabled={!!savedBill}
                         onChange={(updated) =>
                           setItems((prev) => prev.map((i, j) => (j === idx ? updated : i)))
                         }
