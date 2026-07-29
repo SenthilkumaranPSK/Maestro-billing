@@ -1,13 +1,14 @@
 import { useState } from 'react';
-import { Plus, Eye, IndianRupee } from 'lucide-react';
+import { Plus, Eye, IndianRupee, AlertTriangle } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { MmBillDetailModal } from '@/components/billing/MmBillDetailModal';
 import { billsApi } from '@/api/bills';
 import { settingsApi } from '@/api/settings';
+import { mmProductsApi } from '@/api/mmProducts';
 import { formatCurrency, billStatusVariant, type Bill, type BillStatus } from '@/types';
 import { formatDate, todayISO } from '@/lib/utils';
 
@@ -45,6 +46,13 @@ export default function MmDashboardPage() {
     queryKey: ['settings'],
     queryFn: settingsApi.get,
   });
+
+  const { data: allProducts } = useQuery({
+    queryKey: ['mm-products', 'dashboard-low-stock'],
+    queryFn: () => mmProductsApi.list({ active: true }),
+  });
+  // reorderLevel 0 means "no alert configured" for that product.
+  const lowStockProducts = (allProducts ?? []).filter((p) => p.reorderLevel > 0 && p.stockQty <= p.reorderLevel);
 
   const monthBills = (monthData?.data ?? []).filter((b) => b.status !== 'CANCELLED');
   const todayBills = monthBills.filter((b) => b.billDate.slice(0, 10) === today);
@@ -116,6 +124,37 @@ export default function MmDashboardPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Low stock alert */}
+      {lowStockProducts.length > 0 && (
+        <Card className="border-amber-300 bg-amber-50/60">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-2 text-amber-800">
+              <AlertTriangle className="h-4 w-4" />
+              Low Stock — {lowStockProducts.length} product{lowStockProducts.length === 1 ? '' : 's'} need{lowStockProducts.length === 1 ? 's' : ''} reordering
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0">
+            <div className="flex flex-wrap gap-2">
+              {lowStockProducts.slice(0, 8).map((p) => (
+                <Link
+                  key={p.id}
+                  to="/mm-products"
+                  className="inline-flex items-center gap-1.5 rounded-md border border-amber-300 bg-white px-2.5 py-1 text-xs text-amber-800 hover:bg-amber-100 transition-colors"
+                >
+                  {p.name}
+                  <span className="font-semibold tabular-nums">{p.stockQty} {p.unit}</span>
+                </Link>
+              ))}
+              {lowStockProducts.length > 8 && (
+                <Link to="/mm-products" className="inline-flex items-center text-xs text-amber-800 underline px-1">
+                  +{lowStockProducts.length - 8} more
+                </Link>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Recent bills */}
       <Card>

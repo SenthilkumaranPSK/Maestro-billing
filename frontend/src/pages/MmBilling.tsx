@@ -10,11 +10,12 @@ import { LineItemRow } from '@/components/billing/LineItemRow';
 import { billsApi } from '@/api/bills';
 import { mmCustomersApi } from '@/api/mmCustomers';
 import { settingsApi } from '@/api/settings';
+import { whatsappApi } from '@/api/whatsapp';
 import { useToast } from '@/hooks/use-toast';
-import { newId } from '@/lib/utils';
+import { isValidIndianPhone, newId } from '@/lib/utils';
 import { computeLineTotals } from '@/lib/billMath';
-import type { BillItemForm, Bill } from '@/types';
-import { rupeeToPaisa, paisaToRupee, formatCurrency } from '@/types';
+import type { BillItemForm, Bill, Settings } from '@/types';
+import { rupeeToPaisa, paisaToRupee, formatCurrency, shouldShowWhatsappOnBilling } from '@/types';
 
 // pdf-lib is heavy — loaded on demand, same pattern as the main Billing page.
 const loadMmA4Lib = () => import('@/lib/mmA4invoice');
@@ -25,6 +26,51 @@ const loadMmA4Lib = () => import('@/lib/mmA4invoice');
  * own history list). Always renders as the MM/A4 GST Tax Invoice layout —
  * there's no Thermal/A4 toggle here, unlike the main Billing page.
  */
+
+function WhatsAppIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" className={className}>
+      <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" />
+    </svg>
+  );
+}
+
+function buildWhatsAppCaption(billNumber: string, grandTotal: number, customerName?: string): string {
+  return `Dear ${customerName?.trim() || 'Customer'},
+
+Thank you for your business!
+
+MM Bill No: ${billNumber}
+Total Amount: ${formatCurrency(grandTotal)}`;
+}
+
+async function sendBillViaWhatsApp(bill: Bill, phone: string, settings: Partial<Settings>): Promise<void> {
+  const { generateMmA4InvoicePDFBase64 } = await loadMmA4Lib();
+  const pdfBase64 = await generateMmA4InvoicePDFBase64(bill, settings);
+  await whatsappApi.sendPdf({
+    phone,
+    pdfBase64,
+    fileName: `${bill.billNumber}.pdf`,
+    caption: buildWhatsAppCaption(bill.billNumber, bill.grandTotal, bill.mmCustomer?.name),
+  });
+}
+
+/**
+ * Map backend WhatsApp errors to user-friendly messages — same mapping as
+ * the main Billing page.
+ */
+function whatsappErrorMessage(msg: string): string {
+  if (msg.includes('not linked')) {
+    return 'Link WhatsApp in Settings, then tap Send Bill on WhatsApp.';
+  }
+  if (msg.includes('not registered') || msg.includes('is not a WhatsApp')) {
+    return "This number isn't on WhatsApp. Verify with the customer.";
+  }
+  if (msg.includes('Invalid number') || msg.includes('invalid phone')) {
+    return 'Phone number is invalid for WhatsApp.';
+  }
+  return msg;
+}
 
 const newEmptyItem = (defaultGstRate = 5): BillItemForm => ({
   _id: newId(),
@@ -42,6 +88,8 @@ export default function MmBillingPage() {
   const [customer, setCustomer] = useState<CustomerInfo>({ name: '', phone: '' });
   const [items, setItems] = useState<BillItemForm[]>([newEmptyItem()]);
   const [savedBill, setSavedBill] = useState<Bill | null>(null);
+  const [sendOnWhatsApp, setSendOnWhatsApp] = useState(false);
+  const [sendingWhatsApp, setSendingWhatsApp] = useState(false);
 
   // Tax Invoice Details — same fields as the main Billing page's MM/A4 mode,
   // always shown here since MM bills always need them.
@@ -70,6 +118,8 @@ export default function MmBillingPage() {
   // Editable via MM Settings — falls back to the seeded 5% until that
   // setting exists (older installs, or before settings finish loading).
   const defaultGstRate = Number(settings?.mm?.mm_default_gst_rate ?? 5);
+  // Same global "show WhatsApp" setting the main Billing page uses.
+  const showWhatsapp = shouldShowWhatsappOnBilling(settings?.general);
 
   const countedItems = items.filter((i) => i.productName.trim() && i.qty > 0);
   const { subTotalP, gstTotalP } = computeLineTotals(countedItems, false);
@@ -81,10 +131,39 @@ export default function MmBillingPage() {
 
   const createBillMutation = useMutation({
     mutationFn: billsApi.create,
-    onSuccess: (bill) => {
+    onSuccess: async (bill) => {
       setSavedBill(bill);
       qc.invalidateQueries({ queryKey: ['bills'] });
       toast({ title: 'MM Bill saved!', description: `${bill.billNumber} created.`, variant: 'success' });
+
+      if (sendOnWhatsApp && customer.phone.trim()) {
+        if (!isValidIndianPhone(customer.phone.trim())) {
+          toast({
+            title: 'Phone number is invalid',
+            description: 'Bill saved but not sent on WhatsApp.',
+            variant: 'destructive',
+          });
+        } else {
+          setSendingWhatsApp(true);
+          try {
+            await sendBillViaWhatsApp(bill, customer.phone.trim(), settings ?? {});
+            toast({
+              title: 'Sent on WhatsApp!',
+              description: `Invoice ${bill.billNumber}.pdf delivered to ${customer.phone}.`,
+              variant: 'success',
+            });
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : 'Could not send via WhatsApp';
+            toast({
+              title: 'WhatsApp send failed',
+              description: whatsappErrorMessage(msg),
+              variant: 'destructive',
+            });
+          } finally {
+            setSendingWhatsApp(false);
+          }
+        }
+      }
     },
     onError: (err: Error) => {
       toast({ title: 'Error saving MM bill', description: err.message, variant: 'destructive' });
@@ -132,8 +211,10 @@ export default function MmBillingPage() {
       billDate: new Date().toISOString(),
       items: validItems.map((i) => ({
         // MM items never link back to a Product row — see LineItemRow's
-        // catalog='mm' note (productId is a FK into Product only).
+        // catalog='mm' note (productId is a FK into Product only). They
+        // link via mmProductId instead, which is what lets stock auto-deduct.
         productId: undefined,
+        mmProductId: i.mmProductId,
         productName: i.productName,
         hsnSac: i.hsnSac,
         unit: i.unit,
@@ -167,10 +248,41 @@ export default function MmBillingPage() {
     await downloadMmA4InvoicePDF(savedBill, settings ?? {});
   };
 
+  const handleWhatsAppShare = async () => {
+    if (!savedBill || !customer.phone) return;
+    if (!isValidIndianPhone(customer.phone.trim())) {
+      toast({
+        title: 'Phone number is invalid',
+        description: 'Update the customer phone, then tap Send Bill on WhatsApp.',
+        variant: 'destructive',
+      });
+      return;
+    }
+    setSendingWhatsApp(true);
+    try {
+      await sendBillViaWhatsApp(savedBill, customer.phone.trim(), settings ?? {});
+      toast({
+        title: 'Sent on WhatsApp!',
+        description: `Invoice ${savedBill.billNumber}.pdf delivered to ${customer.phone}.`,
+        variant: 'success',
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Could not send via WhatsApp';
+      toast({
+        title: 'WhatsApp send failed',
+        description: whatsappErrorMessage(msg),
+        variant: 'destructive',
+      });
+    } finally {
+      setSendingWhatsApp(false);
+    }
+  };
+
   const handleReset = () => {
     setCustomer({ name: '', phone: '', gstin: '', address: '' });
     setItems([newEmptyItem(defaultGstRate)]);
     setSavedBill(null);
+    setSendOnWhatsApp(false);
     setVehicleNo('');
     setDespatchedThrough('');
     setDestination('');
@@ -217,6 +329,17 @@ export default function MmBillingPage() {
                 <FileText className="w-3.5 h-3.5 mr-1.5" />
                 PDF
               </Button>
+              {showWhatsapp && customer.phone && (
+                <Button
+                  size="sm"
+                  className="bg-whatsapp hover:bg-whatsapp-hover text-white border-0"
+                  onClick={handleWhatsAppShare}
+                  disabled={sendingWhatsApp}
+                >
+                  <WhatsAppIcon className="w-3.5 h-3.5 mr-1.5" />
+                  {sendingWhatsApp ? 'Sending…' : 'WhatsApp'}
+                </Button>
+              )}
             </>
           ) : (
             <Button onClick={handleSave} disabled={createBillMutation.isPending} className="px-6">
@@ -412,10 +535,32 @@ export default function MmBillingPage() {
           </Card>
 
           {!savedBill && (
-            <Button className="w-full" onClick={handleSave} disabled={createBillMutation.isPending}>
-              <Save className="w-4 h-4 mr-2" />
-              {createBillMutation.isPending ? 'Saving…' : 'Save MM Bill'}
-            </Button>
+            <div className="space-y-2">
+              {showWhatsapp && (
+                <label
+                  className={`flex items-center gap-2 rounded-md border px-3 py-2 text-sm select-none ${
+                    customer.phone.trim()
+                      ? 'cursor-pointer border-whatsapp/40 bg-emerald-50/60 text-slate-700'
+                      : 'cursor-not-allowed border-slate-200 bg-slate-50 text-muted-foreground opacity-60'
+                  }`}
+                  title={customer.phone.trim() ? undefined : 'Enter a customer phone number to enable'}
+                >
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 accent-whatsapp"
+                    checked={sendOnWhatsApp}
+                    disabled={!customer.phone.trim()}
+                    onChange={(e) => setSendOnWhatsApp(e.target.checked)}
+                  />
+                  <WhatsAppIcon className="w-4 h-4 text-whatsapp shrink-0" />
+                  Send on WhatsApp after saving
+                </label>
+              )}
+              <Button className="w-full" onClick={handleSave} disabled={createBillMutation.isPending}>
+                <Save className="w-4 h-4 mr-2" />
+                {createBillMutation.isPending ? 'Saving…' : 'Save MM Bill'}
+              </Button>
+            </div>
           )}
 
           {savedBill && (
@@ -428,6 +573,16 @@ export default function MmBillingPage() {
                 <FileText className="w-4 h-4 mr-2" />
                 Download PDF
               </Button>
+              {showWhatsapp && customer.phone && (
+                <Button
+                  className="w-full bg-whatsapp hover:bg-whatsapp-hover text-white border-0"
+                  onClick={handleWhatsAppShare}
+                  disabled={sendingWhatsApp}
+                >
+                  <WhatsAppIcon className="w-4 h-4 mr-2" />
+                  {sendingWhatsApp ? 'Sending on WhatsApp…' : 'Send Bill on WhatsApp'}
+                </Button>
+              )}
             </div>
           )}
         </div>

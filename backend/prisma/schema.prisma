@@ -92,11 +92,57 @@ model MmProduct {
   unitPrice   Int       @map("unit_price")  // in paise
   gstRate     Float     @default(5) @map("gst_rate")
   hsnSac      String?   @default("210690") @map("hsn_sac")
+  // Current quantity on hand, in `unit` above (e.g. Kgs). Auto-decremented
+  // when an MM bill sells this product, auto-restored if that bill is later
+  // edited or cancelled (see BillService) — otherwise a plain manual number
+  // editable on the MM/Products page (e.g. when new stock arrives). Allowed
+  // to go negative: an oversell is a signal to restock, not a blocked action.
+  stockQty    Float     @default(0) @map("stock_qty")
+  // Minimum stock level before this product should be reordered. 0 (the
+  // default) means "no alert configured" — the low-stock badge only shows
+  // once a studio actually sets a real threshold for a product.
+  reorderLevel Float    @default(0) @map("reorder_level")
   isActive    Boolean   @default(true) @map("is_active")
   createdAt   DateTime  @default(now()) @map("created_at")
   updatedAt   DateTime  @updatedAt @map("updated_at")
 
+  billItems   BillItem[]
+  stockMovements MmStockMovement[]
+
   @@map("mm_products")
+}
+
+// ─── MM Stock Movements (inventory ledger for MmProduct) ─────────────────────
+// Every stock change — a sale, a bill edit/cancel reversing one, a restock, or
+// a manual correction — gets its own row here, so stockQty is never just a
+// silent number: there's always a dated, reasoned trail behind it.
+model MmStockMovement {
+  id            Int       @id @default(autoincrement())
+  mmProductId   Int       @map("mm_product_id")
+  // 'SALE' (bill sold this, qtyChange negative), 'RESTORE' (an edited/
+  // cancelled bill reversing a prior SALE, qtyChange positive), 'PURCHASE'
+  // (manual restock via the Restock dialog, qtyChange positive), or
+  // 'CORRECTION' (manual stockQty edit not tied to a purchase, either sign).
+  type          String
+  qtyChange     Float     @map("qty_change")
+  // Snapshot of stockQty right after this movement applied — lets the ledger
+  // render a running balance without recomputing from the full history.
+  balanceAfter  Float     @map("balance_after")
+  // Set for SALE/RESTORE — which bill caused this movement.
+  billId        Int?      @map("bill_id")
+  // Set for PURCHASE — who it was bought from, what it cost, and any
+  // supplier invoice/reference number, entered on the Restock dialog.
+  supplierName  String?   @map("supplier_name")
+  purchaseCost  Int?      @map("purchase_cost") // in paise, total for this restock
+  invoiceRef    String?   @map("invoice_ref")
+  notes         String?
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  mmProduct     MmProduct @relation(fields: [mmProductId], references: [id])
+  bill          Bill?     @relation(fields: [billId], references: [id])
+
+  @@index([mmProductId])
+  @@map("mm_stock_movements")
 }
 
 // ─── Services (reusable catalog for the A4 invoice's Service Description) ─────
@@ -185,6 +231,7 @@ model Bill {
   createdByUser  User?     @relation(fields: [createdBy], references: [id])
   items          BillItem[]
   payments       Payment[]
+  mmStockMovements MmStockMovement[]
 
   // Day/Month/GST reports and history filtering all query by billDate range;
   // the customer ledger queries by customerId — neither had an index.
@@ -200,6 +247,12 @@ model BillItem {
   id          Int      @id @default(autoincrement())
   billId      Int      @map("bill_id")
   productId   Int?     @map("product_id")
+  // Separate FK for MM items — an MmProduct's id is a different row entirely
+  // from Product's, so MM line items link here instead (see LineItemRow's
+  // catalog='mm' handling). Set only when picked from the MM/Products
+  // catalog; a manually-typed item leaves both FKs null. Lets stock
+  // deduction (BillService) trace a sold item back to its MmProduct.
+  mmProductId Int?     @map("mm_product_id")
   productName String   @map("product_name") // denormalized
   hsnSac      String?  @map("hsn_sac")      // denormalized from Product at time of billing
   unit        String   @default("piece")
@@ -213,6 +266,7 @@ model BillItem {
 
   bill        Bill     @relation(fields: [billId], references: [id], onDelete: Cascade)
   product     Product? @relation(fields: [productId], references: [id])
+  mmProduct   MmProduct? @relation(fields: [mmProductId], references: [id])
 
   @@map("bill_items")
 }

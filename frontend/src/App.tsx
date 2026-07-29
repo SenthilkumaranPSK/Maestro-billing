@@ -18,6 +18,9 @@ import MmProductsPage from '@/pages/MmProducts';
 import MmCustomersPage from '@/pages/MmCustomers';
 import MmHistoryPage from '@/pages/MmHistory';
 import MmSettingsPage from '@/pages/MmSettings';
+import MmDayReportPage from '@/pages/MmDayReport';
+import MmMonthReportPage from '@/pages/MmMonthReport';
+import MmGstReportPage from '@/pages/MmGstReport';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -49,6 +52,9 @@ export default function App() {
             <Route path="mm-customers" element={<MmCustomersPage />} />
             <Route path="mm-history" element={<MmHistoryPage />} />
             <Route path="mm-settings" element={<MmSettingsPage />} />
+            <Route path="mm-day-report" element={<MmDayReportPage />} />
+            <Route path="mm-month-report" element={<MmMonthReportPage />} />
+            <Route path="mm-gst-report" element={<MmGstReportPage />} />
           </Route>
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>

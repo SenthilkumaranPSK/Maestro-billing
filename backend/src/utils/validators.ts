@@ -83,7 +83,21 @@ export const mmProductSchema = z.object({
   unitPrice: z.number().int().nonnegative('Price cannot be negative'),
   gstRate: z.number().min(0).max(100),
   hsnSac: z.string().max(20, 'HSN/SAC too long').nullable().optional(),
+  // Allowed negative (an oversold product) — never validated as nonnegative.
+  stockQty: z.number().optional(),
+  // 0 means "no reorder alert configured" for this product.
+  reorderLevel: z.number().optional(),
   isActive: z.boolean().optional(),
+});
+
+// MM restock — a manual purchase entry, separate from the product's own
+// stockQty/reorderLevel fields above.
+export const mmRestockSchema = z.object({
+  qty: z.number().refine((n) => n !== 0, 'Quantity cannot be zero'),
+  supplierName: z.string().max(200, 'Supplier name too long').nullable().optional(),
+  purchaseCost: z.number().int().nonnegative('Cost cannot be negative').nullable().optional(),
+  invoiceRef: z.string().max(100, 'Invoice/reference too long').nullable().optional(),
+  notes: z.string().max(1000, 'Notes too long').nullable().optional(),
 });
 
 export const serviceSchema = z.object({
@@ -93,6 +107,9 @@ export const serviceSchema = z.object({
 
 export const billItemSchema = z.object({
   productId: z.number().int().positive().optional(),
+  // MM billing module only — links a sold item back to its MmProduct so
+  // stock can be auto-deducted (see BillService). Never set for MAIN items.
+  mmProductId: z.number().int().positive().optional(),
   productName: z.string().min(1).max(200, 'Product name too long'),
   // .nullable() too, not just .optional() — products denormalize hsnSac from
   // the Product row, which is a nullable column, so an unset code arrives as

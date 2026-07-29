@@ -5,6 +5,8 @@ export interface PaginationQuery {
 
 export interface BillItemInput {
   productId?: number;
+  // MM billing module only — see schema.prisma BillItem.mmProductId.
+  mmProductId?: number;
   productName: string;
   hsnSac?: string | null;
   unit: string;

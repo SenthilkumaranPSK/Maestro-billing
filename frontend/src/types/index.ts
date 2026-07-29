@@ -50,7 +50,30 @@ export interface MmProduct {
   unitPrice: number; // paise
   gstRate: number;
   hsnSac?: string;
+  // Current quantity on hand, in `unit` — auto-adjusted by MM bill create/
+  // edit/cancel, editable by hand for corrections. Can go negative.
+  stockQty: number;
+  // Minimum stock level before a reorder alert shows. 0 = no alert configured.
+  reorderLevel: number;
   isActive: boolean;
+}
+
+/** One entry in an MmProduct's stock ledger — see backend schema.prisma
+ * MmStockMovement. Every stock change (sale, restore, purchase, correction)
+ * is a row here, not just a silent number change. */
+export interface MmStockMovement {
+  id: number;
+  mmProductId: number;
+  type: 'SALE' | 'RESTORE' | 'PURCHASE' | 'CORRECTION';
+  qtyChange: number;
+  balanceAfter: number;
+  billId?: number;
+  bill?: { billNumber: string };
+  supplierName?: string;
+  purchaseCost?: number; // paise
+  invoiceRef?: string;
+  notes?: string;
+  createdAt: string;
 }
 
 /** Reusable catalog entry feeding the Service Description autocomplete on A4 invoices. */
@@ -64,6 +87,7 @@ export interface BillItem {
   id: number;
   billId: number;
   productId?: number;
+  mmProductId?: number;
   productName: string;
   hsnSac?: string;
   unit: string;
@@ -143,6 +167,8 @@ export interface Bill {
 export interface BillItemForm {
   _id: string;           // stable React key (UI-only, not sent to API)
   productId?: number;
+  // MM billing module only — see backend schema.prisma BillItem.mmProductId.
+  mmProductId?: number;
   productName: string;
   hsnSac?: string;
   unit: string;

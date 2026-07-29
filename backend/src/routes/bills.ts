@@ -192,9 +192,16 @@ export async function billRoutes(fastify: FastifyInstance) {
 
     // Mark CANCELLED but keep the bill visible in history (audit trail).
     // Revenue and GST figures exclude CANCELLED bills on the frontend.
-    await prisma.bill.update({
-      where: { id },
-      data: { status: 'CANCELLED' },
+    // For an MM bill, the goods weren't actually sold after all — restore
+    // whatever stock this bill deducted, in the same transaction as the
+    // status change so a crash mid-cancel can't leave one without the other.
+    await prisma.$transaction(async (tx) => {
+      const items = await tx.billItem.findMany({ where: { billId: id } });
+      await billService.adjustMmStock(tx, items, 1, id);
+      await tx.bill.update({
+        where: { id },
+        data: { status: 'CANCELLED' },
+      });
     });
 
     try {

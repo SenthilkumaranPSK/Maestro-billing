@@ -112,7 +112,7 @@ export function LineItemRow({ index, item, onChange, onRemove, includeInactive =
               // Price is fixed by the selected product; typing a name breaks
               // the product link, so the old price (and HSN/SAC) must not
               // linger silently.
-              onChange({ ...item, productName: e.target.value, productId: undefined, unitPrice: 0, hsnSac: undefined });
+              onChange({ ...item, productName: e.target.value, productId: undefined, mmProductId: undefined, unitPrice: 0, hsnSac: undefined });
               setShowDropdown(true);
             }}
             onFocus={() => setShowDropdown(true)}
@@ -137,6 +137,7 @@ export function LineItemRow({ index, item, onChange, onRemove, includeInactive =
                       // hsn/unit/price/gst all copied below), same as any
                       // manually-typed item with no catalog link.
                       productId: catalog === 'mm' ? undefined : p.id,
+                      mmProductId: catalog === 'mm' ? p.id : undefined,
                       productName: p.name,
                       hsnSac: p.hsnSac,
                       unit: p.unit,

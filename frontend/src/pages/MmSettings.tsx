@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
-import { Save } from 'lucide-react';
+import { Save, FileBarChart2, Percent, ChevronRight } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -19,6 +20,7 @@ import { useToast } from '@/hooks/use-toast';
 export default function MmSettingsPage() {
   const { toast } = useToast();
   const qc = useQueryClient();
+  const navigate = useNavigate();
 
   const { data: settings } = useQuery({
     queryKey: ['settings'],
@@ -85,6 +87,53 @@ export default function MmSettingsPage() {
             <Save className="h-4 w-4 mr-1.5" />
             {saveMutation.isPending ? 'Saving…' : 'Save'}
           </Button>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm">Reports</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          <button
+            className="w-full flex items-center justify-between rounded-lg border border-slate-200 px-4 py-3 text-sm hover:bg-slate-50 hover:border-brand-400 transition-colors"
+            onClick={() => navigate('/mm-day-report')}
+          >
+            <span className="flex items-center gap-3">
+              <FileBarChart2 className="h-4 w-4 text-brand-700 shrink-0" />
+              <span className="text-left">
+                <span className="block font-medium">MM Day Report</span>
+                <span className="block text-xs text-muted-foreground">End-of-day closing summary</span>
+              </span>
+            </span>
+            <ChevronRight className="h-4 w-4 text-slate-400 shrink-0" />
+          </button>
+          <button
+            className="w-full flex items-center justify-between rounded-lg border border-slate-200 px-4 py-3 text-sm hover:bg-slate-50 hover:border-brand-400 transition-colors"
+            onClick={() => navigate('/mm-month-report')}
+          >
+            <span className="flex items-center gap-3">
+              <FileBarChart2 className="h-4 w-4 text-brand-700 shrink-0" />
+              <span className="text-left">
+                <span className="block font-medium">MM Month Report</span>
+                <span className="block text-xs text-muted-foreground">Monthly closing summary</span>
+              </span>
+            </span>
+            <ChevronRight className="h-4 w-4 text-slate-400 shrink-0" />
+          </button>
+          <button
+            className="w-full flex items-center justify-between rounded-lg border border-slate-200 px-4 py-3 text-sm hover:bg-slate-50 hover:border-brand-400 transition-colors"
+            onClick={() => navigate('/mm-gst-report')}
+          >
+            <span className="flex items-center gap-3">
+              <Percent className="h-4 w-4 text-brand-700 shrink-0" />
+              <span className="text-left">
+                <span className="block font-medium">MM GST Report</span>
+                <span className="block text-xs text-muted-foreground">Monthly GST summary for filing</span>
+              </span>
+            </span>
+            <ChevronRight className="h-4 w-4 text-slate-400 shrink-0" />
+          </button>
         </CardContent>
       </Card>
     </div>

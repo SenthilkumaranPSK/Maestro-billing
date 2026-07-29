@@ -50,6 +50,7 @@ export function MmEditBillModal({ bill, onClose, onSaved }: MmEditBillModalProps
     bill.items.map((i) => ({
       _id: newId(),
       productId: undefined, // MM items never link back to a Product row — see LineItemRow's catalog='mm' note
+      mmProductId: i.mmProductId,
       productName: i.productName,
       hsnSac: i.hsnSac,
       unit: i.unit,
@@ -132,6 +133,7 @@ export function MmEditBillModal({ bill, onClose, onSaved }: MmEditBillModalProps
       billDate: bill.billDate,
       items: validItems.map((i) => ({
         productId: undefined,
+        mmProductId: i.mmProductId,
         productName: i.productName,
         hsnSac: i.hsnSac,
         unit: i.unit,

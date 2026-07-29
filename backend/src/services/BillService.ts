@@ -130,6 +130,40 @@ export class BillService {
     return { items: computed, subTotal, totalGst, grandTotal: subTotal + totalGst };
   }
 
+  /**
+   * Adjusts MmProduct.stockQty for every MM item that's linked to a catalog
+   * product (mmProductId set — a manually-typed item has none and is
+   * skipped), and logs each change as an MmStockMovement row — a sale (or
+   * its reversal) is never just a silent number change, it's a dated ledger
+   * entry pointing back at the bill that caused it. `sign` is -1 to deduct
+   * on a sale, +1 to restore (edit replacing old items, or a cancellation).
+   * Negative stock is allowed by design — see the stockQty column comment in
+   * schema.prisma — so this never blocks or throws on an oversell.
+   */
+  async adjustMmStock(
+    tx: Prisma.TransactionClient,
+    items: Array<{ mmProductId?: number | null; qty: number }>,
+    sign: 1 | -1,
+    billId?: number,
+  ): Promise<void> {
+    for (const item of items) {
+      if (!item.mmProductId) continue;
+      const updated = await tx.mmProduct.update({
+        where: { id: item.mmProductId },
+        data: { stockQty: { increment: sign * item.qty } },
+      });
+      await tx.mmStockMovement.create({
+        data: {
+          mmProductId: item.mmProductId,
+          type: sign === -1 ? 'SALE' : 'RESTORE',
+          qtyChange: sign * item.qty,
+          balanceAfter: updated.stockQty,
+          billId: billId ?? null,
+        },
+      });
+    }
+  }
+
   async createBill(input: CreateBillInput) {
     const { items: computedItems, subTotal, totalGst, grandTotal } =
       this.computeItemTotals(input.items, input.gstInclusive ?? false);
@@ -153,49 +187,56 @@ export class BillService {
     for (let attempt = 1; ; attempt++) {
       const billNumber = series === 'MM' ? await this.getNextMmBillNumber() : await this.getNextBillNumber();
       try {
-        return await this.prisma.bill.create({
-          data: {
-            billNumber,
-            series,
-            customerId: input.customerId,
-            mmCustomerId: input.mmCustomerId,
-            billDate: new Date(input.billDate),
-            dueDate: input.dueDate ? new Date(input.dueDate) : null,
-            subTotal,
-            gstAmount: totalGst,
-            discountAmount,
-            grandTotal: finalTotal,
-            status: 'PAID',
-            notes: input.notes,
-            serviceDescription: input.serviceDescription,
-            serviceFrom: input.serviceFrom ? new Date(input.serviceFrom) : null,
-            serviceTo: input.serviceTo ? new Date(input.serviceTo) : null,
-            serviceDates: input.serviceDates?.length ? JSON.stringify(input.serviceDates) : null,
-            gstInclusive: input.gstInclusive ?? false,
-            vehicleNo: input.vehicleNo,
-            despatchedThrough: input.despatchedThrough,
-            destination: input.destination,
-            otherReference: input.otherReference,
-            ewayBillNo: input.ewayBillNo,
-            irnNo: input.irnNo,
-            consigneeName: input.consigneeName,
-            consigneeAddress: input.consigneeAddress,
-            consigneeGstin: input.consigneeGstin,
-            items: {
-              create: computedItems.map((item) => ({
-                productId: item.productId,
-                productName: item.productName,
-                hsnSac: item.hsnSac,
-                unit: item.unit,
-                qty: item.qty,
-                unitPrice: item.unitPrice,
-                gstRate: item.gstRate,
-                gstAmount: item.gstAmount,
-                totalAmount: item.totalAmount,
-              })),
+        return await this.prisma.$transaction(async (tx) => {
+          const bill = await tx.bill.create({
+            data: {
+              billNumber,
+              series,
+              customerId: input.customerId,
+              mmCustomerId: input.mmCustomerId,
+              billDate: new Date(input.billDate),
+              dueDate: input.dueDate ? new Date(input.dueDate) : null,
+              subTotal,
+              gstAmount: totalGst,
+              discountAmount,
+              grandTotal: finalTotal,
+              status: 'PAID',
+              notes: input.notes,
+              serviceDescription: input.serviceDescription,
+              serviceFrom: input.serviceFrom ? new Date(input.serviceFrom) : null,
+              serviceTo: input.serviceTo ? new Date(input.serviceTo) : null,
+              serviceDates: input.serviceDates?.length ? JSON.stringify(input.serviceDates) : null,
+              gstInclusive: input.gstInclusive ?? false,
+              vehicleNo: input.vehicleNo,
+              despatchedThrough: input.despatchedThrough,
+              destination: input.destination,
+              otherReference: input.otherReference,
+              ewayBillNo: input.ewayBillNo,
+              irnNo: input.irnNo,
+              consigneeName: input.consigneeName,
+              consigneeAddress: input.consigneeAddress,
+              consigneeGstin: input.consigneeGstin,
+              items: {
+                create: computedItems.map((item) => ({
+                  productId: item.productId,
+                  mmProductId: item.mmProductId,
+                  productName: item.productName,
+                  hsnSac: item.hsnSac,
+                  unit: item.unit,
+                  qty: item.qty,
+                  unitPrice: item.unitPrice,
+                  gstRate: item.gstRate,
+                  gstAmount: item.gstAmount,
+                  totalAmount: item.totalAmount,
+                })),
+              },
             },
-          },
-          include: { items: true, payments: true, customer: true, mmCustomer: true },
+            include: { items: true, payments: true, customer: true, mmCustomer: true },
+          });
+          // Deduct stock inside the same transaction as the create — either
+          // both happen or neither does, never a bill sold with no stock impact.
+          await this.adjustMmStock(tx, computedItems, -1, bill.id);
+          return bill;
         });
       } catch (err) {
         const isDuplicateNumber =
@@ -231,11 +272,22 @@ export class BillService {
     }
 
     return this.prisma.$transaction(async (tx) => {
+      // Restore stock for whatever this bill sold before (about to be
+      // replaced below) — read the old items first, since deleteMany would
+      // otherwise lose the qty/mmProductId needed to reverse them.
+      const oldItems = await tx.billItem.findMany({ where: { billId } });
+      await this.adjustMmStock(tx, oldItems, 1, billId);
+
       await tx.billItem.deleteMany({ where: { billId } });
       // Guarded above (paymentCount > 0 throws before this point) — this is
       // just belt-and-suspenders against a payment created in the gap
       // between that check and this transaction.
       await tx.payment.deleteMany({ where: { billId } });
+
+      // Deduct stock for the new item set — same transaction as the old
+      // items' restore and the update itself, so an edit's net stock effect
+      // is always atomic (either the whole edit lands, or none of it does).
+      await this.adjustMmStock(tx, computedItems, -1, billId);
 
       return tx.bill.update({
         where: { id: billId },
@@ -268,6 +320,7 @@ export class BillService {
           items: {
             create: computedItems.map((item) => ({
               productId: item.productId,
+              mmProductId: item.mmProductId,
               productName: item.productName,
               hsnSac: item.hsnSac,
               unit: item.unit,

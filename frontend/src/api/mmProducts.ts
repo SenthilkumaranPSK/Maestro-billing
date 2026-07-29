@@ -1,5 +1,5 @@
 import { api } from './client';
-import type { MmProduct, ApiResponse } from '@/types';
+import type { MmProduct, MmStockMovement, ApiResponse } from '@/types';
 
 /** MM billing module's own product catalog — mirrors productsApi exactly,
  * against the separate /mm-products endpoint. */
@@ -17,4 +17,12 @@ export const mmProductsApi = {
     api.put<ApiResponse<MmProduct>>(`/mm-products/${id}`, data).then((r) => r.data.data),
 
   delete: (id: number) => api.delete(`/mm-products/${id}`),
+
+  // Manual restock — records a PURCHASE ledger entry with supplier/cost/
+  // invoice details, not just a stockQty bump. See the backend route comment.
+  restock: (id: number, data: { qty: number; supplierName?: string; purchaseCost?: number; invoiceRef?: string; notes?: string }) =>
+    api.post<ApiResponse<MmProduct>>(`/mm-products/${id}/restock`, data).then((r) => r.data.data),
+
+  getStockMovements: (id: number) =>
+    api.get<ApiResponse<MmStockMovement[]>>(`/mm-products/${id}/stock-movements`).then((r) => r.data.data),
 };

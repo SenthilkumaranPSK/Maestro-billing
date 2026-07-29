@@ -9,6 +9,7 @@ export interface CreateBillPayload {
   dueDate?: string;
   items: Array<{
     productId?: number;
+    mmProductId?: number;
     productName: string;
     hsnSac?: string;
     unit: string;
