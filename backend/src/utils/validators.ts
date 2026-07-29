@@ -48,9 +48,37 @@ export const customerSchema = z.object({
   notes: z.string().max(2000, 'Notes too long').nullable().optional(),
 });
 
+// MM billing module's own customer database — separate from customerSchema
+// above (see schema.prisma MmCustomer).
+export const mmCustomerSchema = z.object({
+  name: z.string().min(1, 'Name is required').max(200, 'Name too long'),
+  phone: phoneSchema,
+  email: z
+    .string()
+    .email()
+    .max(1000, 'Email too long')
+    .nullable()
+    .optional()
+    .or(z.literal('')),
+  address: z.string().max(500, 'Address too long').nullable().optional(),
+  gstin: z.string().max(15, 'GSTIN must be 15 characters or fewer').nullable().optional(),
+  notes: z.string().max(2000, 'Notes too long').nullable().optional(),
+});
+
 export const productSchema = z.object({
   name: z.string().min(1, 'Product name is required').max(200, 'Product name too long'),
   description: z.string().max(2000, 'Description too long').nullable().optional(),
+  unit: z.string().min(1).max(20),
+  unitPrice: z.number().int().nonnegative('Price cannot be negative'),
+  gstRate: z.number().min(0).max(100),
+  hsnSac: z.string().max(20, 'HSN/SAC too long').nullable().optional(),
+  isActive: z.boolean().optional(),
+});
+
+// MM billing module's own product catalog — separate from productSchema
+// above (see schema.prisma MmProduct).
+export const mmProductSchema = z.object({
+  name: z.string().min(1, 'Product name is required').max(200, 'Product name too long'),
   unit: z.string().min(1).max(20),
   unitPrice: z.number().int().nonnegative('Price cannot be negative'),
   gstRate: z.number().min(0).max(100),
@@ -80,6 +108,7 @@ export const billItemSchema = z.object({
 
 export const createBillSchema = z.object({
   customerId: z.number().int().positive().optional(),
+  mmCustomerId: z.number().int().positive().optional(),
   billDate: z
     .string()
     .min(1)
@@ -99,6 +128,17 @@ export const createBillSchema = z.object({
   // Arbitrary list of service dates, replacing the old from/to range.
   serviceDates: z.array(z.string().refine(isValidDateString, 'Invalid service date')).max(20, 'Too many service dates').optional(),
   gstInclusive: z.boolean().optional(),
+  // MM/A4 "Tax Invoice" layout only — see the matching schema.prisma comment.
+  vehicleNo: z.string().max(50, 'Vehicle No too long').optional(),
+  despatchedThrough: z.string().max(100, 'Despatched Through too long').optional(),
+  destination: z.string().max(100, 'Destination too long').optional(),
+  otherReference: z.string().max(200, 'Other Reference too long').optional(),
+  ewayBillNo: z.string().max(50, 'E-Way Bill No too long').optional(),
+  irnNo: z.string().max(100, 'IRN No too long').optional(),
+  consigneeName: z.string().max(200, 'Consignee name too long').optional(),
+  consigneeAddress: z.string().max(500, 'Consignee address too long').optional(),
+  consigneeGstin: z.string().max(15, 'Consignee GSTIN must be 15 characters or fewer').optional(),
+  series: z.enum(['MAIN', 'MM']).optional(),
 });
 
 export const settingSchema = z.object({

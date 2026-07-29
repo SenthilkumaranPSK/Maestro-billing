@@ -1,8 +1,8 @@
-import { Receipt, FileText } from 'lucide-react';
+import { Receipt, FileText, FileSpreadsheet } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { Bill } from '@/types';
 
-export type BillLayout = 'thermal' | 'a4';
+export type BillLayout = 'thermal' | 'a4' | 'mm_a4';
 
 /**
  * Best-effort guess at which layout a saved bill was actually created in.
@@ -15,16 +15,53 @@ export type BillLayout = 'thermal' | 'a4';
  * click A4 first — reported as "downloading a PDF only gives the thermal
  * preview, even for an A4 bill".
  *
+ * bill.series is authoritative for MM: every MM bill has series==='MM' set
+ * at creation (see backend schema.prisma), regardless of whether its
+ * optional Tax Invoice fields (vehicleNo etc.) happen to be filled in — an MM
+ * bill with none of those set would otherwise fall through to the A4/thermal
+ * guess below and silently print wrong. Older bills predating the series
+ * column (or a bill from the main Billing page's own MM/A4 toggle, which
+ * still doesn't set series) fall back to the field-presence heuristic.
+ *
  * serviceDescription/serviceFrom/serviceTo/serviceDates are A4-only fields
  * (see BillingPage's Service Details section, shown only when layout ===
  * 'a4') — any of them being set is strong evidence the bill was an A4
- * "Service Bill" invoice. This only changes the toggle's INITIAL value; it
+ * "Service Bill" invoice. vehicleNo/despatchedThrough/destination/
+ * otherReference/ewayBillNo/irnNo/consignee* are MM/A4-only (the Tax Invoice
+ * layout's transport/e-way section) — checked first since a bill would never
+ * have both sets filled in. This only changes the toggle's INITIAL value; it
  * stays fully editable, so a wrong guess costs one click, not a wrong
  * download.
  */
 export function guessBillLayout(
-  bill: Pick<Bill, 'serviceDescription' | 'serviceFrom' | 'serviceTo' | 'serviceDates'>,
+  bill: Pick<
+    Bill,
+    | 'series'
+    | 'serviceDescription'
+    | 'serviceFrom'
+    | 'serviceTo'
+    | 'serviceDates'
+    | 'vehicleNo'
+    | 'despatchedThrough'
+    | 'destination'
+    | 'otherReference'
+    | 'ewayBillNo'
+    | 'irnNo'
+    | 'consigneeName'
+  >,
 ): BillLayout {
+  if (
+    bill.series === 'MM' ||
+    bill.vehicleNo ||
+    bill.despatchedThrough ||
+    bill.destination ||
+    bill.otherReference ||
+    bill.ewayBillNo ||
+    bill.irnNo ||
+    bill.consigneeName
+  ) {
+    return 'mm_a4';
+  }
   return bill.serviceDescription || bill.serviceFrom || bill.serviceTo || bill.serviceDates?.length ? 'a4' : 'thermal';
 }
 
@@ -72,6 +109,20 @@ export function LayoutToggle({ value, onChange, compact = false }: LayoutToggleP
       >
         <FileText className={compact ? 'w-3 h-3' : 'w-3.5 h-3.5'} />
         {!compact && 'A4'}
+      </button>
+      <button
+        type="button"
+        title="MM/A4 tax invoice"
+        onClick={() => onChange('mm_a4')}
+        className={cn(
+          base,
+          size,
+          value === 'mm_a4' ? 'bg-white shadow-sm text-brand-700' : 'text-slate-500 hover:text-slate-700',
+          'border-transparent',
+        )}
+      >
+        <FileSpreadsheet className={compact ? 'w-3 h-3' : 'w-3.5 h-3.5'} />
+        {!compact && 'MM/A4'}
       </button>
     </div>
   );

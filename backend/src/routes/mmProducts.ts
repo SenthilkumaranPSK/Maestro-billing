@@ -1,0 +1,61 @@
+import { FastifyInstance } from 'fastify';
+import { mmProductSchema, parseId } from '../utils/validators';
+import { requireAppHeader } from '../middleware/requireAppHeader';
+
+/** MM billing module's own product catalog — mirrors productRoutes exactly,
+ * against the separate MmProduct table (see schema.prisma). */
+export async function mmProductRoutes(fastify: FastifyInstance) {
+  const prisma = fastify.prisma;
+
+  fastify.get('/', async (request, reply) => {
+    const query = request.query as { search?: string; active?: string };
+    const search = query.search?.trim();
+    const activeOnly = query.active !== 'false';
+
+    const products = await prisma.mmProduct.findMany({
+      where: {
+        ...(activeOnly ? { isActive: true } : {}),
+        ...(search ? { name: { contains: search } } : {}),
+      },
+      orderBy: { name: 'asc' },
+    });
+    return reply.send({ success: true, data: products });
+  });
+
+  fastify.get('/:id', async (request, reply) => {
+    const id = parseId((request.params as { id: string }).id);
+    if (!id) return reply.status(400).send({ success: false, error: 'Invalid product id' });
+    const product = await prisma.mmProduct.findUnique({ where: { id } });
+    if (!product) {
+      return reply.status(404).send({ success: false, error: 'Product not found' });
+    }
+    return reply.send({ success: true, data: product });
+  });
+
+  fastify.post('/', { preHandler: requireAppHeader }, async (request, reply) => {
+    const body = mmProductSchema.parse(request.body);
+    const product = await prisma.mmProduct.create({ data: body });
+    return reply.status(201).send({ success: true, data: product });
+  });
+
+  fastify.put('/:id', { preHandler: requireAppHeader }, async (request, reply) => {
+    const id = parseId((request.params as { id: string }).id);
+    if (!id) return reply.status(400).send({ success: false, error: 'Invalid product id' });
+    const body = mmProductSchema.partial().parse(request.body);
+    const product = await prisma.mmProduct.update({
+      where: { id },
+      data: body,
+    });
+    return reply.send({ success: true, data: product });
+  });
+
+  fastify.delete('/:id', { preHandler: requireAppHeader }, async (request, reply) => {
+    const id = parseId((request.params as { id: string }).id);
+    if (!id) return reply.status(400).send({ success: false, error: 'Invalid product id' });
+    await prisma.mmProduct.update({
+      where: { id },
+      data: { isActive: false },
+    });
+    return reply.send({ success: true });
+  });
+}

@@ -8,7 +8,9 @@ import fs from 'fs';
 import { PrismaClient } from '@prisma/client';
 
 import { customerRoutes } from './routes/customers';
+import { mmCustomerRoutes } from './routes/mmCustomers';
 import { productRoutes } from './routes/products';
+import { mmProductRoutes } from './routes/mmProducts';
 import { serviceRoutes } from './routes/services';
 import { billRoutes } from './routes/bills';
 import { settingsRoutes } from './routes/settings';
@@ -107,7 +109,9 @@ async function main() {
 
   // ── Routes ───────────────────────────────────────────────────────────────
   await app.register(customerRoutes, { prefix: '/api/v1/customers' });
+  await app.register(mmCustomerRoutes, { prefix: '/api/v1/mm-customers' });
   await app.register(productRoutes,  { prefix: '/api/v1/products'  });
+  await app.register(mmProductRoutes, { prefix: '/api/v1/mm-products' });
   await app.register(serviceRoutes,  { prefix: '/api/v1/services'  });
   await app.register(billRoutes,     { prefix: '/api/v1/bills'     });
   await app.register(settingsRoutes, { prefix: '/api/v1/settings'  });

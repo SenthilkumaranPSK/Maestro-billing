@@ -17,6 +17,7 @@ import { printerApi } from '@/api/printer';
 // pdf-lib is heavy (~400KB) — loaded on demand so the app starts fast.
 const loadPdfLib = () => import('@/lib/pdf');
 const loadA4Lib = () => import('@/lib/a4invoice');
+const loadMmA4Lib = () => import('@/lib/mmA4invoice');
 import { whatsappApi } from '@/api/whatsapp';
 import { useToast } from '@/hooks/use-toast';
 import { isValidIndianPhone, newId } from '@/lib/utils';
@@ -48,9 +49,11 @@ async function sendBillViaWhatsApp(
   layout: BillLayout,
 ): Promise<void> {
   const pdfBase64 =
-    layout === 'a4'
-      ? await (await loadA4Lib()).generateA4InvoicePDFBase64(bill, settings)
-      : await (await loadPdfLib()).generateBillPDFBase64(bill, settings);
+    layout === 'mm_a4'
+      ? await (await loadMmA4Lib()).generateMmA4InvoicePDFBase64(bill, settings)
+      : layout === 'a4'
+        ? await (await loadA4Lib()).generateA4InvoicePDFBase64(bill, settings)
+        : await (await loadPdfLib()).generateBillPDFBase64(bill, settings);
   await whatsappApi.sendPdf({
     phone,
     pdfBase64,
@@ -108,10 +111,24 @@ export default function BillingPage() {
   const [serviceDates, setServiceDates] = useState<string[]>(['']);
   // Whole-bill GST pricing mode — see components/billing/GstModeToggle.
   const [gstInclusive, setGstInclusive] = useState(false);
+  // MM/A4-only fields — optional transport/e-way details for a formal GST
+  // tax invoice. See schema.prisma Bill.vehicleNo and neighbours.
+  const [vehicleNo, setVehicleNo] = useState('');
+  const [despatchedThrough, setDespatchedThrough] = useState('');
+  const [destination, setDestination] = useState('');
+  const [otherReference, setOtherReference] = useState('');
+  const [ewayBillNo, setEwayBillNo] = useState('');
+  const [irnNo, setIrnNo] = useState('');
+  // Consignee defaults to "same as buyer" — most bills ship to the billed
+  // customer; unticking reveals separate fields for when goods go elsewhere.
+  const [consigneeSameAsBuyer, setConsigneeSameAsBuyer] = useState(true);
+  const [consigneeName, setConsigneeName] = useState('');
+  const [consigneeAddress, setConsigneeAddress] = useState('');
+  const [consigneeGstin, setConsigneeGstin] = useState('');
 
   const { data: nextNumber } = useQuery({
     queryKey: ['bills', 'next-number'],
-    queryFn: billsApi.getNextNumber,
+    queryFn: () => billsApi.getNextNumber(),
     enabled: !savedBill,
     staleTime: 0,
   });
@@ -260,6 +277,15 @@ export default function BillingPage() {
       serviceDescription: serviceDescription.trim() || undefined,
       serviceDates: filledServiceDates.length ? filledServiceDates : undefined,
       gstInclusive,
+      vehicleNo: vehicleNo.trim() || undefined,
+      despatchedThrough: despatchedThrough.trim() || undefined,
+      destination: destination.trim() || undefined,
+      otherReference: otherReference.trim() || undefined,
+      ewayBillNo: ewayBillNo.trim() || undefined,
+      irnNo: irnNo.trim() || undefined,
+      consigneeName: consigneeSameAsBuyer ? undefined : consigneeName.trim() || undefined,
+      consigneeAddress: consigneeSameAsBuyer ? undefined : consigneeAddress.trim() || undefined,
+      consigneeGstin: consigneeSameAsBuyer ? undefined : consigneeGstin.trim() || undefined,
     });
   };
 
@@ -274,7 +300,7 @@ export default function BillingPage() {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [savedBill, items, customer, createBillMutation.isPending, layout, gstInclusive, serviceDescription, serviceDates]);
+  }, [savedBill, items, customer, createBillMutation.isPending, layout, gstInclusive, serviceDescription, serviceDates, vehicleNo, despatchedThrough, destination, otherReference, ewayBillNo, irnNo, consigneeSameAsBuyer, consigneeName, consigneeAddress, consigneeGstin]);
 
   const handleWhatsAppShare = async () => {
     if (!savedBill || !customer.phone) return;
@@ -308,6 +334,11 @@ export default function BillingPage() {
 
   const handlePrint = async () => {
     if (!savedBill) return;
+    if (layout === 'mm_a4') {
+      const { printMmA4InvoicePDF } = await loadMmA4Lib();
+      await printMmA4InvoicePDF(savedBill, settings ?? {});
+      return;
+    }
     if (layout === 'a4') {
       const { printA4InvoicePDF } = await loadA4Lib();
       await printA4InvoicePDF(savedBill, settings ?? {});
@@ -327,7 +358,10 @@ export default function BillingPage() {
 
   const handleDownloadPdf = async () => {
     if (!savedBill) return;
-    if (layout === 'a4') {
+    if (layout === 'mm_a4') {
+      const { downloadMmA4InvoicePDF } = await loadMmA4Lib();
+      await downloadMmA4InvoicePDF(savedBill, settings ?? {});
+    } else if (layout === 'a4') {
       const { downloadA4InvoicePDF } = await loadA4Lib();
       await downloadA4InvoicePDF(savedBill, settings ?? {});
     } else {
@@ -352,7 +386,7 @@ export default function BillingPage() {
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
-  }, [savedBill, items, customer, createBillMutation.isPending, layout, gstInclusive, serviceDescription, serviceDates]);
+  }, [savedBill, items, customer, createBillMutation.isPending, layout, gstInclusive, serviceDescription, serviceDates, vehicleNo, despatchedThrough, destination, otherReference, ewayBillNo, irnNo, consigneeSameAsBuyer, consigneeName, consigneeAddress, consigneeGstin]);
 
   const handleReset = () => {
     setCustomer({ name: '', phone: '', gstin: '', address: '' });
@@ -363,6 +397,16 @@ export default function BillingPage() {
     setServiceDescription('');
     setServiceDates(['']);
     setGstInclusive(false);
+    setVehicleNo('');
+    setDespatchedThrough('');
+    setDestination('');
+    setOtherReference('');
+    setEwayBillNo('');
+    setIrnNo('');
+    setConsigneeSameAsBuyer(true);
+    setConsigneeName('');
+    setConsigneeAddress('');
+    setConsigneeGstin('');
     qc.invalidateQueries({ queryKey: ['bills', 'next-number'] });
     qc.refetchQueries({ queryKey: ['bills', 'next-number'] });
   };
@@ -451,7 +495,7 @@ export default function BillingPage() {
         <CardContent className="pt-4 pb-4 grid grid-cols-12 gap-4 items-end">
           <div className="col-span-8">
             <Label className="text-xs text-muted-foreground mb-1.5 block">Customer</Label>
-            <CustomerBar value={customer} onChange={setCustomer} disabled={!!savedBill} showAddress={layout === 'a4'} />
+            <CustomerBar value={customer} onChange={setCustomer} disabled={!!savedBill} showAddress={layout === 'a4' || layout === 'mm_a4'} />
           </div>
           <div className="col-span-4">
             <Label className="text-xs text-muted-foreground mb-1.5 flex items-center gap-1">
@@ -525,6 +569,73 @@ export default function BillingPage() {
       </Card>
       )}
 
+      {/* ── Tax Invoice Details — shown only in MM/A4 mode, since this info
+             only appears on the MM/A4 GST tax invoice layout ─────────────── */}
+      {layout === 'mm_a4' && (
+      <Card className="border-slate-200 animate-in fade-in slide-in-from-top-1 duration-200">
+        <CardContent className="pt-3 pb-3 space-y-3">
+          <p className="text-xs font-medium text-slate-500 uppercase tracking-wide">
+            Tax Invoice Details <span className="normal-case font-normal text-muted-foreground">(optional — MM/A4 only)</span>
+          </p>
+          <div className="grid grid-cols-12 gap-3">
+            <div className="col-span-3">
+              <Label className="text-xs text-muted-foreground mb-1.5 block">Vehicle No</Label>
+              <Input value={vehicleNo} disabled={!!savedBill} onChange={(e) => setVehicleNo(e.target.value)} />
+            </div>
+            <div className="col-span-3">
+              <Label className="text-xs text-muted-foreground mb-1.5 block">Despatched Through</Label>
+              <Input value={despatchedThrough} disabled={!!savedBill} onChange={(e) => setDespatchedThrough(e.target.value)} />
+            </div>
+            <div className="col-span-3">
+              <Label className="text-xs text-muted-foreground mb-1.5 block">Destination</Label>
+              <Input value={destination} disabled={!!savedBill} onChange={(e) => setDestination(e.target.value)} />
+            </div>
+            <div className="col-span-3">
+              <Label className="text-xs text-muted-foreground mb-1.5 block">E-Way Bill No</Label>
+              <Input value={ewayBillNo} disabled={!!savedBill} onChange={(e) => setEwayBillNo(e.target.value)} />
+            </div>
+            <div className="col-span-6">
+              <Label className="text-xs text-muted-foreground mb-1.5 block">Other Reference</Label>
+              <Input value={otherReference} disabled={!!savedBill} onChange={(e) => setOtherReference(e.target.value)} />
+            </div>
+            <div className="col-span-6">
+              <Label className="text-xs text-muted-foreground mb-1.5 block">IRN No</Label>
+              <Input value={irnNo} disabled={!!savedBill} onChange={(e) => setIrnNo(e.target.value)} placeholder="Paste from the govt. e-invoice portal, if any" />
+            </div>
+          </div>
+
+          <div className="pt-1 border-t border-slate-100">
+            <label className="flex items-center gap-2 text-xs text-slate-600 mb-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={consigneeSameAsBuyer}
+                disabled={!!savedBill}
+                onChange={(e) => setConsigneeSameAsBuyer(e.target.checked)}
+                className="h-3.5 w-3.5 rounded border-slate-300"
+              />
+              Consignee (ship-to) same as Buyer
+            </label>
+            {!consigneeSameAsBuyer && (
+              <div className="grid grid-cols-12 gap-3">
+                <div className="col-span-4">
+                  <Label className="text-xs text-muted-foreground mb-1.5 block">Consignee Name</Label>
+                  <Input value={consigneeName} disabled={!!savedBill} onChange={(e) => setConsigneeName(e.target.value)} />
+                </div>
+                <div className="col-span-5">
+                  <Label className="text-xs text-muted-foreground mb-1.5 block">Consignee Address</Label>
+                  <Input value={consigneeAddress} disabled={!!savedBill} onChange={(e) => setConsigneeAddress(e.target.value)} />
+                </div>
+                <div className="col-span-3">
+                  <Label className="text-xs text-muted-foreground mb-1.5 block">Consignee GSTIN</Label>
+                  <Input value={consigneeGstin} disabled={!!savedBill} onChange={(e) => setConsigneeGstin(e.target.value)} />
+                </div>
+              </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+      )}
+
       {/* ── Items table + Summary ────────────────────────────────── */}
       <div className="grid grid-cols-12 gap-4">
 
@@ -557,7 +668,7 @@ export default function BillingPage() {
                       <th className="text-right py-2 px-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground w-16">Qty</th>
                       <th className="text-right py-2 px-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground w-24">Price (₹)</th>
                       <th className="text-right py-2 px-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground w-16">GST %</th>
-                      {layout === 'a4' && (
+                      {(layout === 'a4' || layout === 'mm_a4') && (
                         <th className="text-left py-2 px-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground w-24">HSN/SAC</th>
                       )}
                       <th className="text-right py-2 px-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground w-24">Amount</th>
@@ -570,7 +681,7 @@ export default function BillingPage() {
                         key={item._id}
                         index={idx}
                         item={item}
-                        showHsnSac={layout === 'a4'}
+                        showHsnSac={layout === 'a4' || layout === 'mm_a4'}
                         gstInclusive={gstInclusive}
                         // Matches the rest of the form, which already locks
                         // once saved. Print/PDF/WhatsApp all render from

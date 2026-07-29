@@ -26,6 +26,10 @@ async function main() {
     { key: 'currency_symbol', value: '₹', group: 'general' },
     { key: 'currency_code', value: 'INR', group: 'general' },
     { key: 'show_whatsapp_on_billing', value: 'true', group: 'general' },
+    // MM billing module's own settings — separate from the main tax group,
+    // since MM's default GST rate (5%) is independent of the studio's
+    // regular default_gst_rate (18%) above.
+    { key: 'mm_default_gst_rate', value: '5', group: 'mm' },
   ];
 
   for (const s of defaults) {
@@ -60,6 +64,40 @@ async function main() {
     }
   }
   console.log('✓ Sample products created');
+
+  // MM billing module's own catalog — separate table (MmProduct), separate
+  // from the products list above. From the studio's reference wholesale tax
+  // invoice: names with the "1Q Bulk"/"1 Q BULK" prefix stripped, all HSN
+  // 210690, unit Kgs, GST 5% (2.5% CGST + 2.5% SGST), Rs.120/kg to match that
+  // reference — editable per bill same as any product.
+  const mmProducts = [
+    'Thenkuzhal Murukku',
+    'Butter Muruku',
+    'Spring Muruku',
+    'Garlic Mixture',
+    'Pepper Sev',
+    'Sirai Pakkoda',
+    'Kara Boondhi',
+    'Madras Mixture',
+    'Kara Sev',
+    'Mini Kara Sev',
+    'Mullu Murukku',
+    'Bombay Mixture',
+    'Double Ring Murukku',
+    'Onion Murukku',
+    'Baby Nippet Chilly',
+    'Avul Mixture',
+  ];
+
+  for (const name of mmProducts) {
+    const existing = await prisma.mmProduct.findFirst({ where: { name } });
+    if (!existing) {
+      await prisma.mmProduct.create({
+        data: { name, unit: 'Kgs', unitPrice: 12000, gstRate: 5, hsnSac: '210690' },
+      });
+    }
+  }
+  console.log('✓ MM products created');
 
   // Sample services — feeds the A4 invoice's Service Description autocomplete.
   // Deliberately just names, no HSN/SAC/price here: those are studio/CA-specific

@@ -7,7 +7,7 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { CustomerBar, type CustomerInfo } from '@/components/billing/CustomerBar';
 import { LineItemRow } from '@/components/billing/LineItemRow';
-import { LayoutToggle, type BillLayout } from '@/components/billing/LayoutToggle';
+import { LayoutToggle, guessBillLayout, type BillLayout } from '@/components/billing/LayoutToggle';
 import { GstModeToggle } from '@/components/billing/GstModeToggle';
 import { ServiceDescriptionInput } from '@/components/billing/ServiceDescriptionInput';
 import { billsApi } from '@/api/bills';
@@ -64,11 +64,10 @@ export function EditBillModal({ bill, onClose, onSaved }: EditBillModalProps) {
   const discountP = bill.discountAmount;
 
   // Entry-form layout choice — same idea as BillingPage: A4 mode shows the
-  // Service Details fields + HSN/SAC column, Thermal stays compact. Default
-  // guessed from whether this bill already has service info on it.
-  const [layout, setLayout] = useState<BillLayout>(
-    bill.serviceDescription || bill.serviceFrom || bill.serviceTo || bill.serviceDates?.length ? 'a4' : 'thermal',
-  );
+  // Service Details fields + HSN/SAC column, MM/A4 shows the Tax Invoice
+  // Details section, Thermal stays compact. Default guessed from which set
+  // of fields this bill already has data in — see guessBillLayout.
+  const [layout, setLayout] = useState<BillLayout>(() => guessBillLayout(bill));
   const [gstInclusive, setGstInclusive] = useState(bill.gstInclusive);
   const [serviceDescription, setServiceDescription] = useState(bill.serviceDescription ?? '');
   // Prefer the new serviceDates list; fall back to the old from/to range for
@@ -78,6 +77,17 @@ export function EditBillModal({ bill, onClose, onSaved }: EditBillModalProps) {
     const legacy = [bill.serviceFrom?.slice(0, 10), bill.serviceTo?.slice(0, 10)].filter(Boolean) as string[];
     return legacy.length ? legacy : [''];
   });
+  // MM/A4-only fields — see BillingPage for the same set.
+  const [vehicleNo, setVehicleNo] = useState(bill.vehicleNo ?? '');
+  const [despatchedThrough, setDespatchedThrough] = useState(bill.despatchedThrough ?? '');
+  const [destination, setDestination] = useState(bill.destination ?? '');
+  const [otherReference, setOtherReference] = useState(bill.otherReference ?? '');
+  const [ewayBillNo, setEwayBillNo] = useState(bill.ewayBillNo ?? '');
+  const [irnNo, setIrnNo] = useState(bill.irnNo ?? '');
+  const [consigneeSameAsBuyer, setConsigneeSameAsBuyer] = useState(!bill.consigneeName);
+  const [consigneeName, setConsigneeName] = useState(bill.consigneeName ?? '');
+  const [consigneeAddress, setConsigneeAddress] = useState(bill.consigneeAddress ?? '');
+  const [consigneeGstin, setConsigneeGstin] = useState(bill.consigneeGstin ?? '');
 
   // Integer-paise totals mirroring the backend's per-item rounding — see
   // lib/billMath for the same math.
@@ -161,6 +171,15 @@ export function EditBillModal({ bill, onClose, onSaved }: EditBillModalProps) {
       serviceDescription: serviceDescription.trim() || undefined,
       serviceDates: filledServiceDates.length ? filledServiceDates : undefined,
       gstInclusive,
+      vehicleNo: vehicleNo.trim() || undefined,
+      despatchedThrough: despatchedThrough.trim() || undefined,
+      destination: destination.trim() || undefined,
+      otherReference: otherReference.trim() || undefined,
+      ewayBillNo: ewayBillNo.trim() || undefined,
+      irnNo: irnNo.trim() || undefined,
+      consigneeName: consigneeSameAsBuyer ? undefined : consigneeName.trim() || undefined,
+      consigneeAddress: consigneeSameAsBuyer ? undefined : consigneeAddress.trim() || undefined,
+      consigneeGstin: consigneeSameAsBuyer ? undefined : consigneeGstin.trim() || undefined,
     });
   };
 
@@ -191,7 +210,7 @@ export function EditBillModal({ bill, onClose, onSaved }: EditBillModalProps) {
             <CardContent className="pt-4 pb-4 grid grid-cols-12 gap-4 items-end">
               <div className="col-span-8">
                 <Label className="text-xs text-muted-foreground mb-1.5 block">Customer</Label>
-                <CustomerBar value={customer} onChange={setCustomer} showAddress={layout === 'a4'} />
+                <CustomerBar value={customer} onChange={setCustomer} showAddress={layout === 'a4' || layout === 'mm_a4'} />
               </div>
               <div className="col-span-4">
                 <Label className="text-xs text-muted-foreground mb-1.5 block">Date</Label>
@@ -255,6 +274,71 @@ export function EditBillModal({ bill, onClose, onSaved }: EditBillModalProps) {
             </Card>
           )}
 
+          {/* Tax Invoice Details — shown only in MM/A4 mode */}
+          {layout === 'mm_a4' && (
+            <Card className="border-slate-200 animate-in fade-in slide-in-from-top-1 duration-200">
+              <CardContent className="pt-3 pb-3 space-y-3">
+                <p className="text-xs font-medium text-slate-500 uppercase tracking-wide">
+                  Tax Invoice Details <span className="normal-case font-normal text-muted-foreground">(optional — MM/A4 only)</span>
+                </p>
+                <div className="grid grid-cols-12 gap-3">
+                  <div className="col-span-3">
+                    <Label className="text-xs text-muted-foreground mb-1.5 block">Vehicle No</Label>
+                    <Input value={vehicleNo} onChange={(e) => setVehicleNo(e.target.value)} />
+                  </div>
+                  <div className="col-span-3">
+                    <Label className="text-xs text-muted-foreground mb-1.5 block">Despatched Through</Label>
+                    <Input value={despatchedThrough} onChange={(e) => setDespatchedThrough(e.target.value)} />
+                  </div>
+                  <div className="col-span-3">
+                    <Label className="text-xs text-muted-foreground mb-1.5 block">Destination</Label>
+                    <Input value={destination} onChange={(e) => setDestination(e.target.value)} />
+                  </div>
+                  <div className="col-span-3">
+                    <Label className="text-xs text-muted-foreground mb-1.5 block">E-Way Bill No</Label>
+                    <Input value={ewayBillNo} onChange={(e) => setEwayBillNo(e.target.value)} />
+                  </div>
+                  <div className="col-span-6">
+                    <Label className="text-xs text-muted-foreground mb-1.5 block">Other Reference</Label>
+                    <Input value={otherReference} onChange={(e) => setOtherReference(e.target.value)} />
+                  </div>
+                  <div className="col-span-6">
+                    <Label className="text-xs text-muted-foreground mb-1.5 block">IRN No</Label>
+                    <Input value={irnNo} onChange={(e) => setIrnNo(e.target.value)} placeholder="Paste from the govt. e-invoice portal, if any" />
+                  </div>
+                </div>
+
+                <div className="pt-1 border-t border-slate-100">
+                  <label className="flex items-center gap-2 text-xs text-slate-600 mb-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={consigneeSameAsBuyer}
+                      onChange={(e) => setConsigneeSameAsBuyer(e.target.checked)}
+                      className="h-3.5 w-3.5 rounded border-slate-300"
+                    />
+                    Consignee (ship-to) same as Buyer
+                  </label>
+                  {!consigneeSameAsBuyer && (
+                    <div className="grid grid-cols-12 gap-3">
+                      <div className="col-span-4">
+                        <Label className="text-xs text-muted-foreground mb-1.5 block">Consignee Name</Label>
+                        <Input value={consigneeName} onChange={(e) => setConsigneeName(e.target.value)} />
+                      </div>
+                      <div className="col-span-5">
+                        <Label className="text-xs text-muted-foreground mb-1.5 block">Consignee Address</Label>
+                        <Input value={consigneeAddress} onChange={(e) => setConsigneeAddress(e.target.value)} />
+                      </div>
+                      <div className="col-span-3">
+                        <Label className="text-xs text-muted-foreground mb-1.5 block">Consignee GSTIN</Label>
+                        <Input value={consigneeGstin} onChange={(e) => setConsigneeGstin(e.target.value)} />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
           {/* Items + Summary */}
           <div className="grid grid-cols-12 gap-4">
 
@@ -284,7 +368,7 @@ export function EditBillModal({ bill, onClose, onSaved }: EditBillModalProps) {
                           <th className="text-right py-2 px-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground w-16">Qty</th>
                           <th className="text-right py-2 px-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground w-24">Price (₹)</th>
                           <th className="text-right py-2 px-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground w-16">GST %</th>
-                          {layout === 'a4' && (
+                          {(layout === 'a4' || layout === 'mm_a4') && (
                             <th className="text-left py-2 px-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground w-24">HSN/SAC</th>
                           )}
                           <th className="text-right py-2 px-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground w-24">Amount</th>
@@ -297,7 +381,7 @@ export function EditBillModal({ bill, onClose, onSaved }: EditBillModalProps) {
                             key={item._id}
                             index={idx}
                             item={item}
-                            showHsnSac={layout === 'a4'}
+                            showHsnSac={layout === 'a4' || layout === 'mm_a4'}
                             gstInclusive={gstInclusive}
                             onChange={(u) => setItems((p) => p.map((i, j) => (j === idx ? u : i)))}
                             onRemove={() => setItems((p) => p.filter((_, j) => j !== idx))}

@@ -30,7 +30,7 @@ export default function MonthReportPage() {
 
   const { data: billsData } = useQuery({
     queryKey: ['bills', 'month-report', from, to],
-    queryFn: () => billsApi.list({ from, to, limit: 2000 }),
+    queryFn: () => billsApi.list({ from, to, limit: 2000, series: 'MAIN' }),
   });
 
   const { data: settings } = useQuery({

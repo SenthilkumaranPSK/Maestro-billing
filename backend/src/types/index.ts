@@ -15,6 +15,8 @@ export interface BillItemInput {
 
 export interface CreateBillInput {
   customerId?: number;
+  // MM billing module only — see Bill.mmCustomerId in schema.prisma.
+  mmCustomerId?: number;
   billDate: string;
   dueDate?: string;
   items: BillItemInput[];
@@ -29,6 +31,19 @@ export interface CreateBillInput {
   serviceDates?: string[];
   // See Bill.gstInclusive in schema.prisma
   gstInclusive?: boolean;
+  // MM/A4 "Tax Invoice" layout only — see the matching Bill fields in schema.prisma
+  vehicleNo?: string;
+  despatchedThrough?: string;
+  destination?: string;
+  otherReference?: string;
+  ewayBillNo?: string;
+  irnNo?: string;
+  consigneeName?: string;
+  consigneeAddress?: string;
+  consigneeGstin?: string;
+  // Which billing area this bill belongs to — see Bill.series in schema.prisma.
+  // Only meaningful on create; updateBill never changes it.
+  series?: 'MAIN' | 'MM';
 }
 
 export interface SettingInput {

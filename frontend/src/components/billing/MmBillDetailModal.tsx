@@ -1,69 +1,37 @@
 import { X, FileText, Printer, Pencil } from 'lucide-react';
-import { useState, useEffect } from 'react';
+import { useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { LayoutToggle, guessBillLayout, type BillLayout } from '@/components/billing/LayoutToggle';
 import { formatCurrency, billStatusVariant, type Bill, type Settings, type BillStatus } from '@/types';
 import { formatDate } from '@/lib/utils';
 import { useClosingTransition } from '@/hooks/use-closing-transition';
-import { useToast } from '@/hooks/use-toast';
 
-// pdf-lib is heavy (~400KB) — loaded on demand, same pattern as BillingPage/History.
-const loadPdfLib = () => import('@/lib/pdf');
-const loadA4Lib = () => import('@/lib/a4invoice');
+// pdf-lib is heavy (~400KB) — loaded on demand, same pattern as BillDetailModal.
 const loadMmA4Lib = () => import('@/lib/mmA4invoice');
 
 const statusVariant = billStatusVariant;
 
-interface BillDetailModalProps {
+interface MmBillDetailModalProps {
   bill: Bill;
   settings: Partial<Settings>;
   onClose: () => void;
   onEdit?: () => void;
 }
 
-export function BillDetailModal({ bill, settings, onClose, onEdit }: BillDetailModalProps) {
-  // Best-effort guess (A4-only fields present -> 'a4'), not a hardcoded
-  // 'thermal' — see guessBillLayout for why. Still fully editable via the
-  // toggle below; this only fixes the default a bare Print/PDF click uses.
-  const [layout, setLayout] = useState<BillLayout>(() => guessBillLayout(bill));
+/** MM billing module's own bill-detail view — mirrors BillDetailModal, but
+ * always renders as the MM/A4 Tax Invoice layout (no Thermal/A4 toggle — MM
+ * bills are never anything else) and shows bill.mmCustomer, not bill.customer. */
+export function MmBillDetailModal({ bill, settings, onClose, onEdit }: MmBillDetailModalProps) {
   const { closing, requestClose } = useClosingTransition(onClose);
-  const { toast } = useToast();
 
   const handlePrint = async () => {
-    if (layout === 'mm_a4') {
-      const { printMmA4InvoicePDF } = await loadMmA4Lib();
-      await printMmA4InvoicePDF(bill, settings);
-      return;
-    }
-    if (layout === 'a4') {
-      const { printA4InvoicePDF } = await loadA4Lib();
-      await printA4InvoicePDF(bill, settings);
-      return;
-    }
-    try {
-      const { printThermalReceipt } = await import('@/lib/printThermal');
-      await printThermalReceipt(bill, settings);
-    } catch (err) {
-      toast({
-        title: 'Could not print the receipt',
-        description: err instanceof Error ? err.message : String(err),
-        variant: 'destructive',
-      });
-    }
+    const { printMmA4InvoicePDF } = await loadMmA4Lib();
+    await printMmA4InvoicePDF(bill, settings);
   };
 
   const handleDownload = async () => {
-    if (layout === 'mm_a4') {
-      const { downloadMmA4InvoicePDF } = await loadMmA4Lib();
-      await downloadMmA4InvoicePDF(bill, settings);
-    } else if (layout === 'a4') {
-      const { downloadA4InvoicePDF } = await loadA4Lib();
-      await downloadA4InvoicePDF(bill, settings);
-    } else {
-      const { downloadBillPDF } = await loadPdfLib();
-      await downloadBillPDF(bill, settings);
-    }
+    const { downloadMmA4InvoicePDF } = await loadMmA4Lib();
+    await downloadMmA4InvoicePDF(bill, settings);
   };
 
   useEffect(() => {
@@ -96,7 +64,6 @@ export function BillDetailModal({ bill, settings, onClose, onEdit }: BillDetailM
               <Badge variant={statusVariant[bill.status as BillStatus]}>{bill.status}</Badge>
             </div>
             <div className="flex gap-2 items-center">
-              <LayoutToggle value={layout} onChange={setLayout} compact />
               {bill.status !== 'CANCELLED' && onEdit && (
                 <Button variant="outline" size="sm" onClick={onEdit} className="border-amber-300 text-amber-700 hover:bg-amber-50">
                   <Pencil className="h-4 w-4 mr-1" /> Edit
@@ -117,12 +84,12 @@ export function BillDetailModal({ bill, settings, onClose, onEdit }: BillDetailM
           {/* Content */}
           <div className="overflow-auto flex-1 p-6 space-y-4">
             {/* Customer */}
-            {bill.customer && (
+            {bill.mmCustomer && (
               <div className="bg-slate-50 rounded-lg p-4">
                 <p className="text-xs font-semibold text-muted-foreground mb-2">CUSTOMER</p>
-                <p className="font-semibold">{bill.customer.name}</p>
-                <p className="text-sm text-muted-foreground">{bill.customer.phone}</p>
-                {bill.customer.address && <p className="text-sm text-muted-foreground">{bill.customer.address}</p>}
+                <p className="font-semibold">{bill.mmCustomer.name}</p>
+                <p className="text-sm text-muted-foreground">{bill.mmCustomer.phone}</p>
+                {bill.mmCustomer.address && <p className="text-sm text-muted-foreground">{bill.mmCustomer.address}</p>}
               </div>
             )}
 

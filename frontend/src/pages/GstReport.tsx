@@ -35,7 +35,7 @@ export default function GstReportPage() {
 
   const { data, isLoading } = useQuery({
     queryKey: ['bills', 'gst-report', from, to],
-    queryFn: () => billsApi.list({ from, to, limit: 2000 }),
+    queryFn: () => billsApi.list({ from, to, limit: 2000, series: 'MAIN' }),
   });
 
   // Cancelled bills are excluded from tax figures.

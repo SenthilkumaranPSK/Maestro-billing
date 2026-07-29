@@ -1,7 +1,7 @@
-import { useState, useEffect, useDeferredValue } from 'react';
+import { useState, useDeferredValue } from 'react';
 import { Search, FileText, Printer, Eye, Pencil, Ban, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Link, useLocation } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -13,29 +13,26 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { BillDetailModal } from '@/components/billing/BillDetailModal';
-import { EditBillModal } from '@/components/billing/EditBillModal';
-import { LayoutToggle, guessBillLayout, type BillLayout } from '@/components/billing/LayoutToggle';
+import { MmBillDetailModal } from '@/components/billing/MmBillDetailModal';
+import { MmEditBillModal } from '@/components/billing/MmEditBillModal';
 import { billsApi } from '@/api/bills';
 import { settingsApi } from '@/api/settings';
 // pdf-lib is heavy (~400KB) — loaded on demand so the app starts fast.
-const loadPdfLib = () => import('@/lib/pdf');
-const loadA4Lib = () => import('@/lib/a4invoice');
 const loadMmA4Lib = () => import('@/lib/mmA4invoice');
 import { formatCurrency, billStatusVariant, type BillStatus, type Bill } from '@/types';
 import { formatDate } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
 
+// MM's own bill history — filtered to series='MM' only, entirely separate
+// from the main Bill History page. Always prints/downloads as the MM/A4 Tax
+// Invoice layout (no Thermal/A4 toggle — MM bills are never anything else).
 const statusVariant = billStatusVariant;
 
-export default function HistoryPage() {
-  const location = useLocation();
+export default function MmHistoryPage() {
   const { toast } = useToast();
   const qc = useQueryClient();
-  const stateBillId = location.state?.selectedBillId as number | undefined;
 
   const [search, setSearch] = useState('');
-  // Defer the search term so fast typing doesn't fire a request per keystroke
   const deferredSearch = useDeferredValue(search);
   const [status, setStatus] = useState('ALL');
   const [from, setFrom] = useState('');
@@ -43,12 +40,10 @@ export default function HistoryPage() {
   const [page, setPage] = useState(1);
   const [selectedBill, setSelectedBill] = useState<Bill | null>(null);
   const [editingBill, setEditingBill] = useState<Bill | null>(null);
-  // Per-row Thermal/A4 choice for the row's own Download PDF icon.
-  const [rowLayout, setRowLayout] = useState<Record<number, BillLayout>>({});
   const LIMIT = 15;
 
   const { data, isLoading } = useQuery({
-    queryKey: ['bills', 'history', deferredSearch, status, from, to, page],
+    queryKey: ['bills', 'mm-history', deferredSearch, status, from, to, page],
     queryFn: () =>
       billsApi.list({
         search: deferredSearch || undefined,
@@ -57,8 +52,7 @@ export default function HistoryPage() {
         to: to || undefined,
         page,
         limit: LIMIT,
-        // MM bills have their own separate MmHistoryPage — never mixed in here.
-        series: 'MAIN',
+        series: 'MM',
       }),
     placeholderData: (prev) => prev,
   });
@@ -68,17 +62,11 @@ export default function HistoryPage() {
     queryFn: settingsApi.get,
   });
 
-  const { data: routeBill } = useQuery({
-    queryKey: ['bills', stateBillId],
-    queryFn: () => billsApi.get(stateBillId!),
-    enabled: !!stateBillId,
-  });
-
   const cancelMutation = useMutation({
     mutationFn: (id: number) => billsApi.delete(id),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['bills'] });
-      toast({ title: 'Bill cancelled', variant: 'success' });
+      toast({ title: 'MM bill cancelled', variant: 'success' });
     },
     onError: (err: Error) => {
       toast({ title: 'Could not cancel bill', description: err.message, variant: 'destructive' });
@@ -87,63 +75,22 @@ export default function HistoryPage() {
 
   const handleCancel = (bill: Bill) => {
     const ok = confirm(
-      `Cancel bill ${bill.billNumber} (${formatCurrency(bill.grandTotal)})?\n\n` +
-        'It will be marked CANCELLED and excluded from revenue and GST reports. This cannot be undone.',
+      `Cancel MM bill ${bill.billNumber} (${formatCurrency(bill.grandTotal)})?\n\n` +
+        'It will be marked CANCELLED. This cannot be undone.',
     );
     if (ok) cancelMutation.mutate(bill.id);
   };
 
-  useEffect(() => {
-    if (routeBill) {
-      setSelectedBill(routeBill);
-      window.history.replaceState({}, document.title);
-    }
-  }, [routeBill]);
-
   const totalPages = Math.ceil((data?.meta.total ?? 0) / LIMIT);
 
-  // Falls back to a guess (A4-only fields present -> 'a4'), not a hardcoded
-  // 'thermal', so a bill that was actually created in A4 mode doesn't
-  // silently download/print as the thermal receipt just because nobody
-  // clicked the row's A4 toggle first. See guessBillLayout for the reasoning.
-  const layoutFor = (bill: Bill): BillLayout => rowLayout[bill.id] ?? guessBillLayout(bill);
-
   const handleDownloadPDF = async (bill: Bill) => {
-    const layout = layoutFor(bill);
-    if (layout === 'mm_a4') {
-      const { downloadMmA4InvoicePDF } = await loadMmA4Lib();
-      await downloadMmA4InvoicePDF(bill, settings ?? {});
-    } else if (layout === 'a4') {
-      const { downloadA4InvoicePDF } = await loadA4Lib();
-      await downloadA4InvoicePDF(bill, settings ?? {});
-    } else {
-      const { downloadBillPDF } = await loadPdfLib();
-      await downloadBillPDF(bill, settings ?? {});
-    }
+    const { downloadMmA4InvoicePDF } = await loadMmA4Lib();
+    await downloadMmA4InvoicePDF(bill, settings ?? {});
   };
 
   const handlePrint = async (bill: Bill) => {
-    const layout = layoutFor(bill);
-    if (layout === 'mm_a4') {
-      const { printMmA4InvoicePDF } = await loadMmA4Lib();
-      await printMmA4InvoicePDF(bill, settings ?? {});
-      return;
-    }
-    if (layout === 'a4') {
-      const { printA4InvoicePDF } = await loadA4Lib();
-      await printA4InvoicePDF(bill, settings ?? {});
-      return;
-    }
-    try {
-      const { printThermalReceipt } = await import('@/lib/printThermal');
-      await printThermalReceipt(bill, settings ?? {});
-    } catch (err) {
-      toast({
-        title: 'Could not print the receipt',
-        description: err instanceof Error ? err.message : String(err),
-        variant: 'destructive',
-      });
-    }
+    const { printMmA4InvoicePDF } = await loadMmA4Lib();
+    await printMmA4InvoicePDF(bill, settings ?? {});
   };
 
   return (
@@ -156,7 +103,7 @@ export default function HistoryPage() {
               <div className="relative">
                 <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
                 <Input
-                  placeholder="Search bill number…"
+                  placeholder="Search MM bill number…"
                   className="pl-9"
                   value={search}
                   onChange={(e) => { setSearch(e.target.value); setPage(1); }}
@@ -195,7 +142,7 @@ export default function HistoryPage() {
       <Card>
         <CardHeader className="pb-3 flex flex-row items-center justify-between">
           <CardTitle className="text-sm">
-            Bills ({data?.meta.total ?? 0})
+            MM Bills ({data?.meta.total ?? 0})
           </CardTitle>
         </CardHeader>
         <CardContent className="p-0">
@@ -203,7 +150,7 @@ export default function HistoryPage() {
             <table className="w-full">
               <thead>
                 <tr className="border-b bg-slate-50/80">
-                  {['Bill No', 'Date', 'Customer', 'Items', 'Amount', 'Status', 'Actions'].map((h) => (
+                  {['MM Bill No', 'Date', 'Customer', 'Items', 'Amount', 'Status', 'Actions'].map((h) => (
                     <th key={h} className="text-left py-2.5 px-4 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{h}</th>
                   ))}
                 </tr>
@@ -216,7 +163,7 @@ export default function HistoryPage() {
                 )}
                 {!isLoading && data?.data.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="py-10 text-center text-muted-foreground text-sm">No bills found</td>
+                    <td colSpan={7} className="py-10 text-center text-muted-foreground text-sm">No MM bills found</td>
                   </tr>
                 )}
                 {data?.data.map((bill) => (
@@ -224,12 +171,12 @@ export default function HistoryPage() {
                     <td className="py-3 px-4 font-mono text-sm font-semibold text-blue-600">{bill.billNumber}</td>
                     <td className="py-3 px-4 text-sm">{formatDate(bill.billDate)}</td>
                     <td className="py-3 px-4 text-sm">
-                      {bill.customer ? (
+                      {bill.mmCustomer ? (
                         <Link
-                          to={`/customers?id=${bill.customer.id}`}
+                          to={`/mm-customers?id=${bill.mmCustomer.id}`}
                           className="text-blue-600 hover:underline"
                         >
-                          {bill.customer.name}
+                          {bill.mmCustomer.name}
                         </Link>
                       ) : (
                         <span className="text-muted-foreground">Walk-in</span>
@@ -252,11 +199,6 @@ export default function HistoryPage() {
                             <Pencil className="h-3.5 w-3.5" />
                           </Button>
                         )}
-                        <LayoutToggle
-                          compact
-                          value={layoutFor(bill)}
-                          onChange={(v) => setRowLayout((prev) => ({ ...prev, [bill.id]: v }))}
-                        />
                         <Button variant="ghost" size="icon" className="h-7 w-7" title="Print" onClick={() => handlePrint(bill)}>
                           <Printer className="h-3.5 w-3.5" />
                         </Button>
@@ -303,7 +245,7 @@ export default function HistoryPage() {
       </Card>
 
       {selectedBill && (
-        <BillDetailModal
+        <MmBillDetailModal
           bill={selectedBill}
           settings={settings ?? {}}
           onClose={() => setSelectedBill(null)}
@@ -312,7 +254,7 @@ export default function HistoryPage() {
       )}
 
       {editingBill && (
-        <EditBillModal
+        <MmEditBillModal
           bill={editingBill}
           onClose={() => setEditingBill(null)}
           onSaved={(updated) => {

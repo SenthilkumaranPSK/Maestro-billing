@@ -103,6 +103,10 @@ export class ReportService {
         billDate: { gte: from, lte: to },
         status: { not: 'CANCELLED' },
         deletedAt: null,
+        // MM bills have their own separate numbering series and product
+        // catalog — mixing them into the studio's official GST report would
+        // combine two unrelated invoice sequences into one filing.
+        series: 'MAIN',
       },
       include: { items: true },
     });

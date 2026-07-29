@@ -17,10 +17,35 @@ export interface Customer {
   updatedAt: string;
 }
 
+/** MM billing module's own customer database — separate from Customer above. */
+export interface MmCustomer {
+  id: number;
+  name: string;
+  phone: string;
+  email?: string;
+  address?: string;
+  gstin?: string;
+  notes?: string;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface Product {
   id: number;
   name: string;
   description?: string;
+  unit: string;
+  unitPrice: number; // paise
+  gstRate: number;
+  hsnSac?: string;
+  isActive: boolean;
+}
+
+/** MM billing module's own product catalog — separate from Product above. */
+export interface MmProduct {
+  id: number;
+  name: string;
   unit: string;
   unitPrice: number; // paise
   gstRate: number;
@@ -75,6 +100,9 @@ export interface Bill {
   billNumber: string;
   customerId?: number;
   customer?: Customer;
+  // MM billing module only — see Bill.mmCustomerId in schema.prisma.
+  mmCustomerId?: number;
+  mmCustomer?: MmCustomer;
   billDate: string;
   dueDate?: string;
   subTotal: number; // paise
@@ -94,6 +122,19 @@ export interface Bill {
   // Whether item prices were entered GST-inclusive (tax extracted from the
   // sticker price) or GST-exclusive (tax added on top, the default).
   gstInclusive: boolean;
+  // MM/A4 "Tax Invoice" layout only — see backend schema.prisma Bill model.
+  vehicleNo?: string;
+  despatchedThrough?: string;
+  destination?: string;
+  otherReference?: string;
+  ewayBillNo?: string;
+  irnNo?: string;
+  consigneeName?: string;
+  consigneeAddress?: string;
+  consigneeGstin?: string;
+  // 'MAIN' (Thermal/A4, the studio's normal billing) or 'MM' (the separate
+  // MM billing module) — see backend schema.prisma Bill.series.
+  series?: 'MAIN' | 'MM';
   items: BillItem[];
   payments: Payment[];
   createdAt: string;
@@ -138,6 +179,11 @@ export interface Settings {
     // Missing (older installs that predate this setting) or any other value
     // means "show" — this must default to today's behaviour, not opt-in.
     show_whatsapp_on_billing: string;
+  };
+  // MM billing module's own settings group — separate from tax above (MM's
+  // default GST rate is independent of the studio's regular one).
+  mm: {
+    mm_default_gst_rate: string;
   };
 }
 

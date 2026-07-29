@@ -42,6 +42,27 @@ model Customer {
   @@map("customers")
 }
 
+// ─── MM Customers (separate customer database for the MM billing module) ────
+// MM is a wholly separate billing area — its own customers, never mixed with
+// the studio's normal Customer list above.
+model MmCustomer {
+  id        Int       @id @default(autoincrement())
+  name      String
+  phone     String
+  email     String?
+  address   String?
+  gstin     String?
+  notes     String?
+  isActive  Boolean   @default(true) @map("is_active")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  bills     Bill[]
+
+  @@map("mm_customers")
+}
+
 // ─── Products ─────────────────────────────────────────────────────────────────
 model Product {
   id          Int       @id @default(autoincrement())
@@ -60,6 +81,24 @@ model Product {
   @@map("products")
 }
 
+// ─── MM Products (separate catalog for the MM billing module) ────────────────
+// MM is a wholly separate billing area from the studio's normal Thermal/A4
+// products — its own catalog, its own bill numbering series (see Bill.series
+// below), never mixed with the main Products list.
+model MmProduct {
+  id          Int       @id @default(autoincrement())
+  name        String
+  unit        String    @default("Kgs")
+  unitPrice   Int       @map("unit_price")  // in paise
+  gstRate     Float     @default(5) @map("gst_rate")
+  hsnSac      String?   @default("210690") @map("hsn_sac")
+  isActive    Boolean   @default(true) @map("is_active")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  @@map("mm_products")
+}
+
 // ─── Services (reusable catalog for the A4 invoice's Service Description) ─────
 model Service {
   id        Int      @id @default(autoincrement())
@@ -76,6 +115,10 @@ model Bill {
   id             Int       @id @default(autoincrement())
   billNumber     String    @unique @map("bill_number")  // e.g. PS-2024-0001
   customerId     Int?      @map("customer_id")
+  // MM bills link here instead of customerId above — separate customer
+  // database, separate FK. A bill only ever populates one of the two,
+  // matching its series.
+  mmCustomerId   Int?      @map("mm_customer_id")
   billDate       DateTime  @map("bill_date")
   dueDate        DateTime? @map("due_date")
   subTotal       Int       @map("sub_total")     // in paise
@@ -105,12 +148,40 @@ model Bill {
   // way regardless — this only changes how they were derived and whether the
   // printed receipt/invoice shows a CGST/SGST breakdown.
   gstInclusive   Boolean   @default(false) @map("gst_inclusive")
+  // MM/A4 "Tax Invoice" layout only — transport/e-way details for a formal
+  // GST tax invoice (goods dispatch), never shown on thermal or the plain A4
+  // layout. All optional: a studio issuing an occasional wholesale-style bill
+  // fills in only what applies.
+  vehicleNo          String?   @map("vehicle_no")
+  despatchedThrough  String?   @map("despatched_through")
+  destination        String?
+  otherReference     String?   @map("other_reference")
+  ewayBillNo         String?   @map("eway_bill_no")
+  // Invoice Reference Number from the government e-invoice portal — entered
+  // manually if the studio generates one there; this app never calls that
+  // API itself, so there is no QR code to go with it (a fake one would be
+  // meaningless/misleading on a real tax document).
+  irnNo              String?   @map("irn_no")
+  // Consignee defaults to the Buyer (the bill's customer) when blank — only
+  // set these when goods ship to someone other than the billed customer.
+  consigneeName      String?   @map("consignee_name")
+  consigneeAddress   String?   @map("consignee_address")
+  consigneeGstin     String?   @map("consignee_gstin")
+  // Which billing area created this bill: "MAIN" (Thermal/A4, the studio's
+  // normal billing — the default) or "MM" (the separate MM billing module —
+  // its own product catalog, its own MM/YY-YY/NNN numbering series, filtered
+  // into its own MM History list). Bill numbers are NOT unique across series
+  // by format alone (a MAIN "047/2026" and an MM "MM/26-27/047" can coexist),
+  // so series is what actually keeps the two apart everywhere they're
+  // queried, not just how they're numbered.
+  series         String    @default("MAIN")
   createdBy      Int?      @map("created_by")
   createdAt      DateTime  @default(now()) @map("created_at")
   updatedAt      DateTime  @updatedAt @map("updated_at")
   deletedAt      DateTime? @map("deleted_at")
 
   customer       Customer? @relation(fields: [customerId], references: [id])
+  mmCustomer     MmCustomer? @relation(fields: [mmCustomerId], references: [id])
   createdByUser  User?     @relation(fields: [createdBy], references: [id])
   items          BillItem[]
   payments       Payment[]
@@ -119,6 +190,8 @@ model Bill {
   // the customer ledger queries by customerId — neither had an index.
   @@index([billDate])
   @@index([customerId])
+  @@index([mmCustomerId])
+  @@index([series])
   @@map("bills")
 }
 

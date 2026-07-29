@@ -42,7 +42,7 @@ const PAGE_W = 595.28; // A4, pt
 const PAGE_H = 841.89;
 const MARGIN = 32;
 
-function hexRgb(hex: string): ReturnType<typeof rgb> {
+export function hexRgb(hex: string): ReturnType<typeof rgb> {
   const n = parseInt(hex, 16);
   return rgb(((n >> 16) & 0xff) / 255, ((n >> 8) & 0xff) / 255, (n & 0xff) / 255);
 }
@@ -54,7 +54,9 @@ const BODY = hexRgb('397601'); // customer/service/item/bank text (the other "gr
 
 // No Settings field for this yet (see conversation) — filled in from the
 // reference invoice. Revisit if the studio needs to edit these from the UI.
-const BANK_DETAILS = {
+// Exported: reused as-is by mmA4invoice.ts (MM/A4 Tax Invoice layout) — same
+// studio, same bank account, regardless of which print layout is used.
+export const BANK_DETAILS = {
   accountName: 'MAESTRO YUVARAJ V',
   accountNumber: '510909010267230',
   accountType: 'Current Account',
@@ -63,7 +65,7 @@ const BANK_DETAILS = {
   ifsc: 'CIUB0000188',
 };
 
-function wrapText(font: PDFFont, str: string, size: number, maxWidth: number): string[] {
+export function wrapText(font: PDFFont, str: string, size: number, maxWidth: number): string[] {
   const words = str.split(/\s+/).filter(Boolean);
   if (words.length === 0) return [''];
   const lines: string[] = [];
@@ -81,7 +83,7 @@ function wrapText(font: PDFFont, str: string, size: number, maxWidth: number): s
   return lines.length ? lines : [''];
 }
 
-function formatDDMMYYYY(d: Date): string {
+export function formatDDMMYYYY(d: Date): string {
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${pad(d.getDate())}-${pad(d.getMonth() + 1)}-${d.getFullYear()}`;
 }
@@ -92,7 +94,7 @@ function formatShortDate(d: Date): string {
   return `${month} ${d.getDate()} / ${d.getFullYear()}`;
 }
 
-function formatRupees(paise: number): string {
+export function formatRupees(paise: number): string {
   // Whole-rupee amounts print without decimals (e.g. "18,000", matching the
   // reference invoice); anything with a paisa remainder always gets exactly
   // 2 decimals, never 1 (minimumFractionDigits:0 alone would print "11,800.5").

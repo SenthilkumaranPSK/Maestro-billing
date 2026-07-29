@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { productsApi } from '@/api/products';
+import { mmProductsApi } from '@/api/mmProducts';
 import type { BillItemForm } from '@/types';
 import { paisaToRupee } from '@/types';
 import { computeItemLineTotal } from '@/lib/billMath';
@@ -41,9 +42,12 @@ interface LineItemRowProps {
    * after saving is what Bill History → Edit Bill is for.
    */
   disabled?: boolean;
+  /** Which product catalog the picker searches — 'mm' sources from the
+   * separate MM/Products list instead of the studio's normal Products. */
+  catalog?: 'main' | 'mm';
 }
 
-export function LineItemRow({ index, item, onChange, onRemove, includeInactive = false, onRequestNewRow, showHsnSac = false, gstInclusive = false, disabled = false }: LineItemRowProps) {
+export function LineItemRow({ index, item, onChange, onRemove, includeInactive = false, onRequestNewRow, showHsnSac = false, gstInclusive = false, disabled = false, catalog = 'main' }: LineItemRowProps) {
   const [productSearch, setProductSearch] = useState(item.productName);
   const [showDropdown, setShowDropdown] = useState(false);
   const ref = useRef<HTMLTableCellElement>(null);
@@ -57,9 +61,9 @@ export function LineItemRow({ index, item, onChange, onRemove, includeInactive =
   }, []);
 
   const { data: products } = useQuery({
-    queryKey: ['products', 'search', productSearch, includeInactive],
+    queryKey: [catalog === 'mm' ? 'mm-products' : 'products', 'search', productSearch, includeInactive],
     queryFn: () =>
-      productsApi.list({
+      (catalog === 'mm' ? mmProductsApi : productsApi).list({
         search: productSearch || undefined,
         // The backend only widens beyond active products for the literal
         // string 'false' — omitting the param means active-only.
@@ -125,7 +129,14 @@ export function LineItemRow({ index, item, onChange, onRemove, includeInactive =
                     setProductSearch(p.name);
                     onChange({
                       ...item,
-                      productId: p.id,
+                      // BillItem.productId is a foreign key into the Product
+                      // table only — an MmProduct's id is a different row
+                      // entirely (or doesn't exist there), so setting it here
+                      // would violate that FK the moment the bill is saved.
+                      // MM line items are already fully denormalized (name/
+                      // hsn/unit/price/gst all copied below), same as any
+                      // manually-typed item with no catalog link.
+                      productId: catalog === 'mm' ? undefined : p.id,
                       productName: p.name,
                       hsnSac: p.hsnSac,
                       unit: p.unit,

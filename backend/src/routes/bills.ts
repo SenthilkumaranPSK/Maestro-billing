@@ -32,8 +32,9 @@ export async function billRoutes(fastify: FastifyInstance) {
   const billService = new BillService(prisma);
 
   // GET /bills/next-number — must come before /:id
-  fastify.get('/next-number', async (_request, reply) => {
-    const billNumber = await billService.getNextBillNumber();
+  fastify.get('/next-number', async (request, reply) => {
+    const series = (request.query as { series?: string }).series;
+    const billNumber = series === 'MM' ? await billService.getNextMmBillNumber() : await billService.getNextBillNumber();
     return reply.send({ success: true, data: billNumber });
   });
 
@@ -46,6 +47,7 @@ export async function billRoutes(fastify: FastifyInstance) {
       search?: string;
       page?: string;
       limit?: string;
+      series?: string;
     };
 
     const page = parseIntParam(query.page, 1);
@@ -53,6 +55,10 @@ export async function billRoutes(fastify: FastifyInstance) {
     const skip = (page - 1) * limit;
 
     const where: Record<string, unknown> = { deletedAt: null };
+    // No default — a caller that cares about MAIN vs MM (History, Reports,
+    // Dashboard, the MM module's own history) must say so explicitly, since
+    // there's no single "obviously correct" default when both exist.
+    if (query.series) where['series'] = query.series;
     if (query.status) where['status'] = query.status;
     if (query.customerId) {
       const customerId = parseId(query.customerId);
@@ -81,7 +87,7 @@ export async function billRoutes(fastify: FastifyInstance) {
         where,
         // payments intentionally excluded — no list view renders them, and the
         // GST/Day reports pull up to 2000 bills at once. GET /:id keeps them.
-        include: { customer: true, items: true },
+        include: { customer: true, mmCustomer: true, items: true },
         orderBy: { billDate: 'desc' },
         skip,
         take: limit,

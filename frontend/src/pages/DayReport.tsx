@@ -39,7 +39,7 @@ export default function DayReportPage() {
 
   const { data: billsData } = useQuery({
     queryKey: ['bills', 'day', date],
-    queryFn: () => billsApi.list({ from: date, to: date, limit: 1000 }),
+    queryFn: () => billsApi.list({ from: date, to: date, limit: 1000, series: 'MAIN' }),
   });
 
   const { data: settings } = useQuery({

@@ -57,6 +57,31 @@ export class BillService {
   }
 
   /**
+   * MM billing module's own numbering — entirely separate sequence from
+   * getNextBillNumber() above, scoped to series='MM' bills only, in Indian
+   * financial-year format: "MM/26-27/001". FY runs April→March, so a bill
+   * dated Jan–Mar counts toward the year that STARTED the previous April
+   * (e.g. Feb 2027 is FY "26-27", not "27-28").
+   */
+  async getNextMmBillNumber(): Promise<string> {
+    const now = new Date();
+    const fyStartYear = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1; // getMonth() 3 = April
+    const fyLabel = `${String(fyStartYear).slice(-2)}-${String(fyStartYear + 1).slice(-2)}`;
+    const prefix = `MM/${fyLabel}/`;
+
+    const last = await this.prisma.bill.findFirst({
+      where: { series: 'MM', billNumber: { startsWith: prefix } },
+      orderBy: { billNumber: 'desc' },
+    });
+    let seq = 0;
+    if (last) {
+      const n = parseInt(last.billNumber.slice(prefix.length), 10);
+      if (!isNaN(n)) seq = n;
+    }
+    return `${prefix}${String(seq + 1).padStart(3, '0')}`;
+  }
+
+  /**
    * gstInclusive=false (default, unchanged behaviour): unitPrice is the
    * pre-tax base — GST is computed and added on top, so the customer pays
    * qty * unitPrice * (1 + gstRate/100).
@@ -124,13 +149,16 @@ export class BillService {
     // (e.g. a double-click) can race to the same number. billNumber is UNIQUE,
     // so the loser fails with P2002 — recompute and retry instead of surfacing
     // a duplicate-key error to the operator.
+    const series = input.series ?? 'MAIN';
     for (let attempt = 1; ; attempt++) {
-      const billNumber = await this.getNextBillNumber();
+      const billNumber = series === 'MM' ? await this.getNextMmBillNumber() : await this.getNextBillNumber();
       try {
         return await this.prisma.bill.create({
           data: {
             billNumber,
+            series,
             customerId: input.customerId,
+            mmCustomerId: input.mmCustomerId,
             billDate: new Date(input.billDate),
             dueDate: input.dueDate ? new Date(input.dueDate) : null,
             subTotal,
@@ -144,6 +172,15 @@ export class BillService {
             serviceTo: input.serviceTo ? new Date(input.serviceTo) : null,
             serviceDates: input.serviceDates?.length ? JSON.stringify(input.serviceDates) : null,
             gstInclusive: input.gstInclusive ?? false,
+            vehicleNo: input.vehicleNo,
+            despatchedThrough: input.despatchedThrough,
+            destination: input.destination,
+            otherReference: input.otherReference,
+            ewayBillNo: input.ewayBillNo,
+            irnNo: input.irnNo,
+            consigneeName: input.consigneeName,
+            consigneeAddress: input.consigneeAddress,
+            consigneeGstin: input.consigneeGstin,
             items: {
               create: computedItems.map((item) => ({
                 productId: item.productId,
@@ -158,7 +195,7 @@ export class BillService {
               })),
             },
           },
-          include: { items: true, payments: true, customer: true },
+          include: { items: true, payments: true, customer: true, mmCustomer: true },
         });
       } catch (err) {
         const isDuplicateNumber =
@@ -204,6 +241,7 @@ export class BillService {
         where: { id: billId },
         data: {
           customerId: input.customerId ?? null,
+          mmCustomerId: input.mmCustomerId ?? null,
           billDate: new Date(input.billDate),
           dueDate: input.dueDate ? new Date(input.dueDate) : null,
           subTotal,
@@ -218,6 +256,15 @@ export class BillService {
           serviceTo: input.serviceTo ? new Date(input.serviceTo) : null,
           serviceDates: input.serviceDates?.length ? JSON.stringify(input.serviceDates) : null,
           gstInclusive: input.gstInclusive ?? false,
+          vehicleNo: input.vehicleNo ?? null,
+          despatchedThrough: input.despatchedThrough ?? null,
+          destination: input.destination ?? null,
+          otherReference: input.otherReference ?? null,
+          ewayBillNo: input.ewayBillNo ?? null,
+          irnNo: input.irnNo ?? null,
+          consigneeName: input.consigneeName ?? null,
+          consigneeAddress: input.consigneeAddress ?? null,
+          consigneeGstin: input.consigneeGstin ?? null,
           items: {
             create: computedItems.map((item) => ({
               productId: item.productId,
@@ -232,7 +279,7 @@ export class BillService {
             })),
           },
         },
-        include: { items: true, payments: true, customer: true },
+        include: { items: true, payments: true, customer: true, mmCustomer: true },
       });
     });
   }
@@ -240,7 +287,7 @@ export class BillService {
   async getBillWithDetails(billId: number) {
     return this.prisma.bill.findUnique({
       where: { id: billId, deletedAt: null },
-      include: { items: true, payments: true, customer: true },
+      include: { items: true, payments: true, customer: true, mmCustomer: true },
     });
   }
 }
