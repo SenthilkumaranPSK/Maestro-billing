@@ -285,6 +285,16 @@ export class WhatsAppService {
       const browser = await puppeteer.launch({
         headless: true,
         executablePath: browserPath,
+        // Every captured attempt so far aborts mid-download on WhatsApp's own
+        // CDN (media-*.cdn.whatsapp.net, the multi-device message-history
+        // sync) with net::ERR_ABORTED — never once succeeding, well before
+        // any timeout we control. That domain advertises HTTP/3 (Alt-Svc:
+        // h3), and Chrome prefers QUIC when offered; QUIC (UDP-based) is far
+        // more prone than plain TLS/TCP to being silently dropped or reset by
+        // ISPs/routers/firewalls, which would show up in Chrome exactly as a
+        // mid-stream abort instead of a clean fallback. Forcing plain
+        // TLS/TCP removes that variable.
+        args: ['--disable-quic'],
         // NOTE: do NOT add `userDataDir` here to try to persist the
         // WhatsApp login. It was tried and reverted (2026-07-28), measured
         // A/B on the same build: with it, whatsapp-web.js's Client.inject()
