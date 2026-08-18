@@ -180,6 +180,14 @@ export class BackupService {
   }
 
   async backup(): Promise<string> {
+    const srcSize = fs.existsSync(this.dbPath) ? fs.statSync(this.dbPath).size : 0;
+    if (srcSize < MIN_BACKUP_BYTES) {
+      throw new BackupError(
+        `Backup aborted — source database is only ${srcSize} bytes (< 1 KB). ` +
+          'Check DATABASE_URL and ensure the database file exists and is not empty.',
+      );
+    }
+
     const now = new Date();
     // Grouped into a per-month subfolder (e.g. "2026-07") so a growing
     // history of daily backups doesn't just pile up as one flat folder of

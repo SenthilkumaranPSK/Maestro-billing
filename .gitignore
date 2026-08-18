@@ -35,3 +35,6 @@ desktop/release/
 desktop/build/
 desktop/template/
 desktop/staging/
+
+# Personal Claude Code settings (permission overrides, not team-shared)
+.claude/settings.local.json
