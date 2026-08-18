@@ -59,12 +59,16 @@ export const prisma = new PrismaClient();
  * autoincrement counters by deleting from sqlite_sequence.
  */
 export async function reset(): Promise<void> {
-  // Order matters: child tables before parents.
+  // Order matters: child tables before parents. mmStockMovement references
+  // both bill and mmProduct, so it has to go before either of those.
+  await prisma.mmStockMovement.deleteMany();
   await prisma.payment.deleteMany();
   await prisma.billItem.deleteMany();
   await prisma.bill.deleteMany();
   await prisma.product.deleteMany();
+  await prisma.mmProduct.deleteMany();
   await prisma.customer.deleteMany();
+  await prisma.mmCustomer.deleteMany();
   await prisma.log.deleteMany();
   await prisma.setting.deleteMany();
   await prisma.user.deleteMany();
