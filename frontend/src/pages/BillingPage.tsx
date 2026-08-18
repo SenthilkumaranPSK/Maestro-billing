@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, Printer, FileText, Save, RotateCcw, CalendarDays, X } from 'lucide-react';
+import { Plus, Printer, FileText, ScanEye, Save, RotateCcw, CalendarDays, X } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { CustomerBar, type CustomerInfo } from '@/components/billing/CustomerBar';
 import { LineItemRow } from '@/components/billing/LineItemRow';
 import { LayoutToggle, type BillLayout } from '@/components/billing/LayoutToggle';
+import { PdfPreviewModal } from '@/components/billing/PdfPreviewModal';
 import { GstModeToggle } from '@/components/billing/GstModeToggle';
 import { ServiceDescriptionInput } from '@/components/billing/ServiceDescriptionInput';
 import { billsApi } from '@/api/bills';
@@ -89,6 +90,22 @@ const newEmptyItem = (): BillItemForm => ({
   gstRate: 18,
 });
 
+// Remembers the operator's last-used print layout across bills and app
+// restarts (localStorage, this machine only) — a studio that bills mostly on
+// A4 shouldn't have to re-click the toggle on every single new bill, since it
+// otherwise always starts back on 'thermal'. Falls back silently (private
+// browsing, storage disabled) since this is a convenience, not billing data.
+const LAYOUT_STORAGE_KEY = 'maestro-billing:layout-preference';
+function loadPreferredLayout(): BillLayout {
+  try {
+    const stored = localStorage.getItem(LAYOUT_STORAGE_KEY);
+    if (stored === 'thermal' || stored === 'a4' || stored === 'mm_a4') return stored;
+  } catch {
+    // localStorage unavailable — just use the default below
+  }
+  return 'thermal';
+}
+
 export default function BillingPage() {
   const { toast } = useToast();
   const qc = useQueryClient();
@@ -100,9 +117,11 @@ export default function BillingPage() {
   const [sendOnWhatsApp, setSendOnWhatsApp] = useState(false);
   const [items, setItems] = useState<BillItemForm[]>([newEmptyItem()]);
   const [savedBill, setSavedBill] = useState<Bill | null>(null);
-  // Which printed layout Print/PDF/WhatsApp use — thermal receipt (default)
-  // or the full-page A4 "Service Bill" invoice.
-  const [layout, setLayout] = useState<BillLayout>('thermal');
+  const [previewOpen, setPreviewOpen] = useState(false);
+  // Which printed layout Print/PDF/WhatsApp use — thermal receipt, the A4
+  // "Service Bill", or the MM/A4 Tax Invoice. Initialized from (and kept in
+  // sync with) the operator's last choice — see loadPreferredLayout above.
+  const [layout, setLayout] = useState<BillLayout>(loadPreferredLayout);
   // A4-only fields — optional, shown collapsed since most bills never need
   // them (per-unit retail sales rather than a dated service engagement).
   const [serviceDescription, setServiceDescription] = useState('');
@@ -388,12 +407,24 @@ export default function BillingPage() {
     return () => document.removeEventListener('keydown', handler);
   }, [savedBill, items, customer, createBillMutation.isPending, layout, gstInclusive, serviceDescription, serviceDates, vehicleNo, despatchedThrough, destination, otherReference, ewayBillNo, irnNo, consigneeSameAsBuyer, consigneeName, consigneeAddress, consigneeGstin]);
 
+  // Persist every layout change so the next bill (this session or after a
+  // restart) starts on whatever the operator last used.
+  useEffect(() => {
+    try {
+      localStorage.setItem(LAYOUT_STORAGE_KEY, layout);
+    } catch {
+      // localStorage unavailable — the toggle still works, it just won't be remembered
+    }
+  }, [layout]);
+
   const handleReset = () => {
     setCustomer({ name: '', phone: '', gstin: '', address: '' });
     setItems([newEmptyItem()]);
     setSendOnWhatsApp(false);
     setSavedBill(null);
-    setLayout('thermal');
+    // Layout is deliberately left as-is (not reset to 'thermal') — a studio
+    // billing a run of A4 invoices back-to-back shouldn't have to re-toggle
+    // it after every single save. See loadPreferredLayout above.
     setServiceDescription('');
     setServiceDates(['']);
     setGstInclusive(false);
@@ -412,6 +443,7 @@ export default function BillingPage() {
   };
 
   return (
+    <>
     <div className="space-y-4 max-w-6xl">
 
       {/* ── Top action bar ──────────────────────────────────────── */}
@@ -461,6 +493,10 @@ export default function BillingPage() {
           </Button>
           {savedBill ? (
             <>
+              <Button variant="outline" size="sm" onClick={() => setPreviewOpen(true)}>
+                <ScanEye className="w-3.5 h-3.5 mr-1.5" />
+                Preview
+              </Button>
               <Button variant="outline" size="sm" onClick={handlePrint}>
                 <Printer className="w-3.5 h-3.5 mr-1.5" />
                 Print
@@ -787,6 +823,10 @@ export default function BillingPage() {
 
           {savedBill && (
             <div className="space-y-2 animate-in fade-in slide-in-from-bottom-2 duration-300">
+              <Button variant="outline" className="w-full" onClick={() => setPreviewOpen(true)}>
+                <ScanEye className="w-4 h-4 mr-2" />
+                Preview
+              </Button>
               <Button variant="outline" className="w-full" onClick={handlePrint}>
                 <Printer className="w-4 h-4 mr-2" />
                 Print
@@ -814,5 +854,15 @@ export default function BillingPage() {
         </div>
       </div>
     </div>
+
+    {savedBill && previewOpen && (
+      <PdfPreviewModal
+        bill={savedBill}
+        settings={settings ?? {}}
+        layout={layout}
+        onClose={() => setPreviewOpen(false)}
+      />
+    )}
+    </>
   );
 }

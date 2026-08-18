@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Plus, Printer, FileText, Save, RotateCcw, CalendarDays } from 'lucide-react';
+import { Plus, Printer, FileText, ScanEye, Save, RotateCcw, CalendarDays } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -7,6 +7,7 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { CustomerBar, type CustomerInfo } from '@/components/billing/CustomerBar';
 import { LineItemRow } from '@/components/billing/LineItemRow';
+import { PdfPreviewModal } from '@/components/billing/PdfPreviewModal';
 import { billsApi } from '@/api/bills';
 import { mmCustomersApi } from '@/api/mmCustomers';
 import { settingsApi } from '@/api/settings';
@@ -88,6 +89,7 @@ export default function MmBillingPage() {
   const [customer, setCustomer] = useState<CustomerInfo>({ name: '', phone: '' });
   const [items, setItems] = useState<BillItemForm[]>([newEmptyItem()]);
   const [savedBill, setSavedBill] = useState<Bill | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
   const [sendOnWhatsApp, setSendOnWhatsApp] = useState(false);
   const [sendingWhatsApp, setSendingWhatsApp] = useState(false);
 
@@ -298,6 +300,7 @@ export default function MmBillingPage() {
   };
 
   return (
+    <>
     <div className="space-y-4 max-w-6xl">
 
       {/* ── Top action bar ──────────────────────────────────────── */}
@@ -321,6 +324,10 @@ export default function MmBillingPage() {
           </Button>
           {savedBill ? (
             <>
+              <Button variant="outline" size="sm" onClick={() => setPreviewOpen(true)}>
+                <ScanEye className="w-3.5 h-3.5 mr-1.5" />
+                Preview
+              </Button>
               <Button variant="outline" size="sm" onClick={handlePrint}>
                 <Printer className="w-3.5 h-3.5 mr-1.5" />
                 Print
@@ -565,6 +572,10 @@ export default function MmBillingPage() {
 
           {savedBill && (
             <div className="space-y-2 animate-in fade-in slide-in-from-bottom-2 duration-300">
+              <Button variant="outline" className="w-full" onClick={() => setPreviewOpen(true)}>
+                <ScanEye className="w-4 h-4 mr-2" />
+                Preview
+              </Button>
               <Button variant="outline" className="w-full" onClick={handlePrint}>
                 <Printer className="w-4 h-4 mr-2" />
                 Print
@@ -588,5 +599,15 @@ export default function MmBillingPage() {
         </div>
       </div>
     </div>
+
+    {savedBill && previewOpen && (
+      <PdfPreviewModal
+        bill={savedBill}
+        settings={settings ?? {}}
+        layout="mm_a4"
+        onClose={() => setPreviewOpen(false)}
+      />
+    )}
+    </>
   );
 }
