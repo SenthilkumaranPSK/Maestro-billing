@@ -104,6 +104,8 @@ export async function generateMmA4InvoicePDF(bill: Bill, settings: Partial<Setti
     page.drawLine({ start: { x: x1, y: yPos }, end: { x: x2, y: yPos }, thickness, color: BLACK });
   const vline = (xPos: number, y1: number, y2: number, thickness = THIN) =>
     page.drawLine({ start: { x: xPos, y: y1 }, end: { x: xPos, y: y2 }, thickness, color: BLACK });
+  const shadeRect = (x: number, y: number, w: number, h: number, gray = 0.85) =>
+    page.drawRectangle({ x, y, width: w, height: h, color: rgb(gray, gray, gray) });
   const text = (str: string, x: number, yPos: number, opts: TextOpts = {}) => {
     const font = opts.font ?? regular;
     const size = opts.size ?? 9;
@@ -134,8 +136,8 @@ export async function generateMmA4InvoicePDF(bill: Bill, settings: Partial<Setti
   // Draws the header + divider on the CURRENT page, returns the y just below it.
   function drawHeader(): number {
     let hy = PAGE_H - MARGIN;
-    text(studioName, left, hy - 20, { size: 18, font: bold, align: 'center', maxWidth: contentW });
-    hy -= 26;
+    text(studioName, left, hy - 18, { size: 18, font: bold, align: 'center', maxWidth: contentW });
+    hy -= 32;
     for (const line of addressLines) {
       text(line, left, hy, { size: 9, align: 'center', maxWidth: contentW });
       hy -= 12;
@@ -161,14 +163,20 @@ export async function generateMmA4InvoicePDF(bill: Bill, settings: Partial<Setti
   }
 
   // ── Buyer / Consignee / Invoice-info box content (identical every page) ──
-  const isPlaceholderCustomer = bill.customer?.phone === '0000000000';
-  const buyerName = isPlaceholderCustomer ? 'Customer' : bill.customer?.name ?? 'Customer';
+  // MM bills carry their customer via mmCustomer (mmCustomerId), never the
+  // main-series customer FK — reading bill.customer here always came up
+  // blank for a real MM bill.
+  const isPlaceholderCustomer = bill.mmCustomer?.phone === '0000000000';
+  const buyerName = isPlaceholderCustomer ? 'Customer' : bill.mmCustomer?.name ?? 'Customer';
   const consigneeName = bill.consigneeName || buyerName;
-  const consigneeAddress = bill.consigneeName ? bill.consigneeAddress : bill.customer?.address;
-  const consigneeGstin = bill.consigneeName ? bill.consigneeGstin : bill.customer?.gstin;
+  const consigneeAddress = bill.consigneeName ? bill.consigneeAddress : bill.mmCustomer?.address;
+  const consigneeGstin = bill.consigneeName ? bill.consigneeGstin : bill.mmCustomer?.gstin;
 
-  const colA_W = contentW * 0.38;
-  const colB_W = contentW * 0.38;
+  // Invoice-info column needs enough room for "label : value" on one line
+  // (e.g. "Other Reference : PO-2026-118") — 38/38 left it too narrow and
+  // the label/value collided.
+  const colA_W = contentW * 0.33;
+  const colB_W = contentW * 0.33;
   const colA_X = left;
   const colB_X = left + colA_W;
   const colC_X = colB_X + colB_W;
@@ -185,7 +193,7 @@ export async function generateMmA4InvoicePDF(bill: Bill, settings: Partial<Setti
     if (phone) lines.push({ text: `Ph : ${phone}`, font: regular, size: 9 });
     return lines;
   }
-  const buyerLines = buildPartyLines(buyerName, bill.customer?.address, bill.customer?.gstin, bill.customer?.phone);
+  const buyerLines = buildPartyLines(buyerName, bill.mmCustomer?.address, bill.mmCustomer?.gstin, bill.mmCustomer?.phone);
   const consigneeLines = buildPartyLines(consigneeName, consigneeAddress, consigneeGstin, undefined);
 
   const invoiceInfoRows: Array<[string, string]> = [
@@ -195,17 +203,24 @@ export async function generateMmA4InvoicePDF(bill: Bill, settings: Partial<Setti
     ...(bill.despatchedThrough ? [['Despatched Through', bill.despatchedThrough] as [string, string]] : []),
     ...(bill.destination ? [['Destination', bill.destination] as [string, string]] : []),
     ...(bill.otherReference ? [['Other Reference', bill.otherReference] as [string, string]] : []),
-    ...(bill.ewayBillNo ? [['E-Way Bill No', bill.ewayBillNo] as [string, string]] : []),
   ];
 
   const LINE_GAP = 13;
   const partyBoxH = (labelH: number) => 16 + labelH * LINE_GAP + 6;
-  // Each invoice-info row is actually TWO lines (a small label, then a bold
-  // value on the line below — see drawPartyBox's `iy -= LINE_GAP + 10`), not
-  // one — sizing this against LINE_GAP alone made the box too short and the
-  // rows visibly overlapped the ones below.
-  const invoiceBoxH = 27 + invoiceInfoRows.length * (LINE_GAP + 10) + 6;
-  const infoBoxH = Math.max(partyBoxH(buyerLines.length + 1), partyBoxH(consigneeLines.length + 1), invoiceBoxH);
+  // "TAX INVOICE" sits in its own mini-box (closed by one extra hline) above
+  // a single-line label:value grid — one row per field, not the old
+  // stacked label-then-bold-value pair.
+  const TAXINV_BOX_H = 20;
+  const INFO_ROW_H = 14;
+  const invoiceBoxH = TAXINV_BOX_H + 12 + invoiceInfoRows.length * INFO_ROW_H + 8;
+  // E-Way Bill No is bottom-anchored in the Consignee column instead of just
+  // another invoice-info row — reserve extra room there when it's present.
+  const consigneeExtra = bill.ewayBillNo ? 18 : 0;
+  const infoBoxH = Math.max(
+    partyBoxH(buyerLines.length + 1),
+    partyBoxH(consigneeLines.length + 1) + consigneeExtra,
+    invoiceBoxH,
+  );
 
   function drawPartyBox(topY: number): number {
     const boxTop = topY;
@@ -228,14 +243,17 @@ export async function generateMmA4InvoicePDF(bill: Bill, settings: Partial<Setti
       text(ln.text, colB_X + 8, cy, { size: ln.size, font: ln.font, color: BODY, maxWidth: colB_W - 16 });
       cy -= LINE_GAP;
     }
+    if (bill.ewayBillNo) {
+      text(`E-Way Bill No : ${bill.ewayBillNo}`, colB_X + 8, boxBottom + 8, { size: 8 });
+    }
 
-    let iy = boxTop - 14;
-    text('TAX INVOICE', colC_X + 8, iy, { size: 10.5, font: bold, align: 'center', maxWidth: colC_W - 16 });
-    iy -= LINE_GAP;
+    text('TAX INVOICE', colC_X + 8, boxTop - 14, { size: 10.5, font: bold, align: 'center', maxWidth: colC_W - 16 });
+    hline(boxTop - TAXINV_BOX_H, colC_X, right);
+    let iy = boxTop - TAXINV_BOX_H - 12;
     for (const [label, value] of invoiceInfoRows) {
       text(label, colC_X + 8, iy, { size: 8, color: BODY });
-      text(value, colC_X + 8, iy - 10, { size: 8.5, font: bold, maxWidth: colC_W - 16 });
-      iy -= LINE_GAP + 10;
+      text(`: ${value}`, right - 8, iy, { size: 8.5, font: bold, align: 'right' });
+      iy -= INFO_ROW_H;
     }
     return boxBottom;
   }
@@ -260,23 +278,25 @@ export async function generateMmA4InvoicePDF(bill: Bill, settings: Partial<Setti
   const sameUnit = bill.items.length > 0 && bill.items.every((i) => i.unit === bill.items[0]!.unit);
   const totalQty = bill.items.reduce((s, i) => s + i.qty, 0);
 
-  const TABLE_HEADER_H = 20;
+  const TABLE_HEADER_H = 24;
   function drawTableHeader(topY: number): number {
     const headerBottom = topY - TABLE_HEADER_H;
-    text(cols[0]!.label, cols[0]!.x, topY - 14, { size: 8.5, font: bold, align: 'center', maxWidth: cols[0]!.w });
-    text(cols[1]!.label, cols[1]!.x + 6, topY - 14, { size: 8.5, font: bold });
+    shadeRect(left, headerBottom, contentW, TABLE_HEADER_H);
+    const baseline = topY - TABLE_HEADER_H / 2 - 3;
+    text(cols[0]!.label, cols[0]!.x, baseline, { size: 8.5, font: bold, align: 'center', maxWidth: cols[0]!.w });
+    text(cols[1]!.label, cols[1]!.x + 6, baseline, { size: 8.5, font: bold });
     for (const c of cols.slice(2)) {
-      text(c.label, c.x, topY - 14, { size: 8.5, font: bold, align: 'center', maxWidth: c.w });
+      text(c.label, c.x, baseline, { size: 8.5, font: bold, align: 'center', maxWidth: c.w });
     }
     hline(headerBottom);
     return headerBottom;
   }
 
   const ROW_LINE_H = 10.5;
-  const ROW_PAD = 7;
+  const ROW_PAD = 16;
   const rowLayouts: RowLayout[] = bill.items.map((item) => {
     const lines = wrapText(regular, item.productName, 8.5, cols[1]!.w - 12);
-    return { lines, height: Math.max(18, lines.length * ROW_LINE_H + ROW_PAD) };
+    return { lines, height: Math.max(30, lines.length * ROW_LINE_H + ROW_PAD) };
   });
 
   // ── Summary block (totals / words / bank / HSN summary / terms /
@@ -286,19 +306,21 @@ export async function generateMmA4InvoicePDF(bill: Bill, settings: Partial<Setti
   const gstRates = [...new Set(bill.items.filter((i) => i.gstRate > 0).map((i) => i.gstRate))];
   const halfRate = gstRates.length === 1 ? gstRates[0]! / 2 : undefined;
 
-  const TOTAL_ROW_H = 16;
+  const TOTAL_ROW_H = 20;
   // "Amount in words" wraps to a variable number of lines depending on the
   // actual grand total (a multi-lakh/crore figure needs more lines than a
   // small one) — computed once here from the real bill, not a fixed guess,
   // so a large amount can't overflow into the GST-summary column beside it.
   const wordsW = contentW * 0.6 - 16;
   const wordsLines = wrapText(regular, amountInWordsINR(bill.grandTotal), 9, wordsW);
-  const WORDS_BANK_H = 26 + wordsLines.length * 12 + 4 + 12 + 4 * 11 + 6;
+  const leftContentH = 26 + wordsLines.length * 12 + 4 + 12 + 4 * 11 + 6; // words + bank-detail block
+  const rightContentH = 14 + 13 + 15 + 13 + 10; // CGST + SGST + divider gap + Total Value row + padding
+  const WORDS_BANK_H = Math.max(leftContentH, rightContentH);
   const HSN_ROW_H = 13;
   // Matches exactly what the HSN-summary render loop below consumes: a 12pt
   // offset before the header row, then one HSN_ROW_H per header + group +
-  // total row.
-  const hsnTableH = hsnGroups.length > 1 ? 12 + (hsnGroups.length + 2) * HSN_ROW_H : 0;
+  // total row. Always reserved now — the table always renders.
+  const hsnTableH = 12 + (hsnGroups.length + 2) * HSN_ROW_H;
   const TERMS_H = 30;
   const SIGNATURE_H = 50;
   const summaryBlockH = TOTAL_ROW_H + WORDS_BANK_H + hsnTableH + TERMS_H + SIGNATURE_H;
@@ -318,7 +340,7 @@ export async function generateMmA4InvoicePDF(bill: Bill, settings: Partial<Setti
 
   function drawHeaderHeight(): number {
     // Mirrors drawHeader()'s vertical consumption without touching `page`.
-    let h = 26 + addressLines.length * 12 + (gstinContactLine ? 12 : 0) + (emailLine ? 12 : 0);
+    let h = 32 + addressLines.length * 12 + (gstinContactLine ? 12 : 0) + (emailLine ? 12 : 0);
     if (bill.irnNo) h += 24;
     h += 6;
     return h;
@@ -378,9 +400,17 @@ export async function generateMmA4InvoicePDF(bill: Bill, settings: Partial<Setti
     // where a nearly-full page's last row ends, and stretching to it there
     // used to print "Continue..." right on top of that row's own text.
     const tableBottom = isLast ? reservedBottomY : Math.min(ty - 22, reservedBottomY);
+    // On the last page, the S.No/Particulars/HSN column boundaries stop at
+    // the top of the Total row instead of running through it, so "Total"
+    // reads as one merged cell (the Quantity column boundary stays
+    // full-height — that's the merged cell's real right edge).
+    const totalRowTop = tableBottom + TOTAL_ROW_H;
     vline(left, tableBottom, y);
     vline(right, tableBottom, y);
-    for (const c of cols.slice(1)) vline(c.x, tableBottom, y);
+    for (const c of cols.slice(1)) {
+      const mergeIntoTotal = isLast && (c.key === 'particulars' || c.key === 'hsn');
+      vline(c.x, mergeIntoTotal ? totalRowTop : tableBottom, y);
+    }
     hline(tableBottom);
 
     if (!isLast) {
@@ -388,11 +418,12 @@ export async function generateMmA4InvoicePDF(bill: Bill, settings: Partial<Setti
     } else {
       // ── Total row ──────────────────────────────────────────────────────
       let sy = tableBottom;
-      text('Total', cols[1]!.x + 6, sy - TOTAL_ROW_H + 5, { size: 9, font: bold });
+      const totalBaseline = sy - TOTAL_ROW_H / 2 - 3;
+      text('Total', cols[1]!.x + 6, totalBaseline, { size: 9, font: bold });
       if (sameUnit) {
-        text(`${formatQty(totalQty)} ${bill.items[0]!.unit}`, cols[3]!.x, sy - TOTAL_ROW_H + 5, { size: 9, font: bold, align: 'center', maxWidth: cols[3]!.w });
+        text(`${formatQty(totalQty)} ${bill.items[0]!.unit}`, cols[3]!.x, totalBaseline, { size: 9, font: bold, align: 'center', maxWidth: cols[3]!.w });
       }
-      text(formatRupees(bill.items.reduce((s, i) => s + (i.totalAmount - i.gstAmount), 0)), cols[6]!.x, sy - TOTAL_ROW_H + 5, {
+      text(formatRupees(bill.items.reduce((s, i) => s + (i.totalAmount - i.gstAmount), 0)), cols[6]!.x, totalBaseline, {
         size: 9,
         font: bold,
         align: 'right',
@@ -438,21 +469,25 @@ export async function generateMmA4InvoicePDF(bill: Bill, settings: Partial<Setti
       ry -= 15;
       hline(ry, rightX, right);
       ry -= 13;
+      shadeRect(rightX, ry - 5, right - rightX, 18);
       text('Total Value', rightX + 8, ry, { size: 9.5, font: bold });
       text(formatRupees(bill.grandTotal), right - 8, ry, { size: 9.5, font: bold, align: 'right' });
 
       sy -= WORDS_BANK_H;
       hline(sy);
 
-      // ── HSN/SAC-wise tax summary (only worth a table with >1 group) ─────
-      if (hsnGroups.length > 1) {
+      // ── HSN/SAC-wise tax summary ──────────────────────────────────────────
+      {
+        // Shortened labels — the reference's full "SGST/UTGST Rate/Amount"
+        // wording doesn't fit a 10-14%-wide column at readable size.
         const hsnCols = [
-          { label: 'HSN/SAC', x: left, w: contentW * 0.2 },
-          { label: 'Taxable Value', x: 0, w: contentW * 0.2 },
-          { label: 'CGST Rate', x: 0, w: contentW * 0.15 },
-          { label: 'CGST Amt', x: 0, w: contentW * 0.15 },
-          { label: 'SGST Rate', x: 0, w: contentW * 0.15 },
-          { label: 'SGST Amt', x: 0, w: contentW * 0.15 },
+          { label: 'HSN/SAC', x: left, w: contentW * 0.16 },
+          { label: 'Taxable Value', x: 0, w: contentW * 0.18 },
+          { label: 'CGST Rate', x: 0, w: contentW * 0.1 },
+          { label: 'CGST Amt', x: 0, w: contentW * 0.14 },
+          { label: 'SGST Rate', x: 0, w: contentW * 0.1 },
+          { label: 'SGST Amt', x: 0, w: contentW * 0.14 },
+          { label: 'Total Tax Amt', x: 0, w: contentW * 0.18 },
         ];
         {
           let cx = left;
@@ -461,6 +496,7 @@ export async function generateMmA4InvoicePDF(bill: Bill, settings: Partial<Setti
             cx += c.w;
           }
         }
+        const hsnTop = sy;
         let hy = sy - 12;
         for (const c of hsnCols) text(c.label, c.x, hy, { size: 7.5, font: bold, align: 'center', maxWidth: c.w });
         hy -= HSN_ROW_H;
@@ -472,6 +508,7 @@ export async function generateMmA4InvoicePDF(bill: Bill, settings: Partial<Setti
           text(formatRupees(g.cgstAmount), hsnCols[3]!.x, hy - 10, { size: 8, align: 'center', maxWidth: hsnCols[3]!.w });
           text(`${g.sgstRate}%`, hsnCols[4]!.x, hy - 10, { size: 8, align: 'center', maxWidth: hsnCols[4]!.w });
           text(formatRupees(g.sgstAmount), hsnCols[5]!.x, hy - 10, { size: 8, align: 'center', maxWidth: hsnCols[5]!.w });
+          text(formatRupees(g.cgstAmount + g.sgstAmount), hsnCols[6]!.x, hy - 10, { size: 8, align: 'center', maxWidth: hsnCols[6]!.w });
           hy -= HSN_ROW_H;
         }
         hline(hy, left, right);
@@ -482,11 +519,13 @@ export async function generateMmA4InvoicePDF(bill: Bill, settings: Partial<Setti
         text(formatRupees(totalTaxable), hsnCols[1]!.x, hy - 10, { size: 8, font: bold, align: 'center', maxWidth: hsnCols[1]!.w });
         text(formatRupees(totalCgst), hsnCols[3]!.x, hy - 10, { size: 8, font: bold, align: 'center', maxWidth: hsnCols[3]!.w });
         text(formatRupees(totalSgst), hsnCols[5]!.x, hy - 10, { size: 8, font: bold, align: 'center', maxWidth: hsnCols[5]!.w });
+        text(formatRupees(totalCgst + totalSgst), hsnCols[6]!.x, hy - 10, { size: 8, font: bold, align: 'center', maxWidth: hsnCols[6]!.w });
         hy -= HSN_ROW_H;
         sy = hy;
         hline(sy, left, right);
-      } else {
-        sy -= hsnTableH;
+        vline(left, sy, hsnTop);
+        vline(right, sy, hsnTop);
+        for (const c of hsnCols.slice(1)) vline(c.x, sy, hsnTop);
       }
 
       // ── Terms & signature ────────────────────────────────────────────────

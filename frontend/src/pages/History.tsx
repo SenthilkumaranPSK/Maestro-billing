@@ -1,5 +1,5 @@
 import { useState, useEffect, useDeferredValue } from 'react';
-import { Search, FileText, Printer, Eye, Pencil, Ban, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Search, FileText, Printer, Eye, ScanEye, Pencil, Ban, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link, useLocation } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
@@ -14,6 +14,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { BillDetailModal } from '@/components/billing/BillDetailModal';
+import { PdfPreviewModal } from '@/components/billing/PdfPreviewModal';
 import { EditBillModal } from '@/components/billing/EditBillModal';
 import { LayoutToggle, guessBillLayout, type BillLayout } from '@/components/billing/LayoutToggle';
 import { billsApi } from '@/api/bills';
@@ -43,6 +44,7 @@ export default function HistoryPage() {
   const [page, setPage] = useState(1);
   const [selectedBill, setSelectedBill] = useState<Bill | null>(null);
   const [editingBill, setEditingBill] = useState<Bill | null>(null);
+  const [previewBill, setPreviewBill] = useState<Bill | null>(null);
   // Per-row Thermal/A4 choice for the row's own Download PDF icon.
   const [rowLayout, setRowLayout] = useState<Record<number, BillLayout>>({});
   const LIMIT = 15;
@@ -257,6 +259,9 @@ export default function HistoryPage() {
                           value={layoutFor(bill)}
                           onChange={(v) => setRowLayout((prev) => ({ ...prev, [bill.id]: v }))}
                         />
+                        <Button variant="ghost" size="icon" className="h-7 w-7" title="Preview" onClick={() => setPreviewBill(bill)}>
+                          <ScanEye className="h-3.5 w-3.5" />
+                        </Button>
                         <Button variant="ghost" size="icon" className="h-7 w-7" title="Print" onClick={() => handlePrint(bill)}>
                           <Printer className="h-3.5 w-3.5" />
                         </Button>
@@ -319,6 +324,15 @@ export default function HistoryPage() {
             setEditingBill(null);
             setSelectedBill(updated);
           }}
+        />
+      )}
+
+      {previewBill && (
+        <PdfPreviewModal
+          bill={previewBill}
+          settings={settings ?? {}}
+          layout={layoutFor(previewBill)}
+          onClose={() => setPreviewBill(null)}
         />
       )}
     </div>

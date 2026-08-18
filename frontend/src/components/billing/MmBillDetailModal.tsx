@@ -1,10 +1,11 @@
-import { X, FileText, Printer, Pencil } from 'lucide-react';
-import { useEffect } from 'react';
+import { X, FileText, Printer, ScanEye, Pencil } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { formatCurrency, billStatusVariant, type Bill, type Settings, type BillStatus } from '@/types';
 import { formatDate } from '@/lib/utils';
 import { useClosingTransition } from '@/hooks/use-closing-transition';
+import { PdfPreviewModal } from '@/components/billing/PdfPreviewModal';
 
 // pdf-lib is heavy (~400KB) — loaded on demand, same pattern as BillDetailModal.
 const loadMmA4Lib = () => import('@/lib/mmA4invoice');
@@ -22,6 +23,7 @@ interface MmBillDetailModalProps {
  * always renders as the MM/A4 Tax Invoice layout (no Thermal/A4 toggle — MM
  * bills are never anything else) and shows bill.mmCustomer, not bill.customer. */
 export function MmBillDetailModal({ bill, settings, onClose, onEdit }: MmBillDetailModalProps) {
+  const [previewOpen, setPreviewOpen] = useState(false);
   const { closing, requestClose } = useClosingTransition(onClose);
 
   const handlePrint = async () => {
@@ -45,6 +47,7 @@ export function MmBillDetailModal({ bill, settings, onClose, onEdit }: MmBillDet
   }, [requestClose]);
 
   return (
+    <>
       <div
         className={`fixed inset-0 z-50 bg-slate-950/50 backdrop-blur-[2px] flex items-center justify-center p-4 duration-150 ${closing ? 'animate-out fade-out-0' : 'animate-in fade-in-0'}`}
         onClick={(e) => {
@@ -69,6 +72,9 @@ export function MmBillDetailModal({ bill, settings, onClose, onEdit }: MmBillDet
                   <Pencil className="h-4 w-4 mr-1" /> Edit
                 </Button>
               )}
+              <Button variant="outline" size="sm" onClick={() => setPreviewOpen(true)}>
+                <ScanEye className="h-4 w-4 mr-1" /> Preview
+              </Button>
               <Button variant="outline" size="sm" onClick={handlePrint}>
                 <Printer className="h-4 w-4 mr-1" /> Print
               </Button>
@@ -147,5 +153,15 @@ export function MmBillDetailModal({ bill, settings, onClose, onEdit }: MmBillDet
           </div>
         </div>
       </div>
+
+      {previewOpen && (
+        <PdfPreviewModal
+          bill={bill}
+          settings={settings}
+          layout="mm_a4"
+          onClose={() => setPreviewOpen(false)}
+        />
+      )}
+    </>
   );
 }

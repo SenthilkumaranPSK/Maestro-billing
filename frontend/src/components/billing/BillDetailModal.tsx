@@ -1,8 +1,9 @@
-import { X, FileText, Printer, Pencil } from 'lucide-react';
+import { X, FileText, Printer, ScanEye, Pencil } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { LayoutToggle, guessBillLayout, type BillLayout } from '@/components/billing/LayoutToggle';
+import { PdfPreviewModal } from '@/components/billing/PdfPreviewModal';
 import { formatCurrency, billStatusVariant, type Bill, type Settings, type BillStatus } from '@/types';
 import { formatDate } from '@/lib/utils';
 import { useClosingTransition } from '@/hooks/use-closing-transition';
@@ -27,6 +28,7 @@ export function BillDetailModal({ bill, settings, onClose, onEdit }: BillDetailM
   // 'thermal' — see guessBillLayout for why. Still fully editable via the
   // toggle below; this only fixes the default a bare Print/PDF click uses.
   const [layout, setLayout] = useState<BillLayout>(() => guessBillLayout(bill));
+  const [previewOpen, setPreviewOpen] = useState(false);
   const { closing, requestClose } = useClosingTransition(onClose);
   const { toast } = useToast();
 
@@ -77,6 +79,7 @@ export function BillDetailModal({ bill, settings, onClose, onEdit }: BillDetailM
   }, [requestClose]);
 
   return (
+    <>
       <div
         className={`fixed inset-0 z-50 bg-slate-950/50 backdrop-blur-[2px] flex items-center justify-center p-4 duration-150 ${closing ? 'animate-out fade-out-0' : 'animate-in fade-in-0'}`}
         onClick={(e) => {
@@ -102,6 +105,9 @@ export function BillDetailModal({ bill, settings, onClose, onEdit }: BillDetailM
                   <Pencil className="h-4 w-4 mr-1" /> Edit
                 </Button>
               )}
+              <Button variant="outline" size="sm" onClick={() => setPreviewOpen(true)}>
+                <ScanEye className="h-4 w-4 mr-1" /> Preview
+              </Button>
               <Button variant="outline" size="sm" onClick={handlePrint}>
                 <Printer className="h-4 w-4 mr-1" /> Print
               </Button>
@@ -180,5 +186,15 @@ export function BillDetailModal({ bill, settings, onClose, onEdit }: BillDetailM
           </div>
         </div>
       </div>
+
+      {previewOpen && (
+        <PdfPreviewModal
+          bill={bill}
+          settings={settings}
+          layout={layout}
+          onClose={() => setPreviewOpen(false)}
+        />
+      )}
+    </>
   );
 }

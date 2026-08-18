@@ -1,5 +1,5 @@
 import { useState, useDeferredValue } from 'react';
-import { Search, FileText, Printer, Eye, Pencil, Ban, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Search, FileText, Printer, Eye, ScanEye, Pencil, Ban, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
@@ -14,6 +14,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { MmBillDetailModal } from '@/components/billing/MmBillDetailModal';
+import { PdfPreviewModal } from '@/components/billing/PdfPreviewModal';
 import { MmEditBillModal } from '@/components/billing/MmEditBillModal';
 import { billsApi } from '@/api/bills';
 import { settingsApi } from '@/api/settings';
@@ -40,6 +41,7 @@ export default function MmHistoryPage() {
   const [page, setPage] = useState(1);
   const [selectedBill, setSelectedBill] = useState<Bill | null>(null);
   const [editingBill, setEditingBill] = useState<Bill | null>(null);
+  const [previewBill, setPreviewBill] = useState<Bill | null>(null);
   const LIMIT = 15;
 
   const { data, isLoading } = useQuery({
@@ -199,6 +201,9 @@ export default function MmHistoryPage() {
                             <Pencil className="h-3.5 w-3.5" />
                           </Button>
                         )}
+                        <Button variant="ghost" size="icon" className="h-7 w-7" title="Preview" onClick={() => setPreviewBill(bill)}>
+                          <ScanEye className="h-3.5 w-3.5" />
+                        </Button>
                         <Button variant="ghost" size="icon" className="h-7 w-7" title="Print" onClick={() => handlePrint(bill)}>
                           <Printer className="h-3.5 w-3.5" />
                         </Button>
@@ -261,6 +266,15 @@ export default function MmHistoryPage() {
             setEditingBill(null);
             setSelectedBill(updated);
           }}
+        />
+      )}
+
+      {previewBill && (
+        <PdfPreviewModal
+          bill={previewBill}
+          settings={settings ?? {}}
+          layout="mm_a4"
+          onClose={() => setPreviewBill(null)}
         />
       )}
     </div>
