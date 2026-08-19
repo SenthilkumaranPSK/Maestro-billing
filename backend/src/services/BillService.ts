@@ -221,6 +221,8 @@ export class BillService {
               buyerName: input.buyerName,
               buyerAddress: input.buyerAddress,
               buyerGstin: input.buyerGstin,
+              billedById: input.billedById,
+              billedByName: input.billedByName,
               items: {
                 create: computedItems.map((item) => ({
                   productId: item.productId,
@@ -326,6 +328,8 @@ export class BillService {
           buyerName: input.buyerName ?? null,
           buyerAddress: input.buyerAddress ?? null,
           buyerGstin: input.buyerGstin ?? null,
+          billedById: input.billedById ?? null,
+          billedByName: input.billedByName ?? null,
           items: {
             create: computedItems.map((item) => ({
               productId: item.productId,

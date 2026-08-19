@@ -12,6 +12,8 @@ import { PdfPreviewModal } from '@/components/billing/PdfPreviewModal';
 import { GstModeToggle } from '@/components/billing/GstModeToggle';
 import { ServiceDescriptionInput } from '@/components/billing/ServiceDescriptionInput';
 import { PaymentModeSelect } from '@/components/billing/PaymentModeSelect';
+import { BilledBySelect } from '@/components/billing/BilledBySelect';
+import { STAFF_LIST } from '@/lib/staff';
 import { billsApi } from '@/api/bills';
 import { settingsApi } from '@/api/settings';
 import { customersApi } from '@/api/customers';
@@ -84,7 +86,7 @@ function whatsappErrorMessage(msg: string): string {
 const newEmptyItem = (): BillItemForm => ({
   _id: newId(),
   productName: '',
-  unit: 'piece',
+  unit: 'Piece',
   qty: 1,
   unitPrice: 0,
   gstRate: 18,
@@ -137,6 +139,13 @@ export default function BillingPage() {
   // How the bill was paid — shown in the form and history/detail views only,
   // never on the printed receipt/invoice. See components/billing/PaymentModeSelect.
   const [paymentMode, setPaymentMode] = useState<PaymentMode | ''>('');
+  // Which staff member billed this sale — required to save (see handleSave).
+  // Deliberately NOT cleared in handleReset (below), same as `layout` above:
+  // remembered across bills for the rest of this browser session so the
+  // operator isn't re-picking themselves after every single save. Resets to
+  // blank on an actual page reload, since it's plain component state, not
+  // persisted to localStorage like the layout preference is.
+  const [billedById, setBilledById] = useState<number | ''>('');
 
   const { data: nextNumber } = useQuery({
     queryKey: ['bills', 'next-number'],
@@ -199,8 +208,9 @@ export default function BillingPage() {
         roundOffP,
         serviceDescription,
         serviceDates: serviceDates.filter(Boolean),
+        billedByName: STAFF_LIST.find((s) => s.id === billedById)?.name,
       }),
-    [nextNumber, items, gstInclusive, isInterState, customer, roundOffP, serviceDescription, serviceDates],
+    [nextNumber, items, gstInclusive, isInterState, customer, roundOffP, serviceDescription, serviceDates, billedById],
   );
 
   const createBillMutation = useMutation({
@@ -248,6 +258,11 @@ export default function BillingPage() {
     const validItems = countedItems;
     if (validItems.length === 0) {
       toast({ title: 'No items', description: 'Add at least one item to the bill.', variant: 'destructive' });
+      return;
+    }
+
+    if (billedById === '') {
+      toast({ title: 'Select who billed this', description: 'Choose a "Billed By" staff member before saving.', variant: 'destructive' });
       return;
     }
 
@@ -320,6 +335,10 @@ export default function BillingPage() {
       serviceDates: filledServiceDates.length ? filledServiceDates : undefined,
       gstInclusive,
       isInterState,
+      // billedById is already guaranteed a number here — the empty-string
+      // ('') case returned early above.
+      billedById,
+      billedByName: STAFF_LIST.find((s) => s.id === billedById)?.name,
     });
   };
 
@@ -334,7 +353,7 @@ export default function BillingPage() {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [savedBill, items, customer, createBillMutation.isPending, layout, gstInclusive, paymentMode, serviceDescription, serviceDates]);
+  }, [savedBill, items, customer, createBillMutation.isPending, layout, gstInclusive, paymentMode, serviceDescription, serviceDates, billedById]);
 
   const handleWhatsAppShare = async () => {
     if (!savedBill || !customer.phone) return;
@@ -412,7 +431,7 @@ export default function BillingPage() {
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
-  }, [savedBill, items, customer, createBillMutation.isPending, layout, gstInclusive, paymentMode, serviceDescription, serviceDates]);
+  }, [savedBill, items, customer, createBillMutation.isPending, layout, gstInclusive, paymentMode, serviceDescription, serviceDates, billedById]);
 
   // Persist every layout change so the next bill (this session or after a
   // restart) starts on whatever the operator last used.
@@ -436,6 +455,7 @@ export default function BillingPage() {
     setServiceDates(['']);
     setGstInclusive(false);
     setPaymentMode('');
+    // billedById is deliberately left as-is too — see its declaration above.
     qc.invalidateQueries({ queryKey: ['bills', 'next-number'] });
     qc.refetchQueries({ queryKey: ['bills', 'next-number'] });
   };
@@ -538,11 +558,11 @@ export default function BillingPage() {
       {/* ── Customer + Date bar ─────────────────────────────── */}
       <Card className="border-brand-500/30 bg-brand-50/60">
         <CardContent className="pt-4 pb-4 grid grid-cols-12 gap-4 items-end">
-          <div className="col-span-6">
+          <div className="col-span-5">
             <Label className="text-xs text-muted-foreground mb-1.5 block">Customer</Label>
             <CustomerBar value={customer} onChange={setCustomer} disabled={!!savedBill} showAddress={layout === 'a4'} />
           </div>
-          <div className="col-span-3">
+          <div className="col-span-2">
             <Label className="text-xs text-muted-foreground mb-1.5 flex items-center gap-1">
               <CalendarDays className="w-3.5 h-3.5" /> Date
             </Label>
@@ -550,9 +570,13 @@ export default function BillingPage() {
               {new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
             </p>
           </div>
-          <div className="col-span-3">
+          <div className="col-span-2">
             <Label className="text-xs text-muted-foreground mb-1.5 block">Payment Mode</Label>
             <PaymentModeSelect value={paymentMode} onChange={setPaymentMode} disabled={!!savedBill} />
+          </div>
+          <div className="col-span-3">
+            <Label className="text-xs text-muted-foreground mb-1.5 block">Billed By *</Label>
+            <BilledBySelect value={billedById} onChange={setBilledById} disabled={!!savedBill} />
           </div>
         </CardContent>
       </Card>

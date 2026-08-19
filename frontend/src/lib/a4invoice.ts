@@ -570,6 +570,11 @@ export async function generateA4InvoicePDF(bill: Bill, settings: Partial<Setting
       let by = y - 16;
       text('Bank Account Details :', left + 8, by, { size: 9.5, font: bold, color: BODY });
       by -= 15;
+      // A bill saved before this field existed has no billedByName — shown
+      // as "—" rather than dropping the row, so this list is always the
+      // same shape instead of silently missing a line. bankBoxH (112, set
+      // above) already has ~21pt of slack below the 6 original lines, more
+      // than this one extra 12.5pt row needs.
       const bankLines: Array<[string, string]> = [
         ['Account Name', BANK_DETAILS.accountName],
         ['Account Number', BANK_DETAILS.accountNumber],
@@ -577,6 +582,7 @@ export async function generateA4InvoicePDF(bill: Bill, settings: Partial<Setting
         ['Bank Name', BANK_DETAILS.bankName],
         ['Branch', BANK_DETAILS.branch],
         ['IFSC Code', BANK_DETAILS.ifsc],
+        ['Billed By', bill.billedByName || '—'],
       ];
       for (const [label, value] of bankLines) {
         text(label, left + 8, by, { size: 8.5, font: bold, color: BODY });

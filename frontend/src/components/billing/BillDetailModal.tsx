@@ -168,6 +168,15 @@ export function BillDetailModal({ bill, settings, onClose, onEdit }: BillDetailM
                   <span className="font-medium">{bill.paymentMode}</span>
                 </div>
               )}
+              {/* Always shown, not conditional like Payment Mode above — a
+                  bill saved before this field existed has no billedByName,
+                  shown as "—" rather than hidden, so it's clear at a glance
+                  which older bills are missing this rather than looking
+                  identical to one where it's simply not shown. */}
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">Billed By</span>
+                <span className="font-medium">{bill.billedByName || '—'}</span>
+              </div>
               <div className="flex justify-between text-sm">
                 <span className="text-muted-foreground">Sub Total</span>
                 <span>{formatCurrency(bill.subTotal)}</span>

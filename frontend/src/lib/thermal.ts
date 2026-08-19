@@ -101,7 +101,7 @@ export function formatAmt(paise: number): string {
   });
 }
 
-// Product.unit is a full word ("piece", "session", …) sized for the Products
+// Product.unit is a full word ("Piece", "Session", …) sized for the Products
 // page and the A4 invoice, where there's room for it. The thermal receipt's
 // narrow Qty column needs it abbreviated to keep every row the same width as
 // the header, whatever unit the product is set to. Module-level (not inside

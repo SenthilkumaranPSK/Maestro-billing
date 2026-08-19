@@ -235,6 +235,16 @@ model Bill {
   // so series is what actually keeps the two apart everywhere they're
   // queried, not just how they're numbered.
   series         String    @default("MAIN")
+  // "Billed By" — which staff member rang up this bill. Denormalized (both
+  // the id AND the name are stored, not just a foreign key) on purpose: the
+  // staff list is a small hardcoded constant (frontend/src/lib/staff.ts),
+  // not a real Staff table, and it deliberately isn't versioned — if a name
+  // is edited or removed from that list later, every already-saved bill
+  // must keep printing/showing exactly who billed it at the time, not
+  // whatever the list says now. Optional: bills saved before this feature
+  // existed have neither, and must still load/print (shown as "—").
+  billedById     Int?      @map("billed_by_id")
+  billedByName   String?   @map("billed_by_name")
   createdBy      Int?      @map("created_by")
   createdAt      DateTime  @default(now()) @map("created_at")
   updatedAt      DateTime  @updatedAt @map("updated_at")

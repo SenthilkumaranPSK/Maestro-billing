@@ -1,7 +1,7 @@
-import { useState, useEffect, useDeferredValue } from 'react';
-import { Search, FileText, Printer, Eye, ScanEye, Pencil, Ban, ChevronLeft, ChevronRight } from 'lucide-react';
+import { useState, useDeferredValue } from 'react';
+import { Search, FileText, Printer, ScanEye, Pencil, Ban, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Link, useLocation } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -13,7 +13,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { BillDetailModal } from '@/components/billing/BillDetailModal';
 import { PdfPreviewModal } from '@/components/billing/PdfPreviewModal';
 import { PasswordGateModal } from '@/components/billing/PasswordGateModal';
 import { EditBillModal } from '@/components/billing/EditBillModal';
@@ -31,10 +30,8 @@ import { useToast } from '@/hooks/use-toast';
 const statusVariant = billStatusVariant;
 
 export default function HistoryPage() {
-  const location = useLocation();
   const { toast } = useToast();
   const qc = useQueryClient();
-  const stateBillId = location.state?.selectedBillId as number | undefined;
 
   const [search, setSearch] = useState('');
   // Defer the search term so fast typing doesn't fire a request per keystroke
@@ -43,15 +40,13 @@ export default function HistoryPage() {
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [page, setPage] = useState(1);
-  const [selectedBill, setSelectedBill] = useState<Bill | null>(null);
   const [editingBill, setEditingBill] = useState<Bill | null>(null);
   const [previewBill, setPreviewBill] = useState<Bill | null>(null);
   // Editing a bill is gated behind the bill-edit password (Settings →
-  // Security) — this holds the bill (and whether the request came from the
-  // detail modal, so it knows to close that too) until the password is
-  // confirmed or cancelled.
-  const [pendingEdit, setPendingEdit] = useState<{ bill: Bill; fromDetail: boolean } | null>(null);
-  const requestEdit = (bill: Bill, fromDetail = false) => setPendingEdit({ bill, fromDetail });
+  // Security) — this holds the bill until the password is confirmed or
+  // cancelled.
+  const [pendingEdit, setPendingEdit] = useState<Bill | null>(null);
+  const requestEdit = (bill: Bill) => setPendingEdit(bill);
   // Per-row Thermal/A4 choice for the row's own Download PDF icon.
   const [rowLayout, setRowLayout] = useState<Record<number, BillLayout>>({});
   const LIMIT = 15;
@@ -77,12 +72,6 @@ export default function HistoryPage() {
     queryFn: settingsApi.get,
   });
 
-  const { data: routeBill } = useQuery({
-    queryKey: ['bills', stateBillId],
-    queryFn: () => billsApi.get(stateBillId!),
-    enabled: !!stateBillId,
-  });
-
   const cancelMutation = useMutation({
     mutationFn: (id: number) => billsApi.delete(id),
     onSuccess: () => {
@@ -101,13 +90,6 @@ export default function HistoryPage() {
     );
     if (ok) cancelMutation.mutate(bill.id);
   };
-
-  useEffect(() => {
-    if (routeBill) {
-      setSelectedBill(routeBill);
-      window.history.replaceState({}, document.title);
-    }
-  }, [routeBill]);
 
   const totalPages = Math.ceil((data?.meta.total ?? 0) / LIMIT);
 
@@ -254,9 +236,6 @@ export default function HistoryPage() {
                     </td>
                     <td className="py-3 px-4">
                       <div className="flex gap-1 items-center">
-                        <Button variant="ghost" size="icon" className="h-7 w-7" title="View" onClick={() => setSelectedBill(bill)}>
-                          <Eye className="h-3.5 w-3.5" />
-                        </Button>
                         {bill.status !== 'CANCELLED' && (
                           <Button variant="ghost" size="icon" className="h-7 w-7 text-amber-600 hover:text-amber-700" title="Edit" onClick={() => requestEdit(bill)}>
                             <Pencil className="h-3.5 w-3.5" />
@@ -315,22 +294,12 @@ export default function HistoryPage() {
         </CardContent>
       </Card>
 
-      {selectedBill && (
-        <BillDetailModal
-          bill={selectedBill}
-          settings={settings ?? {}}
-          onClose={() => setSelectedBill(null)}
-          onEdit={selectedBill.status !== 'CANCELLED' ? () => requestEdit(selectedBill, true) : undefined}
-        />
-      )}
-
       {editingBill && (
         <EditBillModal
           bill={editingBill}
           onClose={() => setEditingBill(null)}
-          onSaved={(updated) => {
+          onSaved={() => {
             setEditingBill(null);
-            setSelectedBill(updated);
           }}
         />
       )}
@@ -348,8 +317,7 @@ export default function HistoryPage() {
         <PasswordGateModal
           onCancel={() => setPendingEdit(null)}
           onConfirm={() => {
-            setEditingBill(pendingEdit.bill);
-            if (pendingEdit.fromDetail) setSelectedBill(null);
+            setEditingBill(pendingEdit);
             setPendingEdit(null);
           }}
         />

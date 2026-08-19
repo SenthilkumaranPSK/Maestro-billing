@@ -101,7 +101,10 @@ export async function generateMmA4InvoicePDF(bill: Bill, settings: Partial<Setti
   };
 
   // ── Header block content (identical on every page) ─────────────────────
-  const studioName = studio?.studio_name || "The Studio's";
+  // MM Tax Invoice header shows "MM" rather than the full studio name
+  // (settings.studio.studio_name) that the Thermal/A4 Service Bill layouts
+  // use — a deliberate, MM-only override, not a fallback.
+  const studioName = 'MM';
   const studioAddress = studio?.studio_address || '';
   const studioPhone = studio?.studio_phone || '';
   const studioGstin = studio?.studio_gstin || '';
@@ -563,8 +566,12 @@ export async function generateMmA4InvoicePDF(bill: Bill, settings: Partial<Setti
         termsY -= 10;
       }
 
+      // "For [proprietor]" rather than "For [studio name]" on this layout,
+      // per the studio's request — reuses the same bank-account proprietor
+      // name already shown lower in this footer (BANK_DETAILS), not the
+      // header's "MM".
       const sigY = sy - TERMS_H;
-      text(`For ${studioName}`, right - 8, sigY, { size: 9, font: bold, align: 'right' });
+      text(`For ${BANK_DETAILS.accountName}`, right - 8, sigY, { size: 9, font: bold, align: 'right' });
       text('Verified By', left + 8, MARGIN + 12, { size: 9 });
       text('Authorised Signatory', right - 8, MARGIN + 12, { size: 9, font: bold, color: ACCENT, align: 'right' });
     }

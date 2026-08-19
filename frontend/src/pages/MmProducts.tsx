@@ -16,7 +16,7 @@ import { formatDate } from '@/lib/utils';
 
 // MM billing module's own product catalog — a fully separate page/table from
 // the studio's normal Products page, mirroring its UI exactly.
-const UNITS = ['Kgs', 'Grams', 'no', 'piece', 'set', 'box'];
+const UNITS = ['Kgs', 'Grams', 'No', 'Piece', 'Set', 'Box'];
 
 const EMPTY: Partial<MmProduct> = { name: '', unit: 'Kgs', unitPrice: 0, gstRate: 5, hsnSac: '210690', stockQty: 0, reorderLevel: 0, isActive: true };
 

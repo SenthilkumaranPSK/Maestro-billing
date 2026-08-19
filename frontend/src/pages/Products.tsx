@@ -12,9 +12,9 @@ import { useToast } from '@/hooks/use-toast';
 import { formatCurrency, paisaToRupee, rupeeToPaisa } from '@/types';
 import type { Product } from '@/types';
 
-const UNITS = ['no', 'set', 'piece', 'photo', 'album', 'frame', 'session', 'roll', 'print'];
+const UNITS = ['No', 'Set', 'Piece', 'Photo', 'Album', 'Frame', 'Session', 'Roll', 'Print'];
 
-const EMPTY: Partial<Product> = { name: '', description: '', unit: 'piece', unitPrice: 0, gstRate: 18, hsnSac: '', isActive: true };
+const EMPTY: Partial<Product> = { name: '', description: '', unit: 'Piece', unitPrice: 0, gstRate: 18, hsnSac: '', isActive: true };
 
 export default function ProductsPage() {
   const { toast } = useToast();
@@ -152,10 +152,10 @@ export default function ProductsPage() {
                   <Label>Unit</Label>
                   <select
                     className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                    value={editing.unit ?? 'piece'}
+                    value={editing.unit ?? 'Piece'}
                     onChange={(e) => setEditing({ ...editing, unit: e.target.value })}
                   >
-                    {UNITS.map((u) => <option key={u} value={u}>{u.charAt(0).toUpperCase() + u.slice(1)}</option>)}
+                    {UNITS.map((u) => <option key={u} value={u}>{u}</option>)}
                   </select>
                 </div>
                 <div className="space-y-1.5">

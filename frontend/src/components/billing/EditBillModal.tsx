@@ -11,6 +11,8 @@ import { LayoutToggle, guessBillLayout, type BillLayout } from '@/components/bil
 import { GstModeToggle } from '@/components/billing/GstModeToggle';
 import { ServiceDescriptionInput } from '@/components/billing/ServiceDescriptionInput';
 import { PaymentModeSelect } from '@/components/billing/PaymentModeSelect';
+import { BilledBySelect } from '@/components/billing/BilledBySelect';
+import { STAFF_LIST } from '@/lib/staff';
 import { billsApi } from '@/api/bills';
 import { customersApi } from '@/api/customers';
 import { useToast } from '@/hooks/use-toast';
@@ -23,7 +25,7 @@ import { paisaToRupee, rupeeToPaisa, formatCurrency } from '@/types';
 const newEmptyItem = (): BillItemForm => ({
   _id: newId(),
   productName: '',
-  unit: 'piece',
+  unit: 'Piece',
   qty: 1,
   unitPrice: 0,
   gstRate: 18,
@@ -72,6 +74,10 @@ export function EditBillModal({ bill, onClose, onSaved }: EditBillModalProps) {
   const [gstInclusive, setGstInclusive] = useState(bill.gstInclusive);
   const [isInterState, setIsInterState] = useState(bill.isInterState);
   const [paymentMode, setPaymentMode] = useState<PaymentMode | ''>(bill.paymentMode ?? '');
+  // "Billed By" — required to save, same as the New Bill form. A bill saved
+  // before this feature existed has neither field set (both null), so this
+  // starts blank and the operator must pick someone before the edit can save.
+  const [billedById, setBilledById] = useState<number | ''>(bill.billedById ?? '');
   const [serviceDescription, setServiceDescription] = useState(bill.serviceDescription ?? '');
   // Prefer the new serviceDates list; fall back to the old from/to range for
   // a bill saved before this field existed, so editing it doesn't lose data.
@@ -119,6 +125,11 @@ export function EditBillModal({ bill, onClose, onSaved }: EditBillModalProps) {
     const validItems = countedItems;
     if (validItems.length === 0) {
       toast({ title: 'No items', description: 'Add at least one item.', variant: 'destructive' });
+      return;
+    }
+
+    if (billedById === '') {
+      toast({ title: 'Select who billed this', description: 'Choose a "Billed By" staff member before saving.', variant: 'destructive' });
       return;
     }
 
@@ -185,6 +196,10 @@ export function EditBillModal({ bill, onClose, onSaved }: EditBillModalProps) {
       consigneeName: consigneeName.trim() || undefined,
       consigneeAddress: consigneeAddress.trim() || undefined,
       consigneeGstin: consigneeGstin.trim() || undefined,
+      // billedById is already guaranteed a number here — the empty-string
+      // ('') case returned early above.
+      billedById,
+      billedByName: STAFF_LIST.find((s) => s.id === billedById)?.name,
     });
   };
 
@@ -213,19 +228,23 @@ export function EditBillModal({ bill, onClose, onSaved }: EditBillModalProps) {
           {/* Customer + Date */}
           <Card className="border-brand-500/30 bg-brand-50/60">
             <CardContent className="pt-4 pb-4 grid grid-cols-12 gap-4 items-end">
-              <div className="col-span-6">
+              <div className="col-span-5">
                 <Label className="text-xs text-muted-foreground mb-1.5 block">Customer</Label>
                 <CustomerBar value={customer} onChange={setCustomer} showAddress={layout === 'a4' || layout === 'mm_a4'} />
               </div>
-              <div className="col-span-3">
+              <div className="col-span-2">
                 <Label className="text-xs text-muted-foreground mb-1.5 block">Date</Label>
                 <p className="h-10 flex items-center px-3 rounded-lg border border-slate-200 bg-slate-50 text-sm font-medium text-slate-700">
                   {new Date(bill.billDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
                 </p>
               </div>
-              <div className="col-span-3">
+              <div className="col-span-2">
                 <Label className="text-xs text-muted-foreground mb-1.5 block">Payment Mode</Label>
                 <PaymentModeSelect value={paymentMode} onChange={setPaymentMode} />
+              </div>
+              <div className="col-span-3">
+                <Label className="text-xs text-muted-foreground mb-1.5 block">Billed By *</Label>
+                <BilledBySelect value={billedById} onChange={setBilledById} />
               </div>
             </CardContent>
           </Card>

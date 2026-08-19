@@ -25,6 +25,7 @@ export interface DraftBillFields {
   buyerName?: string;
   buyerAddress?: string;
   buyerGstin?: string;
+  billedByName?: string;
 }
 
 /**
@@ -104,6 +105,7 @@ export function buildDraftBill(fields: DraftBillFields): Bill {
     buyerName: fields.buyerName,
     buyerAddress: fields.buyerAddress,
     buyerGstin: fields.buyerGstin,
+    billedByName: fields.billedByName,
     series,
     items,
     payments: [],

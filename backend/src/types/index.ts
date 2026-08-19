@@ -52,6 +52,13 @@ export interface CreateBillInput {
   buyerName?: string;
   buyerAddress?: string;
   buyerGstin?: string;
+  // "Billed By" (cashier) — see Bill.billedById/billedByName in schema.prisma.
+  // Optional here even though the entry screen requires it, the same way
+  // every other bill field is optional at this layer — the UI enforces
+  // "required", not the API, so a bill saved before this feature (or an
+  // older client) still round-trips fine.
+  billedById?: number | null;
+  billedByName?: string | null;
   // Which billing area this bill belongs to — see Bill.series in schema.prisma.
   // Only meaningful on create; updateBill never changes it.
   series?: 'MAIN' | 'MM';

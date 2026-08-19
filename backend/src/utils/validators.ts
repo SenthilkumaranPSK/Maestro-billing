@@ -163,6 +163,11 @@ export const createBillSchema = z.object({
   buyerName: z.string().max(200, 'Buyer name too long').optional(),
   buyerAddress: z.string().max(500, 'Buyer address too long').optional(),
   buyerGstin: z.string().max(15, 'Buyer GSTIN must be 15 characters or fewer').optional(),
+  // "Billed By" — nullable too (same reasoning as notes above): an edit
+  // round-trips through GET first, where Prisma returns an unset nullable
+  // column as null, not undefined.
+  billedById: z.number().int().positive().nullable().optional(),
+  billedByName: z.string().max(100, 'Billed By name too long').nullable().optional(),
   series: z.enum(['MAIN', 'MM']).optional(),
 });
 

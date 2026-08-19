@@ -306,6 +306,10 @@ export function buildThermalLayout(
 
   rows.push({ kind: 'divider' });
   rows.push({ kind: 'split', left: 'Grand Total', right: `Rs ${formatAmt(bill.grandTotal)}`, bold: true });
+  // A bill saved before this field existed has no billedByName — shown as
+  // "—" rather than skipping the line, so the receipt always has a
+  // consistent footer shape instead of silently missing a row.
+  rows.push({ kind: 'line', text: `Billed By : ${bill.billedByName || '—'}`, align: 'left' });
   rows.push({ kind: 'blank' });
   rows.push({ kind: 'line', text: footer, align: 'center', bold: true });
 

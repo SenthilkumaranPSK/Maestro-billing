@@ -165,6 +165,10 @@ export interface Bill {
   buyerName?: string;
   buyerAddress?: string;
   buyerGstin?: string;
+  // "Billed By" (cashier) — MAIN billing only so far. See lib/staff.ts for
+  // the staff list and backend schema.prisma Bill.billedById/billedByName.
+  billedById?: number;
+  billedByName?: string;
   // 'MAIN' (Thermal/A4, the studio's normal billing) or 'MM' (the separate
   // MM billing module) — see backend schema.prisma Bill.series.
   series?: 'MAIN' | 'MM';
