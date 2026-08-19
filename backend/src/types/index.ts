@@ -48,6 +48,10 @@ export interface CreateBillInput {
   consigneeName?: string;
   consigneeAddress?: string;
   consigneeGstin?: string;
+  // Manual Buyer override — see Bill.buyerName in schema.prisma.
+  buyerName?: string;
+  buyerAddress?: string;
+  buyerGstin?: string;
   // Which billing area this bill belongs to — see Bill.series in schema.prisma.
   // Only meaningful on create; updateBill never changes it.
   series?: 'MAIN' | 'MM';

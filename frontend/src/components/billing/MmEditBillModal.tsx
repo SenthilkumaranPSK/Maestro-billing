@@ -76,6 +76,10 @@ export function MmEditBillModal({ bill, onClose, onSaved }: MmEditBillModalProps
   const [consigneeName, setConsigneeName] = useState(bill.consigneeName ?? '');
   const [consigneeAddress, setConsigneeAddress] = useState(bill.consigneeAddress ?? '');
   const [consigneeGstin, setConsigneeGstin] = useState(bill.consigneeGstin ?? '');
+  const [buyerManualEntry, setBuyerManualEntry] = useState(!!bill.buyerName);
+  const [buyerName, setBuyerName] = useState(bill.buyerName ?? '');
+  const [buyerAddress, setBuyerAddress] = useState(bill.buyerAddress ?? '');
+  const [buyerGstin, setBuyerGstin] = useState(bill.buyerGstin ?? '');
 
   const countedItems = items.filter((i) => i.productName.trim() && i.qty > 0);
   const { subTotalP, gstTotalP } = computeLineTotals(countedItems, false);
@@ -159,6 +163,9 @@ export function MmEditBillModal({ bill, onClose, onSaved }: MmEditBillModalProps
       consigneeName: consigneeSameAsBuyer ? undefined : consigneeName.trim() || undefined,
       consigneeAddress: consigneeSameAsBuyer ? undefined : consigneeAddress.trim() || undefined,
       consigneeGstin: consigneeSameAsBuyer ? undefined : consigneeGstin.trim() || undefined,
+      buyerName: buyerManualEntry ? buyerName.trim() || undefined : undefined,
+      buyerAddress: buyerManualEntry ? buyerAddress.trim() || undefined : undefined,
+      buyerGstin: buyerManualEntry ? buyerGstin.trim() || undefined : undefined,
     });
   };
 
@@ -230,6 +237,34 @@ export function MmEditBillModal({ bill, onClose, onSaved }: MmEditBillModalProps
                   <Label className="text-xs text-muted-foreground mb-1.5 block">IRN No</Label>
                   <Input value={irnNo} onChange={(e) => setIrnNo(e.target.value)} placeholder="Paste from the govt. e-invoice portal, if any" />
                 </div>
+              </div>
+
+              <div className="pt-1 border-t border-slate-100">
+                <label className="flex items-center gap-2 text-xs text-slate-600 mb-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={buyerManualEntry}
+                    onChange={(e) => setBuyerManualEntry(e.target.checked)}
+                    className="h-3.5 w-3.5 rounded border-slate-300"
+                  />
+                  Enter Buyer details manually (skip customer record — for a one-off buyer)
+                </label>
+                {buyerManualEntry && (
+                  <div className="grid grid-cols-12 gap-3 mb-3">
+                    <div className="col-span-4">
+                      <Label className="text-xs text-muted-foreground mb-1.5 block">Buyer Name</Label>
+                      <Input value={buyerName} onChange={(e) => setBuyerName(e.target.value)} />
+                    </div>
+                    <div className="col-span-5">
+                      <Label className="text-xs text-muted-foreground mb-1.5 block">Buyer Address</Label>
+                      <Input value={buyerAddress} onChange={(e) => setBuyerAddress(e.target.value)} />
+                    </div>
+                    <div className="col-span-3">
+                      <Label className="text-xs text-muted-foreground mb-1.5 block">Buyer GSTIN</Label>
+                      <Input value={buyerGstin} onChange={(e) => setBuyerGstin(e.target.value.toUpperCase())} maxLength={15} />
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="pt-1 border-t border-slate-100">

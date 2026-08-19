@@ -157,6 +157,9 @@ export const createBillSchema = z.object({
   consigneeName: z.string().max(200, 'Consignee name too long').optional(),
   consigneeAddress: z.string().max(500, 'Consignee address too long').optional(),
   consigneeGstin: z.string().max(15, 'Consignee GSTIN must be 15 characters or fewer').optional(),
+  buyerName: z.string().max(200, 'Buyer name too long').optional(),
+  buyerAddress: z.string().max(500, 'Buyer address too long').optional(),
+  buyerGstin: z.string().max(15, 'Buyer GSTIN must be 15 characters or fewer').optional(),
   series: z.enum(['MAIN', 'MM']).optional(),
 });
 

@@ -115,6 +115,14 @@ export default function MmBillingPage() {
   const [consigneeName, setConsigneeName] = useState('');
   const [consigneeAddress, setConsigneeAddress] = useState('');
   const [consigneeGstin, setConsigneeGstin] = useState('');
+  // Manual Buyer override — for a one-off wholesale buyer the operator
+  // doesn't want saved as an MmCustomer (which mandates a phone number).
+  // The "Customer" bar above still drives mmCustomerId (phone/WhatsApp/
+  // repeat-customer lookup) independently of this.
+  const [buyerManualEntry, setBuyerManualEntry] = useState(false);
+  const [buyerName, setBuyerName] = useState('');
+  const [buyerAddress, setBuyerAddress] = useState('');
+  const [buyerGstin, setBuyerGstin] = useState('');
 
   const { data: nextNumber } = useQuery({
     queryKey: ['bills', 'next-number', 'MM'],
@@ -174,10 +182,14 @@ export default function MmBillingPage() {
         consigneeName: consigneeSameAsBuyer ? undefined : consigneeName,
         consigneeAddress: consigneeSameAsBuyer ? undefined : consigneeAddress,
         consigneeGstin: consigneeSameAsBuyer ? undefined : consigneeGstin,
+        buyerName: buyerManualEntry ? buyerName : undefined,
+        buyerAddress: buyerManualEntry ? buyerAddress : undefined,
+        buyerGstin: buyerManualEntry ? buyerGstin : undefined,
       }),
     [
       nextNumber, items, isInterState, customer, roundOffP, vehicleNo, despatchedThrough, destination,
       otherReference, ewayBillNo, irnNo, consigneeSameAsBuyer, consigneeName, consigneeAddress, consigneeGstin,
+      buyerManualEntry, buyerName, buyerAddress, buyerGstin,
     ],
   );
 
@@ -286,6 +298,9 @@ export default function MmBillingPage() {
       consigneeName: consigneeSameAsBuyer ? undefined : consigneeName.trim() || undefined,
       consigneeAddress: consigneeSameAsBuyer ? undefined : consigneeAddress.trim() || undefined,
       consigneeGstin: consigneeSameAsBuyer ? undefined : consigneeGstin.trim() || undefined,
+      buyerName: buyerManualEntry ? buyerName.trim() || undefined : undefined,
+      buyerAddress: buyerManualEntry ? buyerAddress.trim() || undefined : undefined,
+      buyerGstin: buyerManualEntry ? buyerGstin.trim() || undefined : undefined,
       series: 'MM',
     });
   };
@@ -348,6 +363,10 @@ export default function MmBillingPage() {
     setConsigneeName('');
     setConsigneeAddress('');
     setConsigneeGstin('');
+    setBuyerManualEntry(false);
+    setBuyerName('');
+    setBuyerAddress('');
+    setBuyerGstin('');
     qc.invalidateQueries({ queryKey: ['bills', 'next-number', 'MM'] });
     qc.refetchQueries({ queryKey: ['bills', 'next-number', 'MM'] });
   };
@@ -478,6 +497,35 @@ export default function MmBillingPage() {
             <label className="flex items-center gap-2 text-xs text-slate-600 mb-2 cursor-pointer">
               <input
                 type="checkbox"
+                checked={buyerManualEntry}
+                disabled={!!savedBill}
+                onChange={(e) => setBuyerManualEntry(e.target.checked)}
+                className="h-3.5 w-3.5 rounded border-slate-300"
+              />
+              Enter Buyer details manually (skip customer record — for a one-off buyer)
+            </label>
+            {buyerManualEntry && (
+              <div className="grid grid-cols-12 gap-3 mb-3">
+                <div className="col-span-4">
+                  <Label className="text-xs text-muted-foreground mb-1.5 block">Buyer Name</Label>
+                  <Input value={buyerName} disabled={!!savedBill} onChange={(e) => setBuyerName(e.target.value)} />
+                </div>
+                <div className="col-span-5">
+                  <Label className="text-xs text-muted-foreground mb-1.5 block">Buyer Address</Label>
+                  <Input value={buyerAddress} disabled={!!savedBill} onChange={(e) => setBuyerAddress(e.target.value)} />
+                </div>
+                <div className="col-span-3">
+                  <Label className="text-xs text-muted-foreground mb-1.5 block">Buyer GSTIN</Label>
+                  <Input value={buyerGstin} disabled={!!savedBill} onChange={(e) => setBuyerGstin(e.target.value.toUpperCase())} maxLength={15} />
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="pt-1 border-t border-slate-100">
+            <label className="flex items-center gap-2 text-xs text-slate-600 mb-2 cursor-pointer">
+              <input
+                type="checkbox"
                 checked={consigneeSameAsBuyer}
                 disabled={!!savedBill}
                 onChange={(e) => setConsigneeSameAsBuyer(e.target.checked)}
@@ -508,7 +556,7 @@ export default function MmBillingPage() {
       {/* ── Items table + Summary ────────────────────────────────── */}
       <div className="grid grid-cols-12 gap-4">
 
-        <div className="col-span-9">
+        <div className="col-span-8">
           <Card>
             <CardHeader className="pb-3 flex flex-row items-center justify-between">
               <CardTitle className="text-sm">MM Bill Items</CardTitle>
@@ -583,8 +631,8 @@ export default function MmBillingPage() {
           </Card>
         </div>
 
-        {/* Summary — 3 cols */}
-        <div className="col-span-3 space-y-3">
+        {/* Summary — 4 cols */}
+        <div className="col-span-4 space-y-3">
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm">Summary</CardTitle>

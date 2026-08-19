@@ -159,6 +159,12 @@ export interface Bill {
   consigneeName?: string;
   consigneeAddress?: string;
   consigneeGstin?: string;
+  // MM/A4 "Tax Invoice" layout only — manual Buyer override, for a one-off
+  // wholesale buyer the operator doesn't want saved as an MmCustomer (which
+  // requires a phone number). Falls back to mmCustomer's fields when blank.
+  buyerName?: string;
+  buyerAddress?: string;
+  buyerGstin?: string;
   // 'MAIN' (Thermal/A4, the studio's normal billing) or 'MM' (the separate
   // MM billing module) — see backend schema.prisma Bill.series.
   series?: 'MAIN' | 'MM';

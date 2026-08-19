@@ -90,12 +90,14 @@ export function MmBillDetailModal({ bill, settings, onClose, onEdit }: MmBillDet
           {/* Content */}
           <div className="overflow-auto flex-1 p-6 space-y-4">
             {/* Customer */}
-            {bill.mmCustomer && (
+            {(bill.mmCustomer || bill.buyerName) && (
               <div className="bg-slate-50 rounded-lg p-4">
-                <p className="text-xs font-semibold text-muted-foreground mb-2">CUSTOMER</p>
-                <p className="font-semibold">{bill.mmCustomer.name}</p>
-                <p className="text-sm text-muted-foreground">{bill.mmCustomer.phone}</p>
-                {bill.mmCustomer.address && <p className="text-sm text-muted-foreground">{bill.mmCustomer.address}</p>}
+                <p className="text-xs font-semibold text-muted-foreground mb-2">BUYER</p>
+                <p className="font-semibold">{bill.buyerName || bill.mmCustomer?.name}</p>
+                {bill.mmCustomer?.phone && <p className="text-sm text-muted-foreground">{bill.mmCustomer.phone}</p>}
+                {(bill.buyerName ? bill.buyerAddress : bill.mmCustomer?.address) && (
+                  <p className="text-sm text-muted-foreground">{bill.buyerName ? bill.buyerAddress : bill.mmCustomer?.address}</p>
+                )}
               </div>
             )}
 

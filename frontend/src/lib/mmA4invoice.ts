@@ -146,11 +146,17 @@ export async function generateMmA4InvoicePDF(bill: Bill, settings: Partial<Setti
   // MM bills carry their customer via mmCustomer (mmCustomerId), never the
   // main-series customer FK — reading bill.customer here always came up
   // blank for a real MM bill.
+  // Buyer defaults to the linked mmCustomer, but bill.buyerName overrides it
+  // when the operator typed a one-off buyer manually instead of picking/
+  // creating an MmCustomer record (which mandates a phone number) — same
+  // override shape as consignee below, one level up the chain.
   const isPlaceholderCustomer = bill.mmCustomer?.phone === '0000000000';
-  const buyerName = isPlaceholderCustomer ? 'Customer' : bill.mmCustomer?.name ?? 'Customer';
+  const buyerName = bill.buyerName || (isPlaceholderCustomer ? 'Customer' : bill.mmCustomer?.name) || 'Customer';
+  const buyerAddress = bill.buyerName ? bill.buyerAddress : bill.mmCustomer?.address;
+  const buyerGstin = bill.buyerName ? bill.buyerGstin : bill.mmCustomer?.gstin;
   const consigneeName = bill.consigneeName || buyerName;
-  const consigneeAddress = bill.consigneeName ? bill.consigneeAddress : bill.mmCustomer?.address;
-  const consigneeGstin = bill.consigneeName ? bill.consigneeGstin : bill.mmCustomer?.gstin;
+  const consigneeAddress = bill.consigneeName ? bill.consigneeAddress : buyerAddress;
+  const consigneeGstin = bill.consigneeName ? bill.consigneeGstin : buyerGstin;
 
   // Invoice-info column needs enough room for "label : value" on one line
   // (e.g. "Other Reference : PO-2026-118") — 38/38 left it too narrow and
@@ -173,7 +179,7 @@ export async function generateMmA4InvoicePDF(bill: Bill, settings: Partial<Setti
     if (phone) lines.push({ text: `Ph : ${phone}`, font: regular, size: 9 });
     return lines;
   }
-  const buyerLines = buildPartyLines(buyerName, bill.mmCustomer?.address, bill.mmCustomer?.gstin, bill.mmCustomer?.phone);
+  const buyerLines = buildPartyLines(buyerName, buyerAddress, buyerGstin, bill.mmCustomer?.phone);
   const consigneeLines = buildPartyLines(consigneeName, consigneeAddress, consigneeGstin, undefined);
 
   const invoiceInfoRows: Array<[string, string]> = [
@@ -381,16 +387,22 @@ export async function generateMmA4InvoicePDF(bill: Bill, settings: Partial<Setti
     // where a nearly-full page's last row ends, and stretching to it there
     // used to print "Continue..." right on top of that row's own text.
     const tableBottom = isLast ? reservedBottomY : Math.min(ty - 22, reservedBottomY);
-    // On the last page, the S.No/Particulars/HSN column boundaries stop at
-    // the top of the Total row instead of running through it, so "Total"
-    // reads as one merged cell (the Quantity column boundary stays
-    // full-height — that's the merged cell's real right edge).
-    const totalRowTop = tableBottom + TOTAL_ROW_H;
+    // `tableBottom` is the TOP of the Total row (its own band runs from here
+    // down to tableBottom - TOTAL_ROW_H, drawn further below) — a column
+    // boundary bounded at plain `tableBottom` therefore stops right where
+    // the Total row begins, not where it actually ends. That's exactly what
+    // we want for S.No/Particulars/HSN (merged into one "Total" cell, no
+    // divider through that band at all), but Quantity/Rate/Per/Amount need
+    // their own dividers to keep running through the Total row's own height
+    // down to totalRowBottom, or those cells show no border at all — which
+    // is the bug a rendered PDF caught (reported: "lines not finishing").
+    const totalRowBottom = tableBottom - TOTAL_ROW_H;
     vline(left, tableBottom, y);
     vline(right, tableBottom, y);
     for (const c of cols.slice(1)) {
       const mergeIntoTotal = isLast && (c.key === 'particulars' || c.key === 'hsn');
-      vline(c.x, mergeIntoTotal ? totalRowTop : tableBottom, y);
+      const lowerBound = isLast ? (mergeIntoTotal ? tableBottom : totalRowBottom) : tableBottom;
+      vline(c.x, lowerBound, y);
     }
     hline(tableBottom);
 

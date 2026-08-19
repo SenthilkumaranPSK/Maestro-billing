@@ -218,6 +218,9 @@ export class BillService {
               consigneeName: input.consigneeName,
               consigneeAddress: input.consigneeAddress,
               consigneeGstin: input.consigneeGstin,
+              buyerName: input.buyerName,
+              buyerAddress: input.buyerAddress,
+              buyerGstin: input.buyerGstin,
               items: {
                 create: computedItems.map((item) => ({
                   productId: item.productId,
@@ -320,6 +323,9 @@ export class BillService {
           consigneeName: input.consigneeName ?? null,
           consigneeAddress: input.consigneeAddress ?? null,
           consigneeGstin: input.consigneeGstin ?? null,
+          buyerName: input.buyerName ?? null,
+          buyerAddress: input.buyerAddress ?? null,
+          buyerGstin: input.buyerGstin ?? null,
           items: {
             create: computedItems.map((item) => ({
               productId: item.productId,

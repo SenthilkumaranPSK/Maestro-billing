@@ -22,6 +22,9 @@ export interface DraftBillFields {
   consigneeName?: string;
   consigneeAddress?: string;
   consigneeGstin?: string;
+  buyerName?: string;
+  buyerAddress?: string;
+  buyerGstin?: string;
 }
 
 /**
@@ -98,6 +101,9 @@ export function buildDraftBill(fields: DraftBillFields): Bill {
     consigneeName: fields.consigneeName,
     consigneeAddress: fields.consigneeAddress,
     consigneeGstin: fields.consigneeGstin,
+    buyerName: fields.buyerName,
+    buyerAddress: fields.buyerAddress,
+    buyerGstin: fields.buyerGstin,
     series,
     items,
     payments: [],

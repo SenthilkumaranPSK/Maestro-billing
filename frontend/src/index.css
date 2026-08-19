@@ -261,3 +261,24 @@
   --tw-gradient-to: hsl(var(--muted) / 0) var(--tw-gradient-to-position);
   --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to);
 }
+
+/* Scrollbars default to the browser's own light theme regardless of page
+   theme — Chromium doesn't reskin them automatically just because the page
+   went dark. That left a stark light-gray scrollbar track/thumb on every
+   scrollable area (the page itself, any horizontally-scrolling table inside
+   a modal, etc.) — reported as light/white bars surrounding popups and
+   running along the page edges. Colors only (no width/height) so this
+   doesn't fight the existing .scrollbar-thin::-webkit-scrollbar sizing. */
+.dark ::-webkit-scrollbar-track {
+  background: hsl(var(--muted));
+}
+.dark ::-webkit-scrollbar-thumb {
+  background-color: hsl(var(--muted-foreground) / 0.5);
+  border-radius: 9999px;
+}
+.dark ::-webkit-scrollbar-thumb:hover {
+  background-color: hsl(var(--muted-foreground) / 0.7);
+}
+.dark ::-webkit-scrollbar-corner {
+  background: hsl(var(--muted));
+}

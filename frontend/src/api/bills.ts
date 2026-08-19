@@ -41,6 +41,10 @@ export interface CreateBillPayload {
   consigneeName?: string;
   consigneeAddress?: string;
   consigneeGstin?: string;
+  // Manual Buyer override — see backend schema.prisma Bill.buyerName.
+  buyerName?: string;
+  buyerAddress?: string;
+  buyerGstin?: string;
   // Which billing area this bill belongs to — see backend schema.prisma
   // Bill.series. Omit for a normal MAIN bill.
   series?: 'MAIN' | 'MM';

@@ -185,6 +185,8 @@ export default function MmHistoryPage() {
                         >
                           {bill.mmCustomer.name}
                         </Link>
+                      ) : bill.buyerName ? (
+                        bill.buyerName
                       ) : (
                         <span className="text-muted-foreground">Walk-in</span>
                       )}

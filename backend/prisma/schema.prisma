@@ -219,6 +219,14 @@ model Bill {
   consigneeName      String?   @map("consignee_name")
   consigneeAddress   String?   @map("consignee_address")
   consigneeGstin     String?   @map("consignee_gstin")
+  // MM/A4 "Tax Invoice" layout only — manual Buyer override, for a one-off
+  // wholesale buyer the operator doesn't want to save as an MmCustomer (which
+  // mandates a phone number). Falls back to mmCustomer's fields when blank —
+  // same fallback shape as consignee falling back to the buyer above, just
+  // one level higher up the chain.
+  buyerName          String?   @map("buyer_name")
+  buyerAddress       String?   @map("buyer_address")
+  buyerGstin         String?   @map("buyer_gstin")
   // Which billing area created this bill: "MAIN" (Thermal/A4, the studio's
   // normal billing — the default) or "MM" (the separate MM billing module —
   // its own product catalog, its own MM/YY-YY/NNN numbering series, filtered

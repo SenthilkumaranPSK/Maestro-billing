@@ -621,8 +621,8 @@ export default function BillingPage() {
       {/* ── Items table + Summary ────────────────────────────────── */}
       <div className="grid grid-cols-12 gap-4">
 
-        {/* Items table — 9 cols */}
-        <div className="col-span-9">
+        {/* Items table — 8 cols */}
+        <div className="col-span-8">
           <Card>
             <CardHeader className="pb-3 flex flex-row items-center justify-between">
               <CardTitle className="text-sm">Bill Items</CardTitle>
@@ -704,8 +704,8 @@ export default function BillingPage() {
           </Card>
         </div>
 
-        {/* Summary — 3 cols */}
-        <div className="col-span-3 space-y-3">
+        {/* Summary — 4 cols */}
+        <div className="col-span-4 space-y-3">
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm">Summary</CardTitle>
