@@ -72,7 +72,6 @@ export function MmEditBillModal({ bill, onClose, onSaved }: MmEditBillModalProps
   const [otherReference, setOtherReference] = useState(bill.otherReference ?? '');
   const [ewayBillNo, setEwayBillNo] = useState(bill.ewayBillNo ?? '');
   const [irnNo, setIrnNo] = useState(bill.irnNo ?? '');
-  const [consigneeSameAsBuyer, setConsigneeSameAsBuyer] = useState(!bill.consigneeName);
   const [consigneeName, setConsigneeName] = useState(bill.consigneeName ?? '');
   const [consigneeAddress, setConsigneeAddress] = useState(bill.consigneeAddress ?? '');
   const [consigneeGstin, setConsigneeGstin] = useState(bill.consigneeGstin ?? '');
@@ -160,9 +159,9 @@ export function MmEditBillModal({ bill, onClose, onSaved }: MmEditBillModalProps
       otherReference: otherReference.trim() || undefined,
       ewayBillNo: ewayBillNo.trim() || undefined,
       irnNo: irnNo.trim() || undefined,
-      consigneeName: consigneeSameAsBuyer ? undefined : consigneeName.trim() || undefined,
-      consigneeAddress: consigneeSameAsBuyer ? undefined : consigneeAddress.trim() || undefined,
-      consigneeGstin: consigneeSameAsBuyer ? undefined : consigneeGstin.trim() || undefined,
+      consigneeName: consigneeName.trim() || undefined,
+      consigneeAddress: consigneeAddress.trim() || undefined,
+      consigneeGstin: consigneeGstin.trim() || undefined,
       buyerName: buyerManualEntry ? buyerName.trim() || undefined : undefined,
       buyerAddress: buyerManualEntry ? buyerAddress.trim() || undefined : undefined,
       buyerGstin: buyerManualEntry ? buyerGstin.trim() || undefined : undefined,
@@ -268,31 +267,23 @@ export function MmEditBillModal({ bill, onClose, onSaved }: MmEditBillModalProps
               </div>
 
               <div className="pt-1 border-t border-slate-100">
-                <label className="flex items-center gap-2 text-xs text-slate-600 mb-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={consigneeSameAsBuyer}
-                    onChange={(e) => setConsigneeSameAsBuyer(e.target.checked)}
-                    className="h-3.5 w-3.5 rounded border-slate-300"
-                  />
-                  Consignee (ship-to) same as Buyer
-                </label>
-                {!consigneeSameAsBuyer && (
-                  <div className="grid grid-cols-12 gap-3">
-                    <div className="col-span-4">
-                      <Label className="text-xs text-muted-foreground mb-1.5 block">Consignee Name</Label>
-                      <Input value={consigneeName} onChange={(e) => setConsigneeName(e.target.value)} />
-                    </div>
-                    <div className="col-span-5">
-                      <Label className="text-xs text-muted-foreground mb-1.5 block">Consignee Address</Label>
-                      <Input value={consigneeAddress} onChange={(e) => setConsigneeAddress(e.target.value)} />
-                    </div>
-                    <div className="col-span-3">
-                      <Label className="text-xs text-muted-foreground mb-1.5 block">Consignee GSTIN</Label>
-                      <Input value={consigneeGstin} onChange={(e) => setConsigneeGstin(e.target.value)} />
-                    </div>
+                <p className="text-xs font-medium text-slate-500 uppercase tracking-wide mb-2">
+                  Consignee (ship-to) — entered separately, not copied from Buyer
+                </p>
+                <div className="grid grid-cols-12 gap-3">
+                  <div className="col-span-4">
+                    <Label className="text-xs text-muted-foreground mb-1.5 block">Consignee Name</Label>
+                    <Input value={consigneeName} onChange={(e) => setConsigneeName(e.target.value)} />
                   </div>
-                )}
+                  <div className="col-span-5">
+                    <Label className="text-xs text-muted-foreground mb-1.5 block">Consignee Address</Label>
+                    <Input value={consigneeAddress} onChange={(e) => setConsigneeAddress(e.target.value)} />
+                  </div>
+                  <div className="col-span-3">
+                    <Label className="text-xs text-muted-foreground mb-1.5 block">Consignee GSTIN</Label>
+                    <Input value={consigneeGstin} onChange={(e) => setConsigneeGstin(e.target.value)} />
+                  </div>
+                </div>
               </div>
             </CardContent>
           </Card>

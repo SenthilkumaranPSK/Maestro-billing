@@ -70,9 +70,15 @@ export function CustomerBar({ value, onChange, disabled, showAddress }: Customer
 
   return (
     <div className="relative" ref={barRef}>
-      <div className="flex items-center gap-2">
+      {/* flex-wrap so this degrades to Name on its own row, then Phone+GSTIN
+          below, instead of squeezing Name down to near-nothing — the three
+          fixed-width fields (Phone/GSTIN) otherwise "win" against Name's
+          flex-1 in a narrow container (e.g. a sidebar-width form column).
+          Nothing wraps at the widths this already ran at, so no visual
+          change there. */}
+      <div className="flex items-center gap-2 flex-wrap">
         {/* Name */}
-        <div className="relative flex-1">
+        <div className="relative flex-1 min-w-[160px]">
           <User className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground pointer-events-none" />
           {isLinked && (
             <UserCheck className="absolute right-3 top-2.5 h-4 w-4 text-brand-600 pointer-events-none" />

@@ -111,7 +111,11 @@ export default function MmBillingPage() {
   const [otherReference, setOtherReference] = useState('');
   const [ewayBillNo, setEwayBillNo] = useState('');
   const [irnNo, setIrnNo] = useState('');
-  const [consigneeSameAsBuyer, setConsigneeSameAsBuyer] = useState(true);
+  // Consignee is always its own independent entry — never pre-filled or
+  // copied from Buyer. A genuinely blank Consignee still falls back to the
+  // Buyer at print time (mmA4invoice.ts) purely so the invoice never shows a
+  // blank ship-to block, but the form itself offers no "same as Buyer"
+  // shortcut — the operator types it themselves.
   const [consigneeName, setConsigneeName] = useState('');
   const [consigneeAddress, setConsigneeAddress] = useState('');
   const [consigneeGstin, setConsigneeGstin] = useState('');
@@ -179,16 +183,16 @@ export default function MmBillingPage() {
         otherReference,
         ewayBillNo,
         irnNo,
-        consigneeName: consigneeSameAsBuyer ? undefined : consigneeName,
-        consigneeAddress: consigneeSameAsBuyer ? undefined : consigneeAddress,
-        consigneeGstin: consigneeSameAsBuyer ? undefined : consigneeGstin,
+        consigneeName,
+        consigneeAddress,
+        consigneeGstin,
         buyerName: buyerManualEntry ? buyerName : undefined,
         buyerAddress: buyerManualEntry ? buyerAddress : undefined,
         buyerGstin: buyerManualEntry ? buyerGstin : undefined,
       }),
     [
       nextNumber, items, isInterState, customer, roundOffP, vehicleNo, despatchedThrough, destination,
-      otherReference, ewayBillNo, irnNo, consigneeSameAsBuyer, consigneeName, consigneeAddress, consigneeGstin,
+      otherReference, ewayBillNo, irnNo, consigneeName, consigneeAddress, consigneeGstin,
       buyerManualEntry, buyerName, buyerAddress, buyerGstin,
     ],
   );
@@ -295,9 +299,9 @@ export default function MmBillingPage() {
       otherReference: otherReference.trim() || undefined,
       ewayBillNo: ewayBillNo.trim() || undefined,
       irnNo: irnNo.trim() || undefined,
-      consigneeName: consigneeSameAsBuyer ? undefined : consigneeName.trim() || undefined,
-      consigneeAddress: consigneeSameAsBuyer ? undefined : consigneeAddress.trim() || undefined,
-      consigneeGstin: consigneeSameAsBuyer ? undefined : consigneeGstin.trim() || undefined,
+      consigneeName: consigneeName.trim() || undefined,
+      consigneeAddress: consigneeAddress.trim() || undefined,
+      consigneeGstin: consigneeGstin.trim() || undefined,
       buyerName: buyerManualEntry ? buyerName.trim() || undefined : undefined,
       buyerAddress: buyerManualEntry ? buyerAddress.trim() || undefined : undefined,
       buyerGstin: buyerManualEntry ? buyerGstin.trim() || undefined : undefined,
@@ -359,7 +363,6 @@ export default function MmBillingPage() {
     setOtherReference('');
     setEwayBillNo('');
     setIrnNo('');
-    setConsigneeSameAsBuyer(true);
     setConsigneeName('');
     setConsigneeAddress('');
     setConsigneeGstin('');
@@ -440,123 +443,126 @@ export default function MmBillingPage() {
         </div>
       </div>
 
-      {/* ── Customer + Date bar ─────────────────────────────── */}
-      <Card className="border-brand-500/30 bg-brand-50/60">
-        <CardContent className="pt-4 pb-4 grid grid-cols-12 gap-4 items-end">
-          <div className="col-span-6">
-            <Label className="text-xs text-muted-foreground mb-1.5 block">Customer</Label>
-            <CustomerBar value={customer} onChange={setCustomer} disabled={!!savedBill} showAddress />
-          </div>
-          <div className="col-span-3">
-            <Label className="text-xs text-muted-foreground mb-1.5 flex items-center gap-1">
-              <CalendarDays className="w-3.5 h-3.5" /> Date
-            </Label>
-            <p className="h-10 flex items-center px-3 rounded-lg border border-slate-200 bg-slate-50 text-sm font-medium text-slate-700">
-              {new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
-            </p>
-          </div>
-          <div className="col-span-3">
-            <Label className="text-xs text-muted-foreground mb-1.5 block">Payment Mode</Label>
-            <PaymentModeSelect value={paymentMode} onChange={setPaymentMode} disabled={!!savedBill} />
-          </div>
-        </CardContent>
-      </Card>
+      {/* Left: everything the operator fills in. Right: items + summary —
+          the two used to stack full-width top to bottom, which meant
+          scrolling past the whole (fairly long) details form just to reach
+          the item table. Side by side instead, so items are visible right
+          away without the form pushing them down the page. */}
+      <div className="grid grid-cols-12 gap-4 items-start">
 
-      {/* ── Tax Invoice Details — always shown for MM bills ─────────────── */}
-      <Card className="border-slate-200">
-        <CardContent className="pt-3 pb-3 space-y-3">
-          <p className="text-xs font-medium text-slate-500 uppercase tracking-wide">Tax Invoice Details</p>
-          <div className="grid grid-cols-12 gap-3">
-            <div className="col-span-3">
-              <Label className="text-xs text-muted-foreground mb-1.5 block">Vehicle No</Label>
-              <Input value={vehicleNo} disabled={!!savedBill} onChange={(e) => setVehicleNo(e.target.value)} />
-            </div>
-            <div className="col-span-3">
-              <Label className="text-xs text-muted-foreground mb-1.5 block">Despatched Through</Label>
-              <Input value={despatchedThrough} disabled={!!savedBill} onChange={(e) => setDespatchedThrough(e.target.value)} />
-            </div>
-            <div className="col-span-3">
-              <Label className="text-xs text-muted-foreground mb-1.5 block">Destination</Label>
-              <Input value={destination} disabled={!!savedBill} onChange={(e) => setDestination(e.target.value)} />
-            </div>
-            <div className="col-span-3">
-              <Label className="text-xs text-muted-foreground mb-1.5 block">E-Way Bill No</Label>
-              <Input value={ewayBillNo} disabled={!!savedBill} onChange={(e) => setEwayBillNo(e.target.value)} />
-            </div>
-            <div className="col-span-6">
-              <Label className="text-xs text-muted-foreground mb-1.5 block">Other Reference</Label>
-              <Input value={otherReference} disabled={!!savedBill} onChange={(e) => setOtherReference(e.target.value)} />
-            </div>
-            <div className="col-span-6">
-              <Label className="text-xs text-muted-foreground mb-1.5 block">IRN No</Label>
-              <Input value={irnNo} disabled={!!savedBill} onChange={(e) => setIrnNo(e.target.value)} placeholder="Paste from the govt. e-invoice portal, if any" />
-            </div>
-          </div>
+        <div className="col-span-4 space-y-4">
 
-          <div className="pt-1 border-t border-slate-100">
-            <label className="flex items-center gap-2 text-xs text-slate-600 mb-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={buyerManualEntry}
-                disabled={!!savedBill}
-                onChange={(e) => setBuyerManualEntry(e.target.checked)}
-                className="h-3.5 w-3.5 rounded border-slate-300"
-              />
-              Enter Buyer details manually (skip customer record — for a one-off buyer)
-            </label>
-            {buyerManualEntry && (
-              <div className="grid grid-cols-12 gap-3 mb-3">
-                <div className="col-span-4">
-                  <Label className="text-xs text-muted-foreground mb-1.5 block">Buyer Name</Label>
-                  <Input value={buyerName} disabled={!!savedBill} onChange={(e) => setBuyerName(e.target.value)} />
-                </div>
-                <div className="col-span-5">
-                  <Label className="text-xs text-muted-foreground mb-1.5 block">Buyer Address</Label>
-                  <Input value={buyerAddress} disabled={!!savedBill} onChange={(e) => setBuyerAddress(e.target.value)} />
-                </div>
-                <div className="col-span-3">
-                  <Label className="text-xs text-muted-foreground mb-1.5 block">Buyer GSTIN</Label>
-                  <Input value={buyerGstin} disabled={!!savedBill} onChange={(e) => setBuyerGstin(e.target.value.toUpperCase())} maxLength={15} />
-                </div>
+        {/* ── Customer + Date ─────────────────────────────── */}
+        <Card className="border-brand-500/30 bg-brand-50/60">
+          <CardContent className="pt-4 pb-4 space-y-3">
+            <div>
+              <Label className="text-xs text-muted-foreground mb-1.5 block">Customer</Label>
+              <CustomerBar value={customer} onChange={setCustomer} disabled={!!savedBill} showAddress />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="text-xs text-muted-foreground mb-1.5 flex items-center gap-1">
+                  <CalendarDays className="w-3.5 h-3.5" /> Date
+                </Label>
+                <p className="h-10 flex items-center px-3 rounded-lg border border-slate-200 bg-slate-50 text-sm font-medium text-slate-700">
+                  {new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
+                </p>
               </div>
-            )}
-          </div>
+              <div>
+                <Label className="text-xs text-muted-foreground mb-1.5 block">Payment Mode</Label>
+                <PaymentModeSelect value={paymentMode} onChange={setPaymentMode} disabled={!!savedBill} />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
 
-          <div className="pt-1 border-t border-slate-100">
-            <label className="flex items-center gap-2 text-xs text-slate-600 mb-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={consigneeSameAsBuyer}
-                disabled={!!savedBill}
-                onChange={(e) => setConsigneeSameAsBuyer(e.target.checked)}
-                className="h-3.5 w-3.5 rounded border-slate-300"
-              />
-              Consignee (ship-to) same as Buyer
-            </label>
-            {!consigneeSameAsBuyer && (
-              <div className="grid grid-cols-12 gap-3">
-                <div className="col-span-4">
+        {/* ── Tax Invoice Details — always shown for MM bills ─────────────── */}
+        <Card className="border-slate-200">
+          <CardContent className="pt-3 pb-3 space-y-3">
+            <p className="text-xs font-medium text-slate-500 uppercase tracking-wide">Tax Invoice Details</p>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="text-xs text-muted-foreground mb-1.5 block">Vehicle No</Label>
+                <Input value={vehicleNo} disabled={!!savedBill} onChange={(e) => setVehicleNo(e.target.value)} />
+              </div>
+              <div>
+                <Label className="text-xs text-muted-foreground mb-1.5 block">Despatched Through</Label>
+                <Input value={despatchedThrough} disabled={!!savedBill} onChange={(e) => setDespatchedThrough(e.target.value)} />
+              </div>
+              <div>
+                <Label className="text-xs text-muted-foreground mb-1.5 block">Destination</Label>
+                <Input value={destination} disabled={!!savedBill} onChange={(e) => setDestination(e.target.value)} />
+              </div>
+              <div>
+                <Label className="text-xs text-muted-foreground mb-1.5 block">E-Way Bill No</Label>
+                <Input value={ewayBillNo} disabled={!!savedBill} onChange={(e) => setEwayBillNo(e.target.value)} />
+              </div>
+              <div className="col-span-2">
+                <Label className="text-xs text-muted-foreground mb-1.5 block">Other Reference</Label>
+                <Input value={otherReference} disabled={!!savedBill} onChange={(e) => setOtherReference(e.target.value)} />
+              </div>
+              <div className="col-span-2">
+                <Label className="text-xs text-muted-foreground mb-1.5 block">IRN No</Label>
+                <Input value={irnNo} disabled={!!savedBill} onChange={(e) => setIrnNo(e.target.value)} placeholder="Paste from the govt. e-invoice portal, if any" />
+              </div>
+            </div>
+
+            <div className="pt-1 border-t border-slate-100">
+              <label className="flex items-center gap-2 text-xs text-slate-600 mb-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={buyerManualEntry}
+                  disabled={!!savedBill}
+                  onChange={(e) => setBuyerManualEntry(e.target.checked)}
+                  className="h-3.5 w-3.5 rounded border-slate-300"
+                />
+                Enter Buyer details manually (skip customer record — for a one-off buyer)
+              </label>
+              {buyerManualEntry && (
+                <div className="space-y-3 mb-3">
+                  <div>
+                    <Label className="text-xs text-muted-foreground mb-1.5 block">Buyer Name</Label>
+                    <Input value={buyerName} disabled={!!savedBill} onChange={(e) => setBuyerName(e.target.value)} />
+                  </div>
+                  <div>
+                    <Label className="text-xs text-muted-foreground mb-1.5 block">Buyer Address</Label>
+                    <Input value={buyerAddress} disabled={!!savedBill} onChange={(e) => setBuyerAddress(e.target.value)} />
+                  </div>
+                  <div>
+                    <Label className="text-xs text-muted-foreground mb-1.5 block">Buyer GSTIN</Label>
+                    <Input value={buyerGstin} disabled={!!savedBill} onChange={(e) => setBuyerGstin(e.target.value.toUpperCase())} maxLength={15} />
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="pt-1 border-t border-slate-100">
+              <p className="text-xs font-medium text-slate-500 uppercase tracking-wide mb-2">
+                Consignee (ship-to) — entered separately, not copied from Buyer
+              </p>
+              <div className="space-y-3">
+                <div>
                   <Label className="text-xs text-muted-foreground mb-1.5 block">Consignee Name</Label>
                   <Input value={consigneeName} disabled={!!savedBill} onChange={(e) => setConsigneeName(e.target.value)} />
                 </div>
-                <div className="col-span-5">
+                <div>
                   <Label className="text-xs text-muted-foreground mb-1.5 block">Consignee Address</Label>
                   <Input value={consigneeAddress} disabled={!!savedBill} onChange={(e) => setConsigneeAddress(e.target.value)} />
                 </div>
-                <div className="col-span-3">
+                <div>
                   <Label className="text-xs text-muted-foreground mb-1.5 block">Consignee GSTIN</Label>
                   <Input value={consigneeGstin} disabled={!!savedBill} onChange={(e) => setConsigneeGstin(e.target.value)} />
                 </div>
               </div>
-            )}
-          </div>
-        </CardContent>
-      </Card>
+            </div>
+          </CardContent>
+        </Card>
 
-      {/* ── Items table + Summary ────────────────────────────────── */}
-      <div className="grid grid-cols-12 gap-4">
+        </div>
 
-        <div className="col-span-8">
+        {/* ── Items table + Summary ────────────────────────────────── */}
+        <div className="col-span-8 space-y-4">
+
           <Card>
             <CardHeader className="pb-3 flex flex-row items-center justify-between">
               <CardTitle className="text-sm">MM Bill Items</CardTitle>
@@ -629,10 +635,7 @@ export default function MmBillingPage() {
               </div>
             </CardContent>
           </Card>
-        </div>
 
-        {/* Summary — 4 cols */}
-        <div className="col-span-4 space-y-3">
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm">Summary</CardTitle>
