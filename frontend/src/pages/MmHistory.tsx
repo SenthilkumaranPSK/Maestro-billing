@@ -15,6 +15,7 @@ import {
 } from '@/components/ui/select';
 import { MmBillDetailModal } from '@/components/billing/MmBillDetailModal';
 import { PdfPreviewModal } from '@/components/billing/PdfPreviewModal';
+import { PasswordGateModal } from '@/components/billing/PasswordGateModal';
 import { MmEditBillModal } from '@/components/billing/MmEditBillModal';
 import { billsApi } from '@/api/bills';
 import { settingsApi } from '@/api/settings';
@@ -42,6 +43,10 @@ export default function MmHistoryPage() {
   const [selectedBill, setSelectedBill] = useState<Bill | null>(null);
   const [editingBill, setEditingBill] = useState<Bill | null>(null);
   const [previewBill, setPreviewBill] = useState<Bill | null>(null);
+  // Editing a bill is gated behind the bill-edit password (Settings →
+  // Security) — see History.tsx for the same pattern.
+  const [pendingEdit, setPendingEdit] = useState<{ bill: Bill; fromDetail: boolean } | null>(null);
+  const requestEdit = (bill: Bill, fromDetail = false) => setPendingEdit({ bill, fromDetail });
   const LIMIT = 15;
 
   const { data, isLoading } = useQuery({
@@ -198,7 +203,7 @@ export default function MmHistoryPage() {
                           <Eye className="h-3.5 w-3.5" />
                         </Button>
                         {bill.status !== 'CANCELLED' && (
-                          <Button variant="ghost" size="icon" className="h-7 w-7 text-amber-600 hover:text-amber-700" title="Edit" onClick={() => setEditingBill(bill)}>
+                          <Button variant="ghost" size="icon" className="h-7 w-7 text-amber-600 hover:text-amber-700" title="Edit" onClick={() => requestEdit(bill)}>
                             <Pencil className="h-3.5 w-3.5" />
                           </Button>
                         )}
@@ -255,7 +260,7 @@ export default function MmHistoryPage() {
           bill={selectedBill}
           settings={settings ?? {}}
           onClose={() => setSelectedBill(null)}
-          onEdit={selectedBill.status !== 'CANCELLED' ? () => { setEditingBill(selectedBill); setSelectedBill(null); } : undefined}
+          onEdit={selectedBill.status !== 'CANCELLED' ? () => requestEdit(selectedBill, true) : undefined}
         />
       )}
 
@@ -276,6 +281,17 @@ export default function MmHistoryPage() {
           settings={settings ?? {}}
           layout="mm_a4"
           onClose={() => setPreviewBill(null)}
+        />
+      )}
+
+      {pendingEdit && (
+        <PasswordGateModal
+          onCancel={() => setPendingEdit(null)}
+          onConfirm={() => {
+            setEditingBill(pendingEdit.bill);
+            if (pendingEdit.fromDetail) setSelectedBill(null);
+            setPendingEdit(null);
+          }}
         />
       )}
     </div>

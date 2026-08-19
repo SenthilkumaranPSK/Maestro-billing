@@ -15,6 +15,7 @@ import {
 } from '@/components/ui/select';
 import { BillDetailModal } from '@/components/billing/BillDetailModal';
 import { PdfPreviewModal } from '@/components/billing/PdfPreviewModal';
+import { PasswordGateModal } from '@/components/billing/PasswordGateModal';
 import { EditBillModal } from '@/components/billing/EditBillModal';
 import { LayoutToggle, guessBillLayout, type BillLayout } from '@/components/billing/LayoutToggle';
 import { billsApi } from '@/api/bills';
@@ -45,6 +46,12 @@ export default function HistoryPage() {
   const [selectedBill, setSelectedBill] = useState<Bill | null>(null);
   const [editingBill, setEditingBill] = useState<Bill | null>(null);
   const [previewBill, setPreviewBill] = useState<Bill | null>(null);
+  // Editing a bill is gated behind the bill-edit password (Settings →
+  // Security) — this holds the bill (and whether the request came from the
+  // detail modal, so it knows to close that too) until the password is
+  // confirmed or cancelled.
+  const [pendingEdit, setPendingEdit] = useState<{ bill: Bill; fromDetail: boolean } | null>(null);
+  const requestEdit = (bill: Bill, fromDetail = false) => setPendingEdit({ bill, fromDetail });
   // Per-row Thermal/A4 choice for the row's own Download PDF icon.
   const [rowLayout, setRowLayout] = useState<Record<number, BillLayout>>({});
   const LIMIT = 15;
@@ -251,7 +258,7 @@ export default function HistoryPage() {
                           <Eye className="h-3.5 w-3.5" />
                         </Button>
                         {bill.status !== 'CANCELLED' && (
-                          <Button variant="ghost" size="icon" className="h-7 w-7 text-amber-600 hover:text-amber-700" title="Edit" onClick={() => setEditingBill(bill)}>
+                          <Button variant="ghost" size="icon" className="h-7 w-7 text-amber-600 hover:text-amber-700" title="Edit" onClick={() => requestEdit(bill)}>
                             <Pencil className="h-3.5 w-3.5" />
                           </Button>
                         )}
@@ -313,7 +320,7 @@ export default function HistoryPage() {
           bill={selectedBill}
           settings={settings ?? {}}
           onClose={() => setSelectedBill(null)}
-          onEdit={selectedBill.status !== 'CANCELLED' ? () => { setEditingBill(selectedBill); setSelectedBill(null); } : undefined}
+          onEdit={selectedBill.status !== 'CANCELLED' ? () => requestEdit(selectedBill, true) : undefined}
         />
       )}
 
@@ -334,6 +341,17 @@ export default function HistoryPage() {
           settings={settings ?? {}}
           layout={layoutFor(previewBill)}
           onClose={() => setPreviewBill(null)}
+        />
+      )}
+
+      {pendingEdit && (
+        <PasswordGateModal
+          onCancel={() => setPendingEdit(null)}
+          onConfirm={() => {
+            setEditingBill(pendingEdit.bill);
+            if (pendingEdit.fromDetail) setSelectedBill(null);
+            setPendingEdit(null);
+          }}
         />
       )}
     </div>

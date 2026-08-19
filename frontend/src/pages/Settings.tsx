@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Smartphone, FileBarChart2, Percent, ChevronRight, Save, FolderCog, DatabaseBackup, Moon, Sun } from 'lucide-react';
+import { Smartphone, FileBarChart2, Percent, ChevronRight, Save, FolderCog, DatabaseBackup, Moon, Sun, Lock } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
@@ -103,6 +103,33 @@ export default function SettingsPage() {
       return;
     }
     setLocationMutation.mutate(locationInput.trim());
+  };
+
+  // Bill-edit password (Settings → Security) — required before EditBillModal
+  // / MmEditBillModal can be opened, see PasswordGateModal. Seeded to
+  // '1234567890' by backend/src/seed.ts on first install.
+  const [editingPassword, setEditingPassword] = useState(false);
+  const [passwordInput, setPasswordInput] = useState('');
+
+  const setPasswordMutation = useMutation({
+    mutationFn: (password: string) => settingsApi.update('bill_edit_password', password, 'security'),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['settings'] });
+      setEditingPassword(false);
+      setPasswordInput('');
+      toast({ title: 'Bill-edit password updated', variant: 'success' });
+    },
+    onError: (err: Error) => {
+      toast({ title: 'Could not update password', description: err.message, variant: 'destructive' });
+    },
+  });
+
+  const handleSavePassword = () => {
+    if (!passwordInput.trim()) {
+      toast({ title: 'Enter a password', variant: 'destructive' });
+      return;
+    }
+    setPasswordMutation.mutate(passwordInput.trim());
   };
 
   return (
@@ -317,6 +344,55 @@ export default function SettingsPage() {
                 onChange={(e) => setTheme(e.target.checked ? 'dark' : 'light')}
               />
             </label>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm flex items-center gap-2">
+              <Lock className="h-4 w-4" />
+              Security
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-xs text-muted-foreground mb-3">
+              Editing a saved bill (main or MM) asks for this password first — a guard against
+              accidental or casual edits, not a login.
+            </p>
+            {!editingPassword ? (
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2.5">
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold text-slate-700">Bill Edit Password</p>
+                  <p className="text-xs text-muted-foreground font-mono">••••••••••</p>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setPasswordInput('');
+                    setEditingPassword(true);
+                  }}
+                >
+                  Change
+                </Button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <Input
+                  value={passwordInput}
+                  onChange={(e) => setPasswordInput(e.target.value)}
+                  placeholder="New password"
+                  className="h-8 text-sm"
+                  autoFocus
+                />
+                <Button size="sm" onClick={handleSavePassword} disabled={setPasswordMutation.isPending}>
+                  Save
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => setEditingPassword(false)}>
+                  Cancel
+                </Button>
+              </div>
+            )}
           </CardContent>
         </Card>
 

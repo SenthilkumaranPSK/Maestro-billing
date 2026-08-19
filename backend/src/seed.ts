@@ -30,6 +30,10 @@ async function main() {
     // since MM's default GST rate (5%) is independent of the studio's
     // regular default_gst_rate (18%) above.
     { key: 'mm_default_gst_rate', value: '5', group: 'mm' },
+    // Gate on editing a saved bill (both MAIN and MM) — a soft deterrent
+    // against casual/accidental edits, not real auth (this app has none,
+    // deliberately). Changeable in Settings → Security.
+    { key: 'bill_edit_password', value: '1234567890', group: 'security' },
   ];
 
   for (const s of defaults) {

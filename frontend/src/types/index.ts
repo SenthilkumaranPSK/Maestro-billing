@@ -214,6 +214,10 @@ export interface Settings {
   mm: {
     mm_default_gst_rate: string;
   };
+  // Gate on editing a saved bill (both MAIN and MM) — see PasswordGateModal.
+  security: {
+    bill_edit_password: string;
+  };
 }
 
 // Single source of truth for the show_whatsapp_on_billing convention — only
