@@ -3,6 +3,7 @@ import { Plus, Printer, FileText, ScanEye, Save, RotateCcw, CalendarDays } from 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { CustomerBar, type CustomerInfo } from '@/components/billing/CustomerBar';
@@ -102,6 +103,9 @@ export default function MmBillingPage() {
   // exclusive, see schema.prisma Bill.isInterState. Auto-suggested below
   // from GSTIN state codes when the customer changes, but always overridable.
   const [isInterState, setIsInterState] = useState(false);
+  // Internal record only — never printed on the Tax Invoice (same rule as
+  // paymentMode above). See schema.prisma Bill.notes.
+  const [notes, setNotes] = useState('');
 
   // Tax Invoice Details — same fields as the main Billing page's MM/A4 mode,
   // always shown here since MM bills always need them.
@@ -292,6 +296,7 @@ export default function MmBillingPage() {
       })),
       roundOffAmount: roundOffP,
       paymentMode: paymentMode || undefined,
+      notes: notes.trim() || undefined,
       isInterState,
       vehicleNo: vehicleNo.trim() || undefined,
       despatchedThrough: despatchedThrough.trim() || undefined,
@@ -357,6 +362,7 @@ export default function MmBillingPage() {
     setSavedBill(null);
     setSendOnWhatsApp(false);
     setPaymentMode('');
+    setNotes('');
     setVehicleNo('');
     setDespatchedThrough('');
     setDestination('');
@@ -448,7 +454,7 @@ export default function MmBillingPage() {
           scrolling past the whole (fairly long) details form just to reach
           the item table. Side by side instead, so items are visible right
           away without the form pushing them down the page. */}
-      <div className="grid grid-cols-12 gap-4 items-start">
+      <div className="grid grid-cols-12 gap-4">
 
         <div className="col-span-4 space-y-4">
 
@@ -561,7 +567,7 @@ export default function MmBillingPage() {
         </div>
 
         {/* ── Items table + Summary ────────────────────────────────── */}
-        <div className="col-span-8 space-y-4">
+        <div className="col-span-8 flex flex-col gap-4">
 
           <Card>
             <CardHeader className="pb-3 flex flex-row items-center justify-between">
@@ -743,6 +749,24 @@ export default function MmBillingPage() {
               )}
             </div>
           )}
+
+          {/* Fills the leftover space below Summary on a tall screen instead
+              of leaving it blank — an internal record only, never printed on
+              the Tax Invoice (same rule as Payment Mode). */}
+          <Card className="flex-1 flex flex-col">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm">Notes / Remarks</CardTitle>
+            </CardHeader>
+            <CardContent className="flex-1 flex flex-col">
+              <Textarea
+                value={notes}
+                disabled={!!savedBill}
+                onChange={(e) => setNotes(e.target.value)}
+                placeholder="Internal notes about this bill — not printed on the invoice"
+                className="flex-1 min-h-[160px]"
+              />
+            </CardContent>
+          </Card>
         </div>
       </div>
     </div>

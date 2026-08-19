@@ -3,6 +3,7 @@ import { X, Save, Plus } from 'lucide-react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { CustomerBar, type CustomerInfo } from '@/components/billing/CustomerBar';
@@ -65,6 +66,7 @@ export function MmEditBillModal({ bill, onClose, onSaved }: MmEditBillModalProps
   const discountP = bill.discountAmount;
 
   const [paymentMode, setPaymentMode] = useState<PaymentMode | ''>(bill.paymentMode ?? '');
+  const [notes, setNotes] = useState(bill.notes ?? '');
   const [isInterState, setIsInterState] = useState(bill.isInterState);
   const [vehicleNo, setVehicleNo] = useState(bill.vehicleNo ?? '');
   const [despatchedThrough, setDespatchedThrough] = useState(bill.despatchedThrough ?? '');
@@ -148,7 +150,7 @@ export function MmEditBillModal({ bill, onClose, onSaved }: MmEditBillModalProps
         unitPrice: rupeeToPaisa(i.unitPrice),
         gstRate: i.gstRate,
       })),
-      notes: bill.notes,
+      notes: notes.trim() || undefined,
       discountAmount: bill.discountAmount,
       roundOffAmount: roundOffP,
       paymentMode: paymentMode || undefined,
@@ -401,6 +403,18 @@ export function MmEditBillModal({ bill, onClose, onSaved }: MmEditBillModalProps
                       <span className="text-xl font-bold text-brand-700 tabular-nums">{formatCurrency(grandTotalP)}</span>
                     </div>
                   </div>
+                </CardContent>
+              </Card>
+
+              <Card className="mt-3">
+                <CardHeader className="pb-2"><CardTitle className="text-sm">Notes / Remarks</CardTitle></CardHeader>
+                <CardContent>
+                  <Textarea
+                    value={notes}
+                    onChange={(e) => setNotes(e.target.value)}
+                    placeholder="Internal notes about this bill — not printed on the invoice"
+                    className="min-h-[100px]"
+                  />
                 </CardContent>
               </Card>
             </div>
