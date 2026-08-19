@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { spawnSync } from 'child_process';
+import { randomUUID } from 'crypto';
 import { PrismaClient } from '@prisma/client';
 
 export class BackupError extends Error {
@@ -12,54 +13,16 @@ export class BackupError extends Error {
 
 const MIN_BACKUP_BYTES = 1024; // refuse to keep a backup smaller than 1 KB
 const BACKUP_DIR_SETTING_KEY = 'backup_dir';
-// Days of history kept, not number of files — see pruneOldBackups().
-export const BACKUP_RETENTION_DAYS = 30;
 
-// "Studio__28_07_2026__T__08_18_AM.db" — DD_MM_YYYY (not ISO) plus a 12-hour
-// clock, chosen so an operator can tell a backup's date and time apart at a
-// glance from the raw filename in Explorer, without parsing an ISO string.
-// Deliberately NOT alphabetically sortable (day comes before month/year) —
-// list()'s sort below parses the embedded date back out rather than relying
-// on string order, which is what actually keeps "newest first" correct.
-// Trailing "_2"/"_3"/... is the same-minute collision disambiguator backup()
-// appends below — optional and ignored here, since it doesn't affect the
-// parsed date/time.
-const NEW_NAME_RE = /^Studio__(\d{2})_(\d{2})_(\d{4})__T__(\d{2})_(\d{2})_(AM|PM)(?:_\d+)?\.db$/;
-// Old format ("studio_2026-07-28T14-22-51.db"), still parsed so backups made
-// before this change keep sorting/pruning correctly alongside new ones.
-const OLD_NAME_RE = /^studio_(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})\.db$/;
-
-function formatBackupTimestamp(date: Date): string {
-  const dd = String(date.getDate()).padStart(2, '0');
-  const mm = String(date.getMonth() + 1).padStart(2, '0');
-  const yyyy = date.getFullYear();
-  let hour12 = date.getHours() % 12;
-  if (hour12 === 0) hour12 = 12;
-  const ampm = date.getHours() >= 12 ? 'PM' : 'AM';
-  const hh = String(hour12).padStart(2, '0');
-  const min = String(date.getMinutes()).padStart(2, '0');
-  return `${dd}_${mm}_${yyyy}__T__${hh}_${min}_${ampm}`;
-}
-
-// Reverses formatBackupTimestamp (or parses the old format) to recover the
-// real date/time a backup was taken — used for sorting/pruning/the
-// already-backed-up-today check, all of which need actual chronological
-// order, not a string comparison that DD_MM_YYYY can't provide.
-function parseBackupDate(baseName: string): Date | null {
-  let m = NEW_NAME_RE.exec(baseName);
-  if (m) {
-    const [, dd, mm, yyyy, hh12, min, ampm] = m as unknown as [string, string, string, string, string, string, 'AM' | 'PM'];
-    let hour = parseInt(hh12, 10) % 12;
-    if (ampm === 'PM') hour += 12;
-    return new Date(Number(yyyy), Number(mm) - 1, Number(dd), hour, Number(min));
-  }
-  m = OLD_NAME_RE.exec(baseName);
-  if (m) {
-    const [, yyyy, mm, dd, hh, min, ss] = m;
-    return new Date(Number(yyyy), Number(mm) - 1, Number(dd), Number(hh), Number(min), Number(ss));
-  }
-  return null;
-}
+// A single, fixed-name backup file — overwritten in place on every backup
+// rather than accumulating one dated file per run. Simpler and matches how
+// the operator actually thinks about it ("the backup", not a growing
+// history to manage). Backups made before this change (the old
+// "Studio__DD_MM_YYYY__T__HH_MM_AM.db" / "studio_<ISO>.db" names, nested in
+// "YYYY-MM" month folders) are left on disk untouched — just no longer
+// added to, or shown in list() — resolveBackupPath() can still find one by
+// its exact name for a manual restore of an older snapshot.
+export const BACKUP_FILE_NAME = 'Studio_Backup.db';
 
 // Backups deliberately live off the same drive as the app/database, so a
 // failing C: drive (or a botched install/uninstall) can't take the database
@@ -116,19 +79,25 @@ export class BackupService {
   constructor(customBackupDir?: string) {
     const dbUrl = process.env.DATABASE_URL ?? 'file:../../database/studio.db';
     const filePath = dbUrl.replace(/^file:/, '');
-    // path.resolve() rather than using an absolute path verbatim: it also
-    // NORMALIZES separators, which matters more than it looks.
+    // A RELATIVE path here must resolve the same way Prisma itself resolves
+    // it for a SQLite datasource: relative to schema.prisma's own folder
+    // (backend/prisma/), not relative to process.cwd(). __dirname here is
+    // backend/src/services in dev (tsx runs .ts directly) or
+    // backend/dist/services once built — both two levels below backend/, so
+    // '..', '..', 'prisma' lands on backend/prisma/ either way. Getting this
+    // wrong silently pointed backups at a different, stale database than the
+    // one the app's own Prisma client (fastify.prisma) actually reads/writes
+    // — same relative DATABASE_URL, two different resolutions, no error
+    // either way since both paths can genuinely contain *a* SQLite file.
     //
-    // The packaged app builds DATABASE_URL as
-    // 'file:' + dbFile.replace(/\\/g, '/') (desktop/main.js), so in production
-    // this arrives as "C:/Users/.../studio.db" with forward slashes, while
-    // backupDir is always built with path.join/resolve and comes out with
-    // backslashes. path.parse() then reports the drive root as "C:/" for one
-    // and "C:\" for the other — different strings for the same drive, which
-    // made onSeparateDrive below silently return true on every packaged
-    // install. Dev and the test suite both pass native backslash paths, so
-    // the bug only ever existed in the shipped app.
-    this.dbPath = path.resolve(filePath);
+    // path.resolve() also NORMALIZES separators, which matters more than it
+    // looks: an ABSOLUTE path (always the case in the packaged app — see
+    // desktop/main.js, which builds DATABASE_URL as
+    // 'file:' + dbFile.replace(/\\/g, '/'), forward slashes) passes through
+    // path.resolve() unchanged in meaning regardless of the base arguments,
+    // so this base-directory change is a no-op for production installs —
+    // this bug only ever affected relative-path dev/test setups.
+    this.dbPath = path.resolve(__dirname, '..', '..', 'prisma', filePath);
 
     if (!fs.existsSync(this.dbPath)) {
       throw new BackupError(
@@ -179,6 +148,14 @@ export class BackupService {
     return path.resolve(path.dirname(dbPath), 'backups');
   }
 
+  /**
+   * Overwrites the single backup file with a fresh copy of the live
+   * database. Writes to a uniquely-named temp file first, then atomically
+   * renames it over the previous backup — a failed/interrupted backup can
+   * never leave a corrupted or half-written file in place of the last good
+   * one, and a still-open handle on the old file (e.g. mid-download) keeps
+   * reading the old content until the rename, never a torn write.
+   */
   async backup(): Promise<string> {
     const srcSize = fs.existsSync(this.dbPath) ? fs.statSync(this.dbPath).size : 0;
     if (srcSize < MIN_BACKUP_BYTES) {
@@ -188,19 +165,8 @@ export class BackupService {
       );
     }
 
-    const now = new Date();
-    // Grouped into a per-month subfolder (e.g. "2026-07") so a growing
-    // history of daily backups doesn't just pile up as one flat folder of
-    // loose files — makes it obvious at a glance which month a backup is
-    // from when browsing the folder directly (not just in the app's list).
-    // Independent of the display filename format below (DD_MM_YYYY isn't
-    // itself sortable as a folder name).
-    const monthFolder = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-    const monthDir = path.join(this.backupDir, monthFolder);
     try {
-      if (!fs.existsSync(monthDir)) {
-        fs.mkdirSync(monthDir, { recursive: true });
-      }
+      fs.mkdirSync(this.backupDir, { recursive: true });
     } catch (err) {
       // Covers a configured/detected drive that's no longer reachable (a
       // USB drive unplugged, a mapped network drive disconnected) — without
@@ -212,49 +178,32 @@ export class BackupService {
       );
     }
 
-    // The display format only has minute precision (no seconds), unlike the
-    // old ISO-based name — two backups in the same minute (e.g. a manual
-    // "Backup Now" click landing in the same minute as the boot auto-backup,
-    // or two operators clicking it at once in two-PC mode) would otherwise
-    // collide. Append a disambiguating "_2", "_3", ... only when that would
-    // actually happen, so the common case keeps the clean requested format.
-    //
-    // The name is RESERVED by creating the file here, atomically ('wx' fails
-    // if it already exists), rather than just testing existence and writing
-    // it much later: the actual write below happens after a WAL checkpoint
-    // that can take seconds of retries, and a plain existsSync() check left
-    // that entire window open for a second concurrent backup to pick the
-    // same name and silently overwrite the first.
-    const base = `Studio__${formatBackupTimestamp(now)}`;
-    let backupFileName = `${base}.db`;
-    let backupPath = path.join(monthDir, backupFileName);
-    for (let n = 2; ; n++) {
-      try {
-        fs.closeSync(fs.openSync(backupPath, 'wx'));
-        break;
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
-        backupFileName = `${base}_${n}.db`;
-        backupPath = path.join(monthDir, backupFileName);
-      }
-    }
+    const finalPath = path.join(this.backupDir, BACKUP_FILE_NAME);
+    // A random suffix, not a fixed ".tmp" name — two backups racing (a
+    // manual "Backup Now" click landing right as the daily auto-backup
+    // fires, or two operators in two-PC mode both clicking it at once)
+    // would otherwise write to and rename from the very same temp path at
+    // the same time.
+    const tmpPath = `${finalPath}.tmp-${randomUUID()}`;
 
     try {
-      return await this.writeBackup(backupPath);
-    } catch (err) {
-      // Don't leave the reserved 0-byte placeholder behind on a failed
-      // backup — it isn't a usable backup, and it would occupy the name (and
-      // a retention slot, and a row in the operator's backup list) forever.
+      await this.writeBackup(tmpPath);
+      // Same directory, so this is an atomic rename, not a copy — the
+      // visible backup file is always either the previous one or the fully
+      // written new one, never a partial file in between.
+      fs.renameSync(tmpPath, finalPath);
+      return finalPath;
+    } finally {
       try {
-        if (fs.existsSync(backupPath)) fs.unlinkSync(backupPath);
+        if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
       } catch {
-        // best effort — the original failure below is the one that matters
+        // best effort — a leftover temp file is harmless clutter, not worth
+        // failing an otherwise-successful (or already-failed) backup over
       }
-      throw err;
     }
   }
 
-  private async writeBackup(backupPath: string): Promise<string> {
+  private async writeBackup(backupPath: string): Promise<void> {
     // Prefer the sqlite3 CLI — it uses the online backup API, which is WAL-safe
     // and works even while the DB is being written to.
     const cliResult = spawnSync(
@@ -312,25 +261,24 @@ export class BackupService {
       fs.copyFileSync(this.dbPath, backupPath);
     }
 
-    // Sanity check — a valid SQLite file must be at least 1 KB.
+    // Sanity check — a valid SQLite file must be at least 1 KB. Left for
+    // backup()'s own finally-block cleanup to remove — this is always a temp
+    // path here, never the live final backup file.
     const size = fs.existsSync(backupPath) ? fs.statSync(backupPath).size : 0;
     if (size < MIN_BACKUP_BYTES) {
-      if (fs.existsSync(backupPath)) fs.unlinkSync(backupPath);
       throw new BackupError(
         `Backup aborted — output is only ${size} bytes (< 1 KB). ` +
           'Check DATABASE_URL and ensure the database file exists and is not empty.',
       );
     }
-
-    this.pruneOldBackups(BACKUP_RETENTION_DAYS);
-    return backupPath;
   }
 
   // Resolves a backup file name to its on-disk path, confined to backupDir.
-  // `fileName` is either a bare name (legacy backups made before month
-  // folders existed) or "YYYY-MM/studio_....db" (current scheme) — each
-  // segment is run through path.basename so neither can escape backupDir via
-  // "..", regardless of how many segments are present.
+  // Normally just BACKUP_FILE_NAME, but also accepts an older dated name
+  // (bare, or nested under a "YYYY-MM/" month folder from before this
+  // change) so those remain restorable by exact name. Each path segment is
+  // run through path.basename so neither can escape backupDir via "..",
+  // regardless of how many segments are present.
   resolveBackupPath(fileName: string): string {
     const segments = fileName
       .replace(/\\/g, '/')
@@ -390,123 +338,16 @@ export class BackupService {
     }
   }
 
-  // `name` is "YYYY-MM/studio_....db" for backups made under the current
-  // month-folder scheme, or a bare filename for legacy backups made before
-  // it existed (still supported so older backups don't just disappear from
-  // the list) — resolveBackupPath()/pruneOldBackups() both accept either.
+  /**
+   * The current backup, if one has been taken yet — at most one entry
+   * (previously a growing dated history with a 30-day retention window).
+   * Older backups left on disk from before this change aren't listed here,
+   * but resolveBackupPath()/restore() can still find one by its exact name.
+   */
   list(): Array<{ name: string; size: number; createdAt: Date }> {
-    if (!fs.existsSync(this.backupDir)) return [];
-    const results: Array<{ name: string; size: number; createdAt: Date }> = [];
-
-    for (const entry of fs.readdirSync(this.backupDir, { withFileTypes: true })) {
-      if (entry.isDirectory() && /^\d{4}-\d{2}$/.test(entry.name)) {
-        const monthDir = path.join(this.backupDir, entry.name);
-        for (const f of fs.readdirSync(monthDir)) {
-          if (!f.endsWith('.db')) continue;
-          const stat = fs.statSync(path.join(monthDir, f));
-          results.push({ name: `${entry.name}/${f}`, size: stat.size, createdAt: stat.mtime });
-        }
-      } else if (entry.isFile() && entry.name.endsWith('.db')) {
-        const stat = fs.statSync(path.join(this.backupDir, entry.name));
-        results.push({ name: entry.name, size: stat.size, createdAt: stat.mtime });
-      }
-    }
-
-    // Sort by the date/time PARSED from the filename, newest first, ignoring
-    // any month-folder prefix so nesting never affects ordering. Can't sort
-    // by the raw filename string any more — the current DD_MM_YYYY display
-    // format isn't alphabetically sortable the way the old ISO-based one
-    // was. Falls back to file mtime only for a name neither format
-    // recognizes (unreliable on Windows — CopyFileW preserves the source's
-    // timestamp, so copied backups can share identical mtimes — but better
-    // than an arbitrary order for a file that predates both schemes).
-    const baseName = (name: string) => name.slice(name.lastIndexOf('/') + 1);
-    const effectiveDate = (r: { name: string; createdAt: Date }) => parseBackupDate(baseName(r.name)) ?? r.createdAt;
-    return results.sort((a, b) => effectiveDate(b).getTime() - effectiveDate(a).getTime());
-  }
-
-  // Whether a backup already exists for the given calendar date — parses
-  // each backup's embedded date rather than string-matching a filename
-  // prefix (the previous approach, tied to the old ISO-based naming), so
-  // this keeps working across the new display format and old backups alike.
-  hasBackupForDate(date: Date): boolean {
-    const baseName = (name: string) => name.slice(name.lastIndexOf('/') + 1);
-    return this.list().some((b) => {
-      const d = parseBackupDate(baseName(b.name));
-      return (
-        d != null &&
-        d.getFullYear() === date.getFullYear() &&
-        d.getMonth() === date.getMonth() &&
-        d.getDate() === date.getDate()
-      );
-    });
-  }
-
-  // Called as the last step of a backup that has ALREADY succeeded — a
-  // pruning failure (a locked/permission-denied old file) must never
-  // propagate and make the caller think the fresh backup itself failed.
-  // Best-effort: log and move on, don't abort the rest of the cleanup either.
-  //
-  // Retention is measured in DAYS, not files. It used to keep the newest N
-  // files, which was equivalent while backups were strictly one-per-day
-  // (the automatic morning one). Now that the operator can also take a
-  // manual backup at any time (Settings → Backup Now), a file-count budget
-  // would let a few manual clicks silently evict real daily history — click
-  // it 30 times and the studio is left with 30 copies of today and nothing
-  // older. Counting distinct days instead makes manual backups effectively
-  // free: they land on a day that is already being kept.
-  private pruneOldBackups(keepDays: number): void {
-    const files = this.list(); // newest first
-    const baseName = (name: string) => name.slice(name.lastIndexOf('/') + 1);
-    const dayKey = (name: string): string | null => {
-      const d = parseBackupDate(baseName(name));
-      return d ? `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}` : null;
-    };
-
-    const keptDays = new Set<string>();
-    const toDelete: typeof files = [];
-    // Per-day cap purely as a runaway guard (a stuck retry loop, someone
-    // holding the button) — high enough that ordinary manual use never hits
-    // it, so it can't reintroduce the eviction problem above.
-    const MAX_PER_DAY = 48;
-    const perDayCount = new Map<string, number>();
-
-    for (const f of files) {
-      const key = dayKey(f.name);
-      // A name in neither the current nor the legacy format can't be dated,
-      // so it can't be safely aged out — keep it rather than guess.
-      if (key == null) continue;
-      if (!keptDays.has(key) && keptDays.size >= keepDays) {
-        toDelete.push(f); // belongs to a day older than the retention window
-        continue;
-      }
-      keptDays.add(key);
-      const n = (perDayCount.get(key) ?? 0) + 1;
-      perDayCount.set(key, n);
-      if (n > MAX_PER_DAY) toDelete.push(f);
-    }
-    for (const f of toDelete) {
-      try {
-        fs.unlinkSync(path.join(this.backupDir, f.name));
-      } catch (err) {
-        console.warn(`Backup prune: could not delete old backup ${f.name}:`, err);
-      }
-    }
-    // Clean up any month folder left empty by the deletions above so old
-    // backups don't leave a trail of empty dated folders behind forever.
-    const touchedMonthDirs = new Set(
-      toDelete
-        .filter((f) => f.name.includes('/'))
-        .map((f) => path.join(this.backupDir, f.name.slice(0, f.name.indexOf('/')))),
-    );
-    for (const dir of touchedMonthDirs) {
-      if (fs.existsSync(dir) && fs.readdirSync(dir).length === 0) {
-        try {
-          fs.rmdirSync(dir);
-        } catch (err) {
-          console.warn(`Backup prune: could not remove empty folder ${dir}:`, err);
-        }
-      }
-    }
+    const p = path.join(this.backupDir, BACKUP_FILE_NAME);
+    if (!fs.existsSync(p)) return [];
+    const stat = fs.statSync(p);
+    return [{ name: BACKUP_FILE_NAME, size: stat.size, createdAt: stat.mtime }];
   }
 }

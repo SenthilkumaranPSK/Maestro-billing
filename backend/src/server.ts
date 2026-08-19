@@ -219,16 +219,15 @@ async function main() {
   app.log.info(`Server running at http://${host}:${port}`);
 
   // ── Automatic backup ──────────────────────────────────────────────────────
-  // Take a backup on every boot (at most one per calendar day) and then every
-  // 24 hours while the server stays up. The operator never has to remember.
+  // Take a backup on every boot and then every 24 hours while the server
+  // stays up — the operator never has to remember. There is a single,
+  // fixed-name backup file (BackupService.backup()), overwritten in place
+  // each time, so running this more than once a day (e.g. the app restarted
+  // twice) is harmless — it just refreshes the same file sooner.
   const autoBackup = async () => {
     try {
       const customDir = await getConfiguredBackupDir(prisma);
       const svc = new BackupService(customDir);
-      if (svc.hasBackupForDate(new Date())) {
-        app.log.info('Auto-backup skipped — a backup already exists for today');
-        return;
-      }
       const file = await svc.backup();
       app.log.info(`Auto-backup created: ${file}`);
     } catch (err) {

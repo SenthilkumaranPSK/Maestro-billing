@@ -226,16 +226,18 @@ export default function SettingsPage() {
         </CardHeader>
         <CardContent>
           <p className="text-xs text-muted-foreground mb-3">
-            A backup is taken automatically every morning, the first time the app is opened that
-            day — or any time with{' '}
-            <span className="font-medium text-slate-700">Backup Now</span> above. The last 30 days
-            are kept (taking extra backups yourself never removes an older day), by default on{' '}
+            There's a single backup file, refreshed automatically every time the app starts and
+            every 24 hours after that — or any time with{' '}
+            <span className="font-medium text-slate-700">Backup Now</span> above. Each refresh
+            overwrites the previous one, by default on{' '}
             <code className="bg-slate-100 px-1 rounded">D:\Billing</code> (or{' '}
             <code className="bg-slate-100 px-1 rounded">E:\Billing</code> if D: isn't available) —
             a separate drive from wherever the app and its live database live, on purpose. Set a
-            location of your own below if you'd rather use a specific drive or folder. Use{' '}
-            <span className="font-medium text-slate-700">Save a Copy</span> to save any backup to a
-            location of your choice — a USB drive, Desktop, cloud-synced folder, wherever.
+            location of your own below if you'd rather use a specific drive or folder. Since it's
+            always overwritten, use{' '}
+            <span className="font-medium text-slate-700">Save a Copy</span> first if you want to
+            keep a snapshot from this exact moment — a USB drive, Desktop, cloud-synced folder,
+            wherever.
           </p>
 
           <div className="mb-3 rounded-lg border border-slate-200 px-3 py-2.5">

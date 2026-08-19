@@ -45,15 +45,17 @@ Uninstalling keeps this folder, so bills survive reinstalls/updates.
 Backups are deliberately NOT under `%APPDATA%` — `BackupService` defaults to
 `D:\Billing` (falling back to `E:\Billing`, then finally to a `backups/`
 folder next to `studio.db` on a single-drive PC with neither), so a backup
-survives even if the app's own drive/profile is lost. One is taken
-automatically the first time the app is opened each day, and the operator can
-take one at any time with Settings → Database → **Backup Now**.
+survives even if the app's own drive/profile is lost.
 
-Retention is **30 days, not 30 files** (`BACKUP_RETENTION_DAYS`). That
-distinction matters: with a file count, a few manual "Backup Now" clicks
-would silently evict real daily history (30 clicks would leave only copies of
-today). Counting distinct days makes same-day manual backups free. There is a
-per-day cap purely as a runaway guard.
+There is a single, fixed-name backup file (`Studio_Backup.db`,
+`BACKUP_FILE_NAME`), overwritten in place — not a growing dated history.
+It's refreshed on every app boot and every 24 hours while the app stays
+running, and the operator can also refresh it any time with
+Settings → Database → **Backup Now**; all of those just overwrite the same
+file. Written to a temp file and renamed into place atomically, so a
+failed/interrupted backup can never corrupt the last good one. Backups made
+before this change (dated names in `YYYY-MM/` month folders) are left on disk
+untouched but are no longer added to or shown in the app's backup list.
 
 ## Known workspace quirks
 

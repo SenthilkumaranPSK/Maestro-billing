@@ -10,10 +10,13 @@ const fileName = process.argv[2];
 
 if (!fileName) {
   console.error('Usage: npm run restore -- <backup-name>');
-  console.error('       npm run restore -- 2026-07/studio_2026-07-24T03-00-00.db');
+  console.error('       npm run restore -- Studio_Backup.db');
   console.error('');
-  console.error('The name must include its month folder, exactly as listed in');
-  console.error('Settings → Database (or as it appears on disk in the backup folder).');
+  console.error('Normally just "Studio_Backup.db" — the single backup file kept in the');
+  console.error('backup folder (Settings → Database). An older dated backup from before');
+  console.error('single-file backups (e.g. "2026-07/studio_2026-07-24T03-00-00.db") also');
+  console.error('still works if it\'s still on disk — pass its name exactly as it appears');
+  console.error('in the backup folder, including its month subfolder.');
   process.exit(1);
 }
 

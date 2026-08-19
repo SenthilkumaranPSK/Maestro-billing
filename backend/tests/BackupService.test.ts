@@ -16,7 +16,11 @@
  *   - DB file path resolves from `process.env.DATABASE_URL` + `process.cwd()`
  *   - Missing DB file throws a clear error
  *   - Absolute path in DATABASE_URL is used as-is (no cwd prefix)
- *   - backup() copies the file to backups/ and prunes old ones
+ *   - backup() always writes the single fixed-name file and overwrites it
+ *     in place on repeated calls — no accumulating dated history
+ *   - A failed backup never corrupts the previous good one (temp + rename)
+ *   - Older dated backups left on disk (pre single-file scheme) are not
+ *     added to or shown in list(), but remain restorable by exact name
  *   - A custom backup dir (operator-configured location) is used and flagged
  *   - assertBackupDirUsable / getConfiguredBackupDir / setConfiguredBackupDir
  */
@@ -29,6 +33,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readdirSync,
+  readFileSync,
   rmSync,
   unlinkSync,
   writeFileSync,
@@ -107,7 +112,7 @@ test('BackupService: absolute path in DATABASE_URL is used as-is', async () => {
   const svc = new BackupService();
   const backupPath = await svc.backup();
 
-  // backupPath is under <dbDir>/backups/<timestamp>.db
+  // backupPath is under <dbDir>/backups/<fixed-name>
   assert.ok(backupPath.startsWith(dir), `expected backup under ${dir}, got ${backupPath}`);
 
   rmSync(dir, { recursive: true, force: true });
@@ -126,188 +131,206 @@ test('BackupService: rejects a backup smaller than 1 KB', async () => {
   const svc = new BackupService();
   await assert.rejects(() => svc.backup(), /Backup aborted/);
 
-  // The bad backup file must not be left behind.
+  // No leftover backup — nor a leftover temp file — must be left behind.
   const backupsDir = join(dir, 'backups');
-  const leftovers = existsSync(backupsDir)
-    ? readdirSync(backupsDir).filter((f: string) => f.endsWith('.db'))
-    : [];
-  assert.equal(leftovers.length, 0, 'a sub-1KB backup must be deleted');
+  const leftovers = existsSync(backupsDir) ? readdirSync(backupsDir) : [];
+  assert.equal(leftovers.length, 0, 'a sub-1KB backup (and its temp file) must be cleaned up');
 
   rmSync(dir, { recursive: true, force: true });
 });
 
-test('BackupService: prunes old backups beyond keepCount', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'studio-backup-prune-'));
-  const dbFile = join(dir, 'prune.db');
+test('BackupService: backup() always writes the single fixed-name file, no dated history', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'studio-backup-single-'));
+  const dbFile = join(dir, 'single.db');
   const backupsDir = join(dir, 'backups');
-  mkdirSync(backupsDir, { recursive: true });
   copyFileSync(TEMPLATE_DB, dbFile);
-
-  // Pre-create 5 fake backups directly at the top level of backupsDir —
-  // this is the legacy (pre-month-folder) layout, still expected to be
-  // read transparently alongside new nested ones. Dated 5 days apart,
-  // oldest first.
-  for (let i = 0; i < 5; i++) {
-    const d = new Date(Date.now() - (5 - i) * 24 * 3600 * 1000);
-    const stamp = d.toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    writeFileSync(join(backupsDir, `studio_${stamp}.db`), '');
-  }
-  assert.equal(readdirSync(backupsDir).length, 5);
 
   process.env.DATABASE_URL = `file:${dbFile}`;
   process.env.BACKUP_DIR = backupsDir;
-  const { BackupService } = await import(`../src/services/BackupService.ts?cb=${Date.now()}-${Math.random()}-prune`);
+  const { BackupService, BACKUP_FILE_NAME } = await import(
+    `../src/services/BackupService.ts?cb=${Date.now()}-${Math.random()}-single`
+  );
 
   const svc = new BackupService();
-  const newBackupPath = await svc.backup(); // creates 1 new + prunes to keep last 30 (no-op, we have 6)
+  const first = await svc.backup();
+  const second = await svc.backup();
+  const third = await svc.backup();
 
-  // The new backup lands under a "YYYY-MM" month subfolder, not flat at
-  // backupsDir's top level — verify that explicitly, then use the public
-  // list() API (not a raw non-recursive readdir) to count backups, since
-  // list() is what's actually responsible for seeing both the 5 legacy
-  // flat files and the 1 new nested one as a single unified set.
-  assert.match(newBackupPath, /[\\/]\d{4}-\d{2}[\\/]Studio__/, 'new backup should be nested under a YYYY-MM folder');
-  assert.equal(svc.list().length, 6, '5 legacy flat + 1 new nested = 6 total');
+  assert.equal(first, second, 'every call returns the same fixed path');
+  assert.equal(second, third, 'every call returns the same fixed path');
+  assert.equal(first, join(backupsDir, BACKUP_FILE_NAME));
+
+  // Exactly one .db file on disk — no month folders, no per-run dated names.
+  const entries = readdirSync(backupsDir, { withFileTypes: true });
+  const dbFiles = entries.filter((e: { isFile: () => boolean; name: string }) => e.isFile() && e.name.endsWith('.db'));
+  assert.equal(dbFiles.length, 1, 'exactly one backup file, not one per run');
+  assert.equal(dbFiles[0]!.name, BACKUP_FILE_NAME);
+  assert.equal(entries.some((e: { isDirectory: () => boolean }) => e.isDirectory()), false, 'no month subfolders');
+
+  assert.equal(svc.list().length, 1);
+  assert.equal(svc.list()[0]!.name, BACKUP_FILE_NAME);
+
+  // No leftover temp files from any of the three runs.
+  assert.equal(entries.filter((e: { name: string }) => e.name.includes('.tmp-')).length, 0);
 
   rmSync(dir, { recursive: true, force: true });
 });
 
-test('BackupService: pruning removes old backups AND the now-empty month folder', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'studio-backup-prune2-'));
-  const dbFile = join(dir, 'prune2.db');
+test('BackupService: backup() reflects the latest source content after each overwrite', async () => {
+  // Mutates the source DB through a real Prisma write (not a raw byte
+  // append) between two backups — SQLite's on-disk format doesn't
+  // necessarily grow in step with raw file size the way appending garbage
+  // bytes would suggest (a `.backup`/checkpoint copy operates at the
+  // logical page level, not "however many bytes the file happens to be"),
+  // so a genuine committed write is what actually proves an overwrite
+  // picked up the latest state.
+  const dir = mkdtempSync(join(tmpdir(), 'studio-backup-content-'));
+  const dbFile = join(dir, 'content.db');
   const backupsDir = join(dir, 'backups');
   copyFileSync(TEMPLATE_DB, dbFile);
-
-  // 2 old backups in one month folder — expected to be fully pruned away,
-  // including the now-empty folder itself. Year 2000 guarantees these sort
-  // as the oldest regardless of when this test actually runs.
-  const oldMonthDir = join(backupsDir, '2000-01');
-  mkdirSync(oldMonthDir, { recursive: true });
-  writeFileSync(join(oldMonthDir, 'studio_2000-01-01T00-00-00.db'), '');
-  writeFileSync(join(oldMonthDir, 'studio_2000-01-02T00-00-00.db'), '');
-
-  // 30 backups in a different month folder, dated far in the future (2099)
-  // so they always sort as the newest regardless of the real system clock —
-  // exactly at keepCount, so all 30 should survive pruning.
-  const newMonthDir = join(backupsDir, '2099-01');
-  mkdirSync(newMonthDir, { recursive: true });
-  for (let i = 0; i < 30; i++) {
-    const n = String(i + 1).padStart(2, '0');
-    writeFileSync(join(newMonthDir, `studio_2099-01-${n}T00-00-00.db`), '');
-  }
 
   process.env.DATABASE_URL = `file:${dbFile}`;
   process.env.BACKUP_DIR = backupsDir;
-  const { BackupService } = await import(`../src/services/BackupService.ts?cb=${Date.now()}-${Math.random()}-prune2`);
-
+  const { BackupService, BACKUP_FILE_NAME } = await import(
+    `../src/services/BackupService.ts?cb=${Date.now()}-${Math.random()}-content`
+  );
   const svc = new BackupService();
-  // Adds one more real (present-day-dated) backup, sorting between the two
-  // synthetic sets — pushing the total to 33, so pruning to keepCount (30)
-  // must remove exactly this new one plus the 2 old ones.
-  await svc.backup();
 
-  const remaining = svc.list();
-  assert.equal(remaining.length, 30, 'pruned down to keepCount (30)');
-  assert.ok(!remaining.some((f) => f.name.startsWith('2000-01/')), 'the 2 oldest backups should be gone');
-  assert.ok(!existsSync(oldMonthDir), 'the now-empty 2000-01 folder should be removed, not left behind');
+  const backupFile = join(backupsDir, BACKUP_FILE_NAME);
+  const firstPath = await svc.backup();
+  const firstHash = readFileSync(backupFile).toString('base64');
+
+  const { PrismaClient } = await import('@prisma/client');
+  const prisma = new PrismaClient({ datasources: { db: { url: `file:${dbFile}` } } });
+  await prisma.setting.create({ data: { key: 'test-marker', value: randomUUID(), group: 'test' } });
+  await prisma.$disconnect();
+
+  const secondPath = await svc.backup();
+  const secondHash = readFileSync(backupFile).toString('base64');
+
+  assert.equal(firstPath, secondPath, 'still the same fixed file');
+  assert.notEqual(secondHash, firstHash, 'the overwritten backup should reflect the new committed write');
+
+  // And the backup file itself is queryable and actually has the new row —
+  // not just "some bytes changed somewhere".
+  const backupPrisma = new PrismaClient({ datasources: { db: { url: `file:${backupFile}` } } });
+  const marker = await backupPrisma.setting.findUnique({ where: { key: 'test-marker' } });
+  await backupPrisma.$disconnect();
+  assert.ok(marker, 'the backup should contain the row written after the first backup');
 
   rmSync(dir, { recursive: true, force: true });
 });
 
-test('BackupService: repeated manual backups do NOT evict older daily history', async () => {
-  // Regression test. Retention used to keep the newest 30 FILES, which was
-  // equivalent while backups were strictly one-per-day. Once Settings gained
-  // a manual "Backup Now" button, a handful of clicks silently deleted the
-  // oldest real daily backups — 30 clicks would leave the studio with 30
-  // copies of today and no history at all. Retention now counts distinct
-  // DAYS, so same-day manual backups can never push a previous day out.
-  const dir = mkdtempSync(join(tmpdir(), 'studio-backup-manual-'));
-  const dbFile = join(dir, 'manual.db');
+test('BackupService: a failed backup does not corrupt the previous good one', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'studio-backup-failsafe-'));
+  const dbFile = join(dir, 'failsafe.db');
   const backupsDir = join(dir, 'backups');
   copyFileSync(TEMPLATE_DB, dbFile);
 
-  // 29 days of daily history, dated in the past so "today" is strictly newer
-  // — 29 + today = exactly the 30-day retention window, so nothing should be
-  // aged out and any loss is attributable purely to the manual backups.
-  // Under the old file-count budget, 29 history files + 5 manual ones = 34
-  // > 30, so four days of real history were silently deleted.
+  process.env.DATABASE_URL = `file:${dbFile}`;
+  process.env.BACKUP_DIR = backupsDir;
+  const { BackupService, BACKUP_FILE_NAME } = await import(
+    `../src/services/BackupService.ts?cb=${Date.now()}-${Math.random()}-failsafe`
+  );
+  const svc = new BackupService();
+
+  const goodPath = await svc.backup();
+  const goodBytes = readFileSync(goodPath);
+  assert.ok(goodBytes.length >= 1024);
+
+  // Truncate the "live" database below the 1KB floor so the next backup()
+  // call is guaranteed to fail its sanity check, without touching the
+  // already-written good backup.
+  writeFileSync(dbFile, Buffer.alloc(10));
+  await assert.rejects(() => svc.backup());
+
+  // The existing backup file must be untouched — same bytes as before the
+  // failed attempt, not truncated/half-written by the rename-over-temp step.
+  const stillThere = readFileSync(join(backupsDir, BACKUP_FILE_NAME));
+  assert.deepEqual(stillThere, goodBytes, 'the last good backup must survive a failed overwrite attempt');
+
+  // And no leftover temp file from the failed attempt.
+  const leftoverTemps = readdirSync(backupsDir).filter((f: string) => f.includes('.tmp-'));
+  assert.equal(leftoverTemps.length, 0);
+
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('BackupService: older dated backups from before single-file backups are left alone', async () => {
+  // Regression guard for the migration to a single overwritten file: an
+  // already-installed studio's 30 days of dated backups must not be touched
+  // or deleted by the new code, even though they're no longer added to.
+  const dir = mkdtempSync(join(tmpdir(), 'studio-backup-legacy-'));
+  const dbFile = join(dir, 'legacy.db');
+  const backupsDir = join(dir, 'backups');
+  copyFileSync(TEMPLATE_DB, dbFile);
+
   const monthDir = join(backupsDir, '2026-06');
   mkdirSync(monthDir, { recursive: true });
-  for (let day = 1; day <= 29; day++) {
-    const dd = String(day).padStart(2, '0');
-    writeFileSync(join(monthDir, `Studio__${dd}_06_2026__T__08_00_AM.db`), '');
-  }
-  assert.equal(readdirSync(monthDir).length, 29);
+  writeFileSync(join(monthDir, 'Studio__15_06_2026__T__08_00_AM.db'), 'x'.repeat(2000));
+  writeFileSync(join(backupsDir, 'studio_2026-05-01T00-00-00.db'), 'y'.repeat(2000));
 
   process.env.DATABASE_URL = `file:${dbFile}`;
   process.env.BACKUP_DIR = backupsDir;
-  const { BackupService } = await import(`../src/services/BackupService.ts?cb=${Date.now()}-${Math.random()}-manual`);
+  const { BackupService, BACKUP_FILE_NAME } = await import(
+    `../src/services/BackupService.ts?cb=${Date.now()}-${Math.random()}-legacy`
+  );
   const svc = new BackupService();
 
-  // Five manual "Backup Now" clicks, all landing on today.
-  for (let i = 0; i < 5; i++) await svc.backup();
+  await svc.backup();
 
-  const surviving = svc.list().map((f) => f.name.slice(f.name.lastIndexOf('/') + 1));
-  const juneKept = surviving.filter((n) => n.includes('_06_2026__'));
-  assert.equal(juneKept.length, 29, 'every day of daily history must survive repeated manual backups');
-  assert.equal(surviving.length - juneKept.length, 5, 'and all 5 of today\'s manual backups are kept too');
+  // The old files are still exactly where they were.
+  assert.ok(existsSync(join(monthDir, 'Studio__15_06_2026__T__08_00_AM.db')));
+  assert.ok(existsSync(join(backupsDir, 'studio_2026-05-01T00-00-00.db')));
+
+  // list() only ever surfaces the current single backup, not the old ones.
+  const listed = svc.list();
+  assert.equal(listed.length, 1);
+  assert.equal(listed[0]!.name, BACKUP_FILE_NAME);
+
+  // But an old one is still resolvable/restorable by its exact name.
+  const resolved = svc.resolveBackupPath('2026-06/Studio__15_06_2026__T__08_00_AM.db');
+  assert.ok(existsSync(resolved));
 
   rmSync(dir, { recursive: true, force: true });
 });
 
-test('BackupService: two backups in the same minute both survive (no silent overwrite)', async () => {
-  // Regression test. The display filename only has minute precision, and the
-  // "_2"/"_3" collision suffix used to be chosen by an existsSync() check
-  // that ran BEFORE the (potentially multi-second) WAL checkpoint and write
-  // — leaving a window where a concurrent backup picked the same name and
-  // silently clobbered the first. The name is now reserved atomically.
-  const dir = mkdtempSync(join(tmpdir(), 'studio-backup-sameminute-'));
-  const dbFile = join(dir, 'sameminute.db');
-  copyFileSync(TEMPLATE_DB, dbFile);
-
-  process.env.DATABASE_URL = `file:${dbFile}`;
-  process.env.BACKUP_DIR = join(dir, 'backups');
-  const { BackupService } = await import(`../src/services/BackupService.ts?cb=${Date.now()}-${Math.random()}-sameminute`);
-  const svc = new BackupService();
-
-  // Started concurrently, so they genuinely overlap rather than running
-  // strictly one after the other.
-  const paths = await Promise.all([svc.backup(), svc.backup(), svc.backup()]);
-  assert.equal(new Set(paths).size, 3, 'each concurrent backup must get its own filename');
-  for (const p of paths) assert.ok(existsSync(p), `${p} should still exist (not overwritten)`);
-  assert.equal(svc.list().length, 3);
-
-  rmSync(dir, { recursive: true, force: true });
-});
-
-test('BackupService: relative DATABASE_URL is resolved against process.cwd()', async () => {
-  // The typical project layout: codes/backend/ is cwd, DATABASE_URL is
-  // "file:../../database/studio.db" relative to it. We create a real DB
-  // under the backend dir and point a relative DATABASE_URL at it to
-  // verify the resolution logic.
-  const backendCwd = resolve(process.cwd());
-  const localDb = join(backendCwd, '.test-backup-rel.db');
+test('BackupService: a relative DATABASE_URL resolves the same way Prisma resolves it (relative to backend/prisma/, not process.cwd())', async () => {
+  // Regression test for a real, pre-existing bug: Prisma resolves a relative
+  // SQLite DATABASE_URL relative to schema.prisma's own folder
+  // (backend/prisma/) — not process.cwd(). BackupService used to do
+  // path.resolve(filePath), which resolves against cwd instead. With this
+  // project's actual .env value ("file:../../database/studio.db") and cwd
+  // == backend/ (the normal case when running `npm run dev:backend`), the
+  // two resolutions land on two DIFFERENT files two directories apart:
+  // Prisma correctly reaches codes/database/studio.db (the real, live
+  // database fastify.prisma actually reads/writes), while the old
+  // cwd-relative code silently reached one level further outside the repo
+  // entirely — so every backup silently captured a stale, disconnected
+  // database with no error either way, since both paths can genuinely
+  // contain *a* SQLite file. Now both must resolve to the same place.
+  const prismaDir = resolve(process.cwd(), 'prisma');
+  const localDb = join(prismaDir, '.test-backup-relprisma.db');
   copyFileSync(TEMPLATE_DB, localDb);
-  const localBackups = join(backendCwd, 'backups');
+  const localBackups = join(prismaDir, '.test-backups-relprisma');
 
   try {
-    // path.isAbsolute() check in the service: "./..." is NOT absolute,
-    // so it gets resolved against process.cwd().
-    process.env.DATABASE_URL = `file:./.test-backup-rel.db`;
+    process.env.DATABASE_URL = `file:./.test-backup-relprisma.db`;
     process.env.BACKUP_DIR = localBackups;
-    const { BackupService } = await import(`../src/services/BackupService.ts?cb=${Date.now()}-${Math.random()}-rel`);
+    const { BackupService } = await import(
+      `../src/services/BackupService.ts?cb=${Date.now()}-${Math.random()}-relprisma`
+    );
 
+    // Constructing it at all proves the resolved path exists — the old,
+    // cwd-relative code would have thrown "non-existent file" here instead,
+    // since .test-backup-relprisma.db was never created under cwd.
     const svc = new BackupService();
     const backupPath = await svc.backup();
     assert.ok(existsSync(backupPath), 'backup should exist at the resolved path');
-    // Clean up the backup this test created in backend/backups/.
-    try { unlinkSync(backupPath); } catch { /* ignore */ }
   } finally {
     try { unlinkSync(localDb); } catch { /* ignore */ }
     try {
-      if (existsSync(localBackups) && readdirSync(localBackups).length === 0) {
-        rmSync(localBackups, { recursive: true, force: true });
-      }
+      if (existsSync(localBackups)) rmSync(localBackups, { recursive: true, force: true });
     } catch { /* ignore */ }
   }
 });
