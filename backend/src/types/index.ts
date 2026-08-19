@@ -22,7 +22,7 @@ export interface CreateBillInput {
   billDate: string;
   dueDate?: string;
   items: BillItemInput[];
-  notes?: string;
+  notes?: string | null;
   discountAmount?: number; // in paise
   roundOffAmount?: number; // in paise (positive = round up, negative = round down)
   // See Bill.paymentMode in schema.prisma — shown in the bill form and

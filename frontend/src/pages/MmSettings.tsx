@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Save, FileBarChart2, Percent, ChevronRight } from 'lucide-react';
+import { Save, FileBarChart2, Percent, ChevronRight, Moon, Sun } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { settingsApi } from '@/api/settings';
 import { billsApi } from '@/api/bills';
 import { useToast } from '@/hooks/use-toast';
+import { useTheme } from '@/hooks/use-theme';
 
 /**
  * MM billing module's own settings — deliberately minimal. The studio's
@@ -21,6 +22,7 @@ export default function MmSettingsPage() {
   const { toast } = useToast();
   const qc = useQueryClient();
   const navigate = useNavigate();
+  const { theme, setTheme } = useTheme();
 
   const { data: settings } = useQuery({
     queryKey: ['settings'],
@@ -62,6 +64,34 @@ export default function MmSettingsPage() {
           <p className="text-xs text-muted-foreground mt-1">
             Next MM bill number — its own sequence (MM/YY-YY/NNN), entirely separate from the studio's regular bill numbering.
           </p>
+        </CardContent>
+      </Card>
+
+      {/* Whole-app setting (hooks/use-theme.ts, localStorage-backed) — shown
+          here too, not duplicated, so the toggle is reachable without
+          switching back to the main Settings page while working in MM. */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm flex items-center gap-2">
+            {theme === 'dark' ? <Moon className="h-4 w-4" /> : <Sun className="h-4 w-4" />}
+            Appearance
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <label className="flex items-center justify-between gap-3 text-sm cursor-pointer">
+            <span>
+              Dark mode
+              <span className="block text-xs text-muted-foreground font-normal">
+                Applies across the whole app, remembered on this PC.
+              </span>
+            </span>
+            <input
+              type="checkbox"
+              className="h-4 w-4 accent-brand-600 shrink-0"
+              checked={theme === 'dark'}
+              onChange={(e) => setTheme(e.target.checked ? 'dark' : 'light')}
+            />
+          </label>
         </CardContent>
       </Card>
 

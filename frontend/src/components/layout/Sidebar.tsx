@@ -59,7 +59,17 @@ function NavItem({ to, icon: Icon, label }: { to: string; icon: typeof LayoutDas
 function MainSidebar() {
   return (
     <aside className="w-60 min-h-screen bg-white border-r border-slate-100 flex flex-col">
-      <div className="px-5 py-7 bg-gradient-to-b from-brand-50 to-white border-b border-slate-100 flex justify-center items-center">
+      {/* Logo.png is black artwork on a transparent background with no dark
+          variant — the dark-mode shim (index.css) correctly darkens bg-white
+          and gradient utility classes, which would leave black linework
+          sitting on a near-black backdrop and make it disappear. Inline
+          style (not a Tailwind background utility class) keeps this chip
+          light regardless of theme on purpose, same as the ErrorBoundary
+          button in index.css. */}
+      <div
+        className="px-5 py-7 border-b border-slate-100 flex justify-center items-center"
+        style={{ background: 'linear-gradient(to bottom, #FBFFEB, #FFFFFF)' }}
+      >
         <img src="/Logo.png" alt="Logo" className="h-14 w-full object-contain" />
       </div>
 
@@ -103,7 +113,15 @@ function MmSidebar() {
         title="Switch to Maestro Billing"
         className="flex items-center gap-2.5 px-4 py-4 border-t border-slate-100 hover:bg-slate-50 transition-colors"
       >
-        <img src="/Logo.png" alt="Maestro Billing" className="h-8 w-8 object-contain shrink-0" />
+        {/* Same transparent-PNG-on-dark-background issue as MainSidebar's
+            logo — a small always-light chip keeps the black artwork visible
+            in dark mode instead of blending into the (now dark) sidebar. */}
+        <img
+          src="/Logo.png"
+          alt="Maestro Billing"
+          className="h-8 w-8 object-contain shrink-0 rounded p-0.5"
+          style={{ backgroundColor: '#FFFFFF' }}
+        />
         <div className="min-w-0">
           <p className="text-xs font-semibold text-slate-700 truncate">Maestro Billing</p>
           <p className="text-[10px] text-slate-400">Switch back</p>

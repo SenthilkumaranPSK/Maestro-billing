@@ -32,31 +32,38 @@ export function PdfPreviewModal({ bill, settings, layout, onClose, readOnly = fa
   const { toast } = useToast();
   const [url, setUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // First page's width/height (PDF points) — used to size the preview box to
+  // match the actual page shape instead of a fixed 90vh for every layout,
+  // which left a lot of blank space below short pages (a few-item thermal
+  // receipt in particular).
+  const [pageAspect, setPageAspect] = useState<number | null>(null);
   // One generated PDF per layout, kept for as long as this modal instance is
   // open — so comparing Thermal → A4 → MM-A4 back and forth via LayoutToggle
   // reuses what's already been built instead of silently regenerating every
   // click. Keyed only by layout because `bill` itself is stable for the
   // modal's lifetime (a saved Bill never mutates; a pre-save draft is
   // memoized by the caller) — a genuine `bill` change below still wipes it.
-  const cacheRef = useRef<Map<BillLayout, string>>(new Map());
+  const cacheRef = useRef<Map<BillLayout, { url: string; aspect: number }>>(new Map());
   const billRef = useRef(bill);
 
   useEffect(() => {
     if (billRef.current !== bill) {
-      cacheRef.current.forEach((cachedUrl) => URL.revokeObjectURL(cachedUrl));
+      cacheRef.current.forEach(({ url: cachedUrl }) => URL.revokeObjectURL(cachedUrl));
       cacheRef.current.clear();
       billRef.current = bill;
     }
 
     const cached = cacheRef.current.get(layout);
     if (cached) {
-      setUrl(cached);
+      setUrl(cached.url);
+      setPageAspect(cached.aspect);
       setError(null);
       return;
     }
 
     let cancelled = false;
     setUrl(null);
+    setPageAspect(null);
     setError(null);
     (async () => {
       try {
@@ -72,10 +79,20 @@ export function PdfPreviewModal({ bill, settings, layout, onClose, readOnly = fa
           bytes = await generateBillPDF(bill, settings);
         }
         if (cancelled) return;
+        // First page's own width/height decide the preview box's shape below
+        // (instead of a fixed 90vh for every layout) — pdf-lib is already
+        // loaded as part of generating bytes above, so this is just reading
+        // back what was just written, no extra network/bundle cost.
+        const { PDFDocument } = await import('pdf-lib');
+        const doc = await PDFDocument.load(bytes);
+        const { width, height } = doc.getPage(0).getSize();
+        const aspect = width / height;
+        if (cancelled) return;
         const blob = new Blob([bytes.buffer as ArrayBuffer], { type: 'application/pdf' });
         const objectUrl = URL.createObjectURL(blob);
-        cacheRef.current.set(layout, objectUrl);
+        cacheRef.current.set(layout, { url: objectUrl, aspect });
         setUrl(objectUrl);
+        setPageAspect(aspect);
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err));
       }
@@ -89,7 +106,7 @@ export function PdfPreviewModal({ bill, settings, layout, onClose, readOnly = fa
   // every layout switch, since the whole point of the cache is to survive those.
   useEffect(() => {
     return () => {
-      cacheRef.current.forEach((cachedUrl) => URL.revokeObjectURL(cachedUrl));
+      cacheRef.current.forEach(({ url: cachedUrl }) => URL.revokeObjectURL(cachedUrl));
       cacheRef.current.clear();
     };
   }, []);
@@ -146,7 +163,7 @@ export function PdfPreviewModal({ bill, settings, layout, onClose, readOnly = fa
         }
       }}
     >
-      <div className={`bg-white rounded-xl shadow-soft-lg w-full ${widthClass} h-[90vh] flex flex-col duration-200 ${closing ? 'animate-out fade-out-0 zoom-out-95' : 'animate-in fade-in-0 zoom-in-95'}`}>
+      <div className={`bg-white rounded-xl shadow-soft-lg w-full ${widthClass} max-h-[90vh] flex flex-col duration-200 ${closing ? 'animate-out fade-out-0 zoom-out-95' : 'animate-in fade-in-0 zoom-in-95'}`}>
         <div className="flex items-center justify-between px-5 py-3 border-b shrink-0">
           <div className="flex items-center gap-2">
             <h3 className="font-bold text-base">Preview — {bill.billNumber}</h3>
@@ -172,7 +189,16 @@ export function PdfPreviewModal({ bill, settings, layout, onClose, readOnly = fa
             </Button>
           </div>
         </div>
-        <div className="flex-1 bg-slate-100 rounded-b-xl overflow-hidden">
+        {/* Sized to the actual PDF page's own aspect ratio once known, capped
+            at the modal's remaining height — previously a fixed flex-1 box
+            regardless of content, which left a lot of blank space below a
+            short page (a few-item thermal receipt especially). Falls back to
+            filling the available space while loading/erroring, before the
+            aspect ratio is known. */}
+        <div
+          className={`bg-slate-100 rounded-b-xl overflow-hidden ${pageAspect ? 'w-full' : 'flex-1 min-h-[60vh]'}`}
+          style={pageAspect ? { aspectRatio: String(pageAspect), maxHeight: 'calc(90vh - 3.5rem)' } : undefined}
+        >
           {error ? (
             <div className="h-full flex items-center justify-center text-sm text-destructive p-6 text-center">
               Could not generate preview: {error}

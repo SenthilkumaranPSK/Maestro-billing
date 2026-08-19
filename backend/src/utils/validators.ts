@@ -132,7 +132,10 @@ export const createBillSchema = z.object({
     .refine(isValidDateString, 'Invalid bill date'),
   dueDate: z.string().refine(isValidDateString, 'Invalid due date').optional(),
   items: z.array(billItemSchema).min(1, 'At least one item required'),
-  notes: z.string().max(2000, 'Notes too long').optional(),
+  // .nullable() too, not just .optional() — an edited bill round-trips
+  // through GET first, and Prisma returns an unset nullable column as
+  // `null`, not `undefined` (same reasoning as billItemSchema.hsnSac above).
+  notes: z.string().max(2000, 'Notes too long').nullable().optional(),
   discountAmount: z.number().int().min(0).optional(),
   paymentMode: z.enum(['CASH', 'UPI', 'CARD', 'CHEQUE']).optional(),
   // Rounding to the nearest rupee can never require more than 99 paise of
