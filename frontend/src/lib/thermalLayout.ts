@@ -1,6 +1,7 @@
 import type { Bill, Settings } from '@/types';
 import { paisaToRupee } from '@/types';
 import { formatAmt, abbrUnit } from '@/lib/thermal';
+import { splitTaxP } from '@/lib/billMath';
 
 /**
  * Renderer-agnostic thermal receipt layout, built once and consumed by BOTH
@@ -278,15 +279,21 @@ export function buildThermalLayout(
 
   if (bill.gstAmount > 0) {
     const gstRates = [...new Set(bill.items.filter((i) => i.gstRate > 0).map((i) => i.gstRate))];
-    const halfRate = gstRates.length === 1 ? gstRates[0]! / 2 : null;
-    const half = Math.floor(bill.gstAmount / 2);
-    const cgstLabel = halfRate !== null ? `CGST ${halfRate}%` : 'CGST';
-    const sgstLabel = halfRate !== null ? `SGST ${halfRate}%` : 'SGST';
     // Clustered together at the right edge as one block, unlike the other
     // total rows which span the full line width — reuse `split` with an
     // empty left side, which right-aligns `right` exactly the same way.
-    rows.push({ kind: 'split', left: '', right: `${cgstLabel}  Rs ${formatAmt(half)}` });
-    rows.push({ kind: 'split', left: '', right: `${sgstLabel}  Rs ${formatAmt(bill.gstAmount - half)}` });
+    if (bill.isInterState) {
+      const fullRate = gstRates.length === 1 ? gstRates[0]! : null;
+      const igstLabel = fullRate !== null ? `IGST ${fullRate}%` : 'IGST';
+      rows.push({ kind: 'split', left: '', right: `${igstLabel}  Rs ${formatAmt(bill.gstAmount)}` });
+    } else {
+      const halfRate = gstRates.length === 1 ? gstRates[0]! / 2 : null;
+      const { cgstP, sgstP } = splitTaxP(bill.gstAmount, false);
+      const cgstLabel = halfRate !== null ? `CGST ${halfRate}%` : 'CGST';
+      const sgstLabel = halfRate !== null ? `SGST ${halfRate}%` : 'SGST';
+      rows.push({ kind: 'split', left: '', right: `${cgstLabel}  Rs ${formatAmt(cgstP)}` });
+      rows.push({ kind: 'split', left: '', right: `${sgstLabel}  Rs ${formatAmt(sgstP)}` });
+    }
   }
   if (bill.discountAmount > 0) {
     rows.push({ kind: 'split', left: 'Discount', right: `-Rs ${formatAmt(bill.discountAmount)}` });

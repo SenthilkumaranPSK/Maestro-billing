@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Plus, Printer, FileText, ScanEye, Save, RotateCcw, CalendarDays } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
@@ -8,14 +8,17 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { CustomerBar, type CustomerInfo } from '@/components/billing/CustomerBar';
 import { LineItemRow } from '@/components/billing/LineItemRow';
 import { PdfPreviewModal } from '@/components/billing/PdfPreviewModal';
+import { PaymentModeSelect } from '@/components/billing/PaymentModeSelect';
 import { billsApi } from '@/api/bills';
 import { mmCustomersApi } from '@/api/mmCustomers';
 import { settingsApi } from '@/api/settings';
 import { whatsappApi } from '@/api/whatsapp';
 import { useToast } from '@/hooks/use-toast';
 import { isValidIndianPhone, newId } from '@/lib/utils';
-import { computeLineTotals } from '@/lib/billMath';
-import type { BillItemForm, Bill, Settings } from '@/types';
+import { computeLineTotals, splitTaxP } from '@/lib/billMath';
+import { suggestInterState } from '@/lib/gstin';
+import { buildDraftBill } from '@/lib/draftBill';
+import type { BillItemForm, Bill, Settings, PaymentMode } from '@/types';
 import { rupeeToPaisa, paisaToRupee, formatCurrency, shouldShowWhatsappOnBilling } from '@/types';
 
 // pdf-lib is heavy — loaded on demand, same pattern as the main Billing page.
@@ -92,6 +95,13 @@ export default function MmBillingPage() {
   const [previewOpen, setPreviewOpen] = useState(false);
   const [sendOnWhatsApp, setSendOnWhatsApp] = useState(false);
   const [sendingWhatsApp, setSendingWhatsApp] = useState(false);
+  // How the bill was paid — shown in the form and history/detail views only,
+  // never on the printed invoice. See components/billing/PaymentModeSelect.
+  const [paymentMode, setPaymentMode] = useState<PaymentMode | ''>('');
+  // Inter-state supply (IGST) vs intra-state (CGST+SGST) — mutually
+  // exclusive, see schema.prisma Bill.isInterState. Auto-suggested below
+  // from GSTIN state codes when the customer changes, but always overridable.
+  const [isInterState, setIsInterState] = useState(false);
 
   // Tax Invoice Details — same fields as the main Billing page's MM/A4 mode,
   // always shown here since MM bills always need them.
@@ -123,13 +133,53 @@ export default function MmBillingPage() {
   // Same global "show WhatsApp" setting the main Billing page uses.
   const showWhatsapp = shouldShowWhatsappOnBilling(settings?.general);
 
+  // Re-suggest Inter-state whenever the selected customer's GSTIN changes —
+  // still just a default, the checkbox stays freely overridable.
+  useEffect(() => {
+    if (savedBill) return;
+    const suggestion = suggestInterState(settings?.studio?.studio_gstin, customer.gstin);
+    if (suggestion !== null) setIsInterState(suggestion);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [customer.gstin, settings?.studio?.studio_gstin]);
+
   const countedItems = items.filter((i) => i.productName.trim() && i.qty > 0);
   const { subTotalP, gstTotalP } = computeLineTotals(countedItems, false);
   const gstRates = [...new Set(countedItems.filter((i) => i.gstRate > 0).map((i) => i.gstRate))];
   const gstHalfRate = gstRates.length === 1 ? gstRates[0]! / 2 : null;
+  const gstFullRate = gstRates.length === 1 ? gstRates[0]! : null;
   const rawTotalP = subTotalP + gstTotalP;
   const roundOffP = Math.round(rawTotalP / 100) * 100 - rawTotalP;
   const grandTotalP = rawTotalP + roundOffP;
+
+  // Bill-shaped view of the current form state, purely for the pre-save
+  // Preview button — see lib/draftBill. Memoized so PdfPreviewModal's
+  // per-layout PDF cache survives re-renders that don't change anything
+  // this would print.
+  const draftBill = useMemo(
+    () =>
+      buildDraftBill({
+        billNumber: nextNumber ?? 'DRAFT',
+        items,
+        gstInclusive: false,
+        isInterState,
+        customer,
+        roundOffP,
+        series: 'MM',
+        vehicleNo,
+        despatchedThrough,
+        destination,
+        otherReference,
+        ewayBillNo,
+        irnNo,
+        consigneeName: consigneeSameAsBuyer ? undefined : consigneeName,
+        consigneeAddress: consigneeSameAsBuyer ? undefined : consigneeAddress,
+        consigneeGstin: consigneeSameAsBuyer ? undefined : consigneeGstin,
+      }),
+    [
+      nextNumber, items, isInterState, customer, roundOffP, vehicleNo, despatchedThrough, destination,
+      otherReference, ewayBillNo, irnNo, consigneeSameAsBuyer, consigneeName, consigneeAddress, consigneeGstin,
+    ],
+  );
 
   const createBillMutation = useMutation({
     mutationFn: billsApi.create,
@@ -225,6 +275,8 @@ export default function MmBillingPage() {
         gstRate: i.gstRate,
       })),
       roundOffAmount: roundOffP,
+      paymentMode: paymentMode || undefined,
+      isInterState,
       vehicleNo: vehicleNo.trim() || undefined,
       despatchedThrough: despatchedThrough.trim() || undefined,
       destination: destination.trim() || undefined,
@@ -285,6 +337,7 @@ export default function MmBillingPage() {
     setItems([newEmptyItem(defaultGstRate)]);
     setSavedBill(null);
     setSendOnWhatsApp(false);
+    setPaymentMode('');
     setVehicleNo('');
     setDespatchedThrough('');
     setDestination('');
@@ -349,10 +402,21 @@ export default function MmBillingPage() {
               )}
             </>
           ) : (
-            <Button onClick={handleSave} disabled={createBillMutation.isPending} className="px-6">
-              <Save className="w-3.5 h-3.5 mr-1.5" />
-              {createBillMutation.isPending ? 'Saving…' : 'Save MM Bill'}
-            </Button>
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setPreviewOpen(true)}
+                disabled={countedItems.length === 0}
+              >
+                <ScanEye className="w-3.5 h-3.5 mr-1.5" />
+                Preview
+              </Button>
+              <Button onClick={handleSave} disabled={createBillMutation.isPending} className="px-6">
+                <Save className="w-3.5 h-3.5 mr-1.5" />
+                {createBillMutation.isPending ? 'Saving…' : 'Save MM Bill'}
+              </Button>
+            </>
           )}
         </div>
       </div>
@@ -360,17 +424,21 @@ export default function MmBillingPage() {
       {/* ── Customer + Date bar ─────────────────────────────── */}
       <Card className="border-brand-500/30 bg-brand-50/60">
         <CardContent className="pt-4 pb-4 grid grid-cols-12 gap-4 items-end">
-          <div className="col-span-8">
+          <div className="col-span-6">
             <Label className="text-xs text-muted-foreground mb-1.5 block">Customer</Label>
             <CustomerBar value={customer} onChange={setCustomer} disabled={!!savedBill} showAddress />
           </div>
-          <div className="col-span-4">
+          <div className="col-span-3">
             <Label className="text-xs text-muted-foreground mb-1.5 flex items-center gap-1">
               <CalendarDays className="w-3.5 h-3.5" /> Date
             </Label>
             <p className="h-10 flex items-center px-3 rounded-lg border border-slate-200 bg-slate-50 text-sm font-medium text-slate-700">
               {new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
             </p>
+          </div>
+          <div className="col-span-3">
+            <Label className="text-xs text-muted-foreground mb-1.5 block">Payment Mode</Label>
+            <PaymentModeSelect value={paymentMode} onChange={setPaymentMode} disabled={!!savedBill} />
           </div>
         </CardContent>
       </Card>
@@ -445,14 +513,24 @@ export default function MmBillingPage() {
             <CardHeader className="pb-3 flex flex-row items-center justify-between">
               <CardTitle className="text-sm">MM Bill Items</CardTitle>
               {!savedBill && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setItems((prev) => [...prev, newEmptyItem(defaultGstRate)])}
-                >
-                  <Plus className="w-4 h-4 mr-1" />
-                  Add Item
-                </Button>
+                <div className="flex items-center gap-2">
+                  <label className="flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer" title="Apply IGST instead of CGST+SGST">
+                    <input
+                      type="checkbox"
+                      checked={isInterState}
+                      onChange={(e) => setIsInterState(e.target.checked)}
+                    />
+                    Inter-state (IGST)
+                  </label>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setItems((prev) => [...prev, newEmptyItem(defaultGstRate)])}
+                  >
+                    <Plus className="w-4 h-4 mr-1" />
+                    Add Item
+                  </Button>
+                </div>
               )}
             </CardHeader>
             <CardContent className="p-0 overflow-visible">
@@ -516,14 +594,23 @@ export default function MmBillingPage() {
                 <span className="text-muted-foreground">Sub Total</span>
                 <span className="font-medium tabular-nums">₹{paisaToRupee(subTotalP).toFixed(2)}</span>
               </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">{gstHalfRate !== null ? `CGST (${gstHalfRate}%)` : 'CGST'}</span>
-                <span className="font-medium tabular-nums">₹{paisaToRupee(gstTotalP / 2).toFixed(2)}</span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">{gstHalfRate !== null ? `SGST (${gstHalfRate}%)` : 'SGST'}</span>
-                <span className="font-medium tabular-nums">₹{paisaToRupee(gstTotalP / 2).toFixed(2)}</span>
-              </div>
+              {isInterState ? (
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">{gstFullRate !== null ? `IGST (${gstFullRate}%)` : 'IGST'}</span>
+                  <span className="font-medium tabular-nums">₹{paisaToRupee(gstTotalP).toFixed(2)}</span>
+                </div>
+              ) : (
+                <>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">{gstHalfRate !== null ? `CGST (${gstHalfRate}%)` : 'CGST'}</span>
+                    <span className="font-medium tabular-nums">₹{paisaToRupee(splitTaxP(gstTotalP, false).cgstP).toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">{gstHalfRate !== null ? `SGST (${gstHalfRate}%)` : 'SGST'}</span>
+                    <span className="font-medium tabular-nums">₹{paisaToRupee(splitTaxP(gstTotalP, false).sgstP).toFixed(2)}</span>
+                  </div>
+                </>
+              )}
               {roundOffP !== 0 && (
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">Round Off</span>
@@ -563,6 +650,15 @@ export default function MmBillingPage() {
                   Send on WhatsApp after saving
                 </label>
               )}
+              <Button
+                variant="outline"
+                className="w-full"
+                onClick={() => setPreviewOpen(true)}
+                disabled={countedItems.length === 0}
+              >
+                <ScanEye className="w-4 h-4 mr-2" />
+                Preview
+              </Button>
               <Button className="w-full" onClick={handleSave} disabled={createBillMutation.isPending}>
                 <Save className="w-4 h-4 mr-2" />
                 {createBillMutation.isPending ? 'Saving…' : 'Save MM Bill'}
@@ -600,11 +696,12 @@ export default function MmBillingPage() {
       </div>
     </div>
 
-    {savedBill && previewOpen && (
+    {previewOpen && (
       <PdfPreviewModal
-        bill={savedBill}
+        bill={savedBill ?? draftBill}
         settings={settings ?? {}}
         layout="mm_a4"
+        readOnly={!savedBill}
         onClose={() => setPreviewOpen(false)}
       />
     )}

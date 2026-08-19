@@ -240,3 +240,42 @@ test('getNextBillNumber: continues the sequence gap-free across the brief NNN/YY
   const next = await service.getNextBillNumber();
   assert.equal(next, '049/2026');
 });
+
+test('createBill: isInterState never changes gstAmount — only the split at render time differs', async () => {
+  const items = [{ productName: 'X', unit: 'piece', qty: 1, unitPrice: 10000, gstRate: 18 }];
+  const intraState = await service.createBill({
+    billDate: '2026-07-11T10:00:00.000Z',
+    items,
+  });
+  const interState = await service.createBill({
+    billDate: '2026-07-11T10:00:00.000Z',
+    items,
+    isInterState: true,
+  });
+  assert.equal(intraState.gstAmount, interState.gstAmount);
+  assert.equal(intraState.grandTotal, interState.grandTotal);
+  assert.equal(intraState.isInterState, false);
+  assert.equal(interState.isInterState, true);
+});
+
+test('createBill: isInterState defaults to false when omitted (backward compatible)', async () => {
+  const bill = await service.createBill({
+    billDate: '2026-07-11T10:00:00.000Z',
+    items: [{ productName: 'X', unit: 'piece', qty: 1, unitPrice: 1000, gstRate: 18 }],
+  });
+  assert.equal(bill.isInterState, false);
+});
+
+test('updateBill: isInterState round-trips through an edit', async () => {
+  const bill = await service.createBill({
+    billDate: '2026-07-11T10:00:00.000Z',
+    items: [{ productName: 'X', unit: 'piece', qty: 1, unitPrice: 1000, gstRate: 18 }],
+  });
+  assert.equal(bill.isInterState, false);
+  const updated = await service.updateBill(bill.id, {
+    billDate: '2026-07-11T10:00:00.000Z',
+    items: [{ productName: 'X', unit: 'piece', qty: 1, unitPrice: 1000, gstRate: 18 }],
+    isInterState: true,
+  });
+  assert.equal(updated.isInterState, true);
+});

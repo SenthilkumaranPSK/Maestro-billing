@@ -146,6 +146,9 @@ export interface Bill {
   // Whether item prices were entered GST-inclusive (tax extracted from the
   // sticker price) or GST-exclusive (tax added on top, the default).
   gstInclusive: boolean;
+  // Whether this bill is an inter-state supply (IGST) instead of intra-state
+  // (CGST+SGST) — see backend schema.prisma Bill.isInterState.
+  isInterState: boolean;
   // MM/A4 "Tax Invoice" layout only — see backend schema.prisma Bill model.
   vehicleNo?: string;
   despatchedThrough?: string;

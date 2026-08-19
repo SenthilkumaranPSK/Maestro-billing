@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Smartphone, FileBarChart2, Percent, ChevronRight, Save, FolderCog, DatabaseBackup } from 'lucide-react';
+import { Smartphone, FileBarChart2, Percent, ChevronRight, Save, FolderCog, DatabaseBackup, Moon, Sun } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
@@ -9,6 +9,7 @@ import { whatsappApi } from '@/api/whatsapp';
 import { backupsApi } from '@/api/backups';
 import { settingsApi } from '@/api/settings';
 import { useToast } from '@/hooks/use-toast';
+import { useTheme } from '@/hooks/use-theme';
 import { formatDateTime } from '@/lib/utils';
 import { shouldShowWhatsappOnBilling } from '@/types';
 
@@ -16,6 +17,7 @@ export default function SettingsPage() {
   const { toast } = useToast();
   const qc = useQueryClient();
   const navigate = useNavigate();
+  const { theme, setTheme } = useTheme();
 
   const { data: whatsappStatus } = useQuery({
     queryKey: ['whatsapp', 'status'],
@@ -291,7 +293,33 @@ export default function SettingsPage() {
 
         </div>
 
-        {/* Right column — Reports */}
+        {/* Right column — Appearance + Reports */}
+        <div className="space-y-5">
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm flex items-center gap-2">
+              {theme === 'dark' ? <Moon className="h-4 w-4" /> : <Sun className="h-4 w-4" />}
+              Appearance
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <label className="flex items-center justify-between gap-3 text-sm cursor-pointer">
+              <span>
+                Dark mode
+                <span className="block text-xs text-muted-foreground font-normal">
+                  Applies across the whole app, remembered on this PC.
+                </span>
+              </span>
+              <input
+                type="checkbox"
+                className="h-4 w-4 accent-brand-600 shrink-0"
+                checked={theme === 'dark'}
+                onChange={(e) => setTheme(e.target.checked ? 'dark' : 'light')}
+              />
+            </label>
+          </CardContent>
+        </Card>
+
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-sm">Reports</CardTitle>
@@ -338,6 +366,7 @@ export default function SettingsPage() {
             </button>
           </CardContent>
         </Card>
+        </div>
       </div>
 
       {liveInfo?.version && (

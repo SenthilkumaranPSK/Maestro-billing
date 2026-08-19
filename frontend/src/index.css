@@ -55,6 +55,48 @@
     --brand-800: 78 90% 22%;
     --brand-900: 80 85% 17%;
   }
+
+  /* Whole-app dark theme — toggled via the `dark` class on <html> (see
+     hooks/use-theme.ts and Settings' Appearance card). Card sits lighter
+     than the page background, muted/secondary/accent sit lighter still — a
+     gentle elevation ramp, same relationship light mode has (card lighter
+     than page) just inverted in absolute lightness. The brand ramp is
+     inverted too: brand-50 (a near-white fill in light mode, e.g. the
+     "bg-brand-50 text-brand-700" badge pattern used all over the app) needs
+     to become a dark, muted fill with brand-700 becoming light enough to
+     read on it — a straight swap of the light-mode roles of 50↔900. */
+  .dark {
+    --background: 222 45% 7%;
+    --foreground: 210 30% 95%;
+    --card: 222 35% 11%;
+    --card-foreground: 210 30% 95%;
+    --popover: 222 35% 11%;
+    --popover-foreground: 210 30% 95%;
+    --primary: 72 100% 50%;
+    --primary-foreground: 0 0% 8%;
+    --secondary: 222 25% 16%;
+    --secondary-foreground: 210 30% 95%;
+    --muted: 222 25% 17%;
+    --muted-foreground: 215 15% 65%;
+    --accent: 222 25% 18%;
+    --accent-foreground: 210 30% 95%;
+    --destructive: 0 62% 42%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 222 20% 20%;
+    --input: 222 20% 20%;
+    --ring: 72 100% 50%;
+
+    --brand-50: 78 35% 14%;
+    --brand-100: 77 40% 18%;
+    --brand-200: 76 45% 24%;
+    --brand-300: 75 55% 34%;
+    --brand-400: 74 85% 48%;
+    --brand-500: 72 100% 50%;
+    --brand-600: 74 100% 58%;
+    --brand-700: 76 90% 74%;
+    --brand-800: 78 85% 84%;
+    --brand-900: 80 80% 92%;
+  }
 }
 
 @layer base {
@@ -142,4 +184,80 @@
   body {
     background: white;
   }
+}
+
+/* ── Dark-mode compatibility shim ──────────────────────────────────────────
+   This app predates the dark-mode token system above: most pages/components
+   were authored with raw Tailwind slate/white utility classes (bg-white,
+   bg-slate-50, border-slate-200, text-slate-500, …) instead of the semantic
+   bg-card/bg-muted/text-foreground tokens. Retrofitting every one of those
+   call sites (~180 occurrences across ~37 files) file-by-file would be a
+   huge, risky diff for what's fundamentally a styling detail — so instead
+   these rules retarget the known raw classes to the token system whenever
+   `.dark` is active, and any component using them "just works" without
+   being touched. Deliberately left alone: colorful status pills (badges,
+   toasts — bg-emerald-100/bg-amber-100/etc.) stay as light pastel chips in
+   both themes, which reads fine on a dark page and is a common dark-mode
+   pattern; and the ErrorBoundary's bg-slate-900 button, which is meant to
+   look like a dark button regardless of theme.
+   Deliberately UNLAYERED (not inside @layer base/utilities) — Tailwind's
+   own utilities layer would otherwise always win over an equally- or even
+   more-specific rule declared inside @layer base, since layer order beats
+   specificity. Unlayered rules outrank every layered rule, so these are
+   guaranteed to apply regardless of where Tailwind's own utilities land. */
+.dark .bg-white,
+.dark .bg-white\/80 {
+  background-color: hsl(var(--card));
+}
+.dark .bg-slate-50,
+.dark .bg-slate-50\/80 {
+  background-color: hsl(var(--background));
+}
+.dark .bg-slate-100 {
+  background-color: hsl(var(--muted));
+}
+.dark .bg-slate-200 {
+  background-color: hsl(var(--border));
+}
+.dark .bg-slate-300 {
+  background-color: hsl(var(--muted-foreground) / 0.5);
+}
+.dark .hover\:bg-slate-50:hover {
+  background-color: hsl(var(--muted));
+}
+.dark .border-slate-100,
+.dark .border-slate-200,
+.dark .border-slate-300 {
+  border-color: hsl(var(--border));
+}
+.dark .hover\:border-slate-300:hover {
+  border-color: hsl(var(--ring));
+}
+.dark .text-slate-400 {
+  color: hsl(var(--muted-foreground));
+}
+.dark .text-slate-500,
+.dark .text-slate-600 {
+  color: hsl(var(--muted-foreground));
+}
+.dark .text-slate-700,
+.dark .text-slate-800 {
+  color: hsl(var(--foreground));
+}
+.dark .hover\:text-slate-700:hover,
+.dark .hover\:text-slate-900:hover {
+  color: hsl(var(--foreground));
+}
+/* Gradient stop utilities (Sidebar's logo header) set --tw-gradient-from/to
+   custom properties, not background-color, so the rules above don't touch
+   them — from-brand-50 already resolves through the token system on its
+   own, but to-white/from-slate-100 are hardcoded and need their own
+   override or the gradient fades into a bright white patch in dark mode. */
+.dark .to-white {
+  --tw-gradient-to: hsl(var(--background)) var(--tw-gradient-to-position);
+}
+.dark .from-slate-100 {
+  --tw-gradient-from: hsl(var(--muted)) var(--tw-gradient-from-position);
+  --tw-gradient-to: hsl(var(--muted) / 0) var(--tw-gradient-to-position);
+  --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to);
 }

@@ -4,6 +4,7 @@ import { paisaToRupee } from '@/types';
 import { amountInWordsINR } from '@/lib/amountInWords';
 import { bytesToBase64 } from '@/lib/pdf';
 import { embedBrandFonts } from '@/lib/brandFont';
+import { splitTaxP } from '@/lib/billMath';
 
 // Same caching/fallback pattern as lib/pdf.ts's thermal-receipt logo — fetch
 // and decode once per session, prefer the small pre-downscaled copy so the
@@ -470,12 +471,17 @@ export async function generateA4InvoicePDF(bill: Bill, settings: Partial<Setting
   // differs (see billMath.ts), never how the invoice is printed.
   const gstRates = [...new Set(bill.items.filter((i) => i.gstRate > 0).map((i) => i.gstRate))];
   const halfRate = gstRates.length === 1 ? gstRates[0]! / 2 : undefined;
+  const fullRate = gstRates.length === 1 ? gstRates[0]! : undefined;
   const totalRows: Array<[string, number]> = [];
   totalRows.push(['Sub Total', bill.subTotal]);
   if (bill.gstAmount > 0) {
-    const half = Math.floor(bill.gstAmount / 2);
-    totalRows.push([halfRate !== undefined ? `CGST @ ${halfRate}%` : 'CGST', half]);
-    totalRows.push([halfRate !== undefined ? `SGST @ ${halfRate}%` : 'SGST', bill.gstAmount - half]);
+    if (bill.isInterState) {
+      totalRows.push([fullRate !== undefined ? `IGST @ ${fullRate}%` : 'IGST', bill.gstAmount]);
+    } else {
+      const { cgstP, sgstP } = splitTaxP(bill.gstAmount, false);
+      totalRows.push([halfRate !== undefined ? `CGST @ ${halfRate}%` : 'CGST', cgstP]);
+      totalRows.push([halfRate !== undefined ? `SGST @ ${halfRate}%` : 'SGST', sgstP]);
+    }
   }
   if (bill.discountAmount > 0) totalRows.push(['Discount', -bill.discountAmount]);
   // Derived, not a stored field — same computation as the thermal receipt

@@ -1,4 +1,4 @@
-import { Receipt, FileText, FileSpreadsheet } from 'lucide-react';
+import { Receipt, FileText } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { Bill } from '@/types';
 
@@ -109,20 +109,6 @@ export function LayoutToggle({ value, onChange, compact = false }: LayoutToggleP
       >
         <FileText className={compact ? 'w-3 h-3' : 'w-3.5 h-3.5'} />
         {!compact && 'A4'}
-      </button>
-      <button
-        type="button"
-        title="MM/A4 tax invoice"
-        onClick={() => onChange('mm_a4')}
-        className={cn(
-          base,
-          size,
-          value === 'mm_a4' ? 'bg-white shadow-sm text-brand-700' : 'text-slate-500 hover:text-slate-700',
-          'border-transparent',
-        )}
-      >
-        <FileSpreadsheet className={compact ? 'w-3 h-3' : 'w-3.5 h-3.5'} />
-        {!compact && 'MM/A4'}
       </button>
     </div>
   );

@@ -21,8 +21,9 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { computeItemLineTotal, computeLineTotals, type LineTotalsInput } from '../src/lib/billMath.ts';
+import { computeItemLineTotal, computeLineTotals, splitTaxP, type LineTotalsInput } from '../src/lib/billMath.ts';
 import { BillService } from '../../backend/src/services/BillService.ts';
+import { splitTax } from '../../backend/src/utils/taxSplit.ts';
 import { rupeeToPaisa } from '../src/types/index.ts';
 
 // computeItemTotals doesn't touch `this.prisma` at all — safe to construct
@@ -141,5 +142,27 @@ test('cross-check: a full multi-item bill aggregates identically on both sides',
 
     assert.equal(frontend.subTotalP, backend.subTotal, `subTotal mismatch, inclusive=${gstInclusive}`);
     assert.equal(frontend.gstTotalP, backend.totalGst, `gstTotal mismatch, inclusive=${gstInclusive}`);
+  }
+});
+
+test('splitTaxP (intra-state): floor+remainder CGST/SGST split, IGST zero', () => {
+  const r = splitTaxP(3601, false);
+  assert.deepEqual(r, { cgstP: 1800, sgstP: 1801, igstP: 0 });
+});
+
+test('splitTaxP (inter-state): whole amount goes to IGST, CGST/SGST zero', () => {
+  const r = splitTaxP(3600, true);
+  assert.deepEqual(r, { cgstP: 0, sgstP: 0, igstP: 3600 });
+});
+
+test('cross-check splitTaxP against the real backend splitTax: same inputs, same split', () => {
+  for (const amount of [0, 1, 2, 99, 3601, 999999]) {
+    for (const isInterState of [false, true]) {
+      const frontend = splitTaxP(amount, isInterState);
+      const backend = splitTax(amount, isInterState);
+      assert.equal(frontend.cgstP, backend.cgst);
+      assert.equal(frontend.sgstP, backend.sgst);
+      assert.equal(frontend.igstP, backend.igst);
+    }
   }
 });

@@ -13,7 +13,7 @@ async function main() {
   const defaults: Array<{ key: string; value: string; group: string }> = [
     { key: 'studio_name', value: "The Maestro Studio's", group: 'studio' },
     { key: 'studio_owner', value: 'Maestro Yuvaraj V', group: 'studio' },
-    { key: 'studio_address', value: 'Brindavan Road, Fairlands\nSalem - 636 016', group: 'studio' },
+    { key: 'studio_address', value: '18, Brindavan Road, Fairlands\nSalem - 636 016', group: 'studio' },
     { key: 'studio_phone', value: '9843096461', group: 'studio' },
     { key: 'studio_email', value: '', group: 'studio' },
     { key: 'studio_gstin', value: '33ABWPY8748G1ZN', group: 'studio' },

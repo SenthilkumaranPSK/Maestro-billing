@@ -194,6 +194,12 @@ model Bill {
   // way regardless — this only changes how they were derived and whether the
   // printed receipt/invoice shows a CGST/SGST breakdown.
   gstInclusive   Boolean   @default(false) @map("gst_inclusive")
+  // Whether this bill is an inter-state supply (IGST) instead of intra-state
+  // (CGST+SGST). Mutually exclusive with the CGST/SGST split — never both.
+  // gstAmount itself is unaffected; this only changes how it's split/labeled
+  // at render/report time (thermalLayout.ts, a4invoice.ts, mmA4invoice.ts,
+  // ReportService.ts/GstReport.tsx all branch on this flag).
+  isInterState   Boolean   @default(false) @map("is_inter_state")
   // MM/A4 "Tax Invoice" layout only — transport/e-way details for a formal
   // GST tax invoice (goods dispatch), never shown on thermal or the plain A4
   // layout. All optional: a studio issuing an occasional wholesale-style bill

@@ -25,6 +25,9 @@ export interface CreateBillInput {
   notes?: string;
   discountAmount?: number; // in paise
   roundOffAmount?: number; // in paise (positive = round up, negative = round down)
+  // See Bill.paymentMode in schema.prisma — shown in the bill form and
+  // history/detail views only, never on the printed receipt/invoice.
+  paymentMode?: string;
   // A4 "Service Bill" layout only — see Bill.serviceDescription in schema.prisma
   serviceDescription?: string;
   serviceFrom?: string;
@@ -33,6 +36,8 @@ export interface CreateBillInput {
   serviceDates?: string[];
   // See Bill.gstInclusive in schema.prisma
   gstInclusive?: boolean;
+  // See Bill.isInterState in schema.prisma
+  isInterState?: boolean;
   // MM/A4 "Tax Invoice" layout only — see the matching Bill fields in schema.prisma
   vehicleNo?: string;
   despatchedThrough?: string;

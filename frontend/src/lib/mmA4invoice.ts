@@ -4,7 +4,9 @@ import { paisaToRupee } from '@/types';
 import { amountInWordsINR } from '@/lib/amountInWords';
 import { bytesToBase64 } from '@/lib/pdf';
 import { embedBrandFonts } from '@/lib/brandFont';
-import { hexRgb, wrapText, formatDDMMYYYY, formatRupees, BANK_DETAILS } from '@/lib/a4invoice';
+import { hexRgb, wrapText, formatDDMMYYYY, BANK_DETAILS } from '@/lib/a4invoice';
+import { computeHsnSummary } from '@/lib/hsnSummary';
+import { splitTaxP } from '@/lib/billMath';
 
 /**
  * MM/A4 "Tax Invoice" — a third print layout alongside the thermal receipt
@@ -39,38 +41,16 @@ function formatQty(qty: number): string {
   return Number.isInteger(qty) ? String(qty) : qty.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
 }
 
-interface HsnGroup {
-  hsnSac: string;
-  taxableValue: number; // paise
-  cgstRate: number;
-  cgstAmount: number; // paise
-  sgstRate: number;
-  sgstAmount: number; // paise
-}
-
-function computeHsnSummary(bill: Bill): HsnGroup[] {
-  const groups = new Map<string, HsnGroup>();
-  for (const item of bill.items) {
-    const key = `${item.hsnSac ?? '-'}|${item.gstRate}`;
-    const baseAmt = item.totalAmount - item.gstAmount;
-    const half = Math.floor(item.gstAmount / 2);
-    const existing = groups.get(key);
-    if (existing) {
-      existing.taxableValue += baseAmt;
-      existing.cgstAmount += half;
-      existing.sgstAmount += item.gstAmount - half;
-    } else {
-      groups.set(key, {
-        hsnSac: item.hsnSac ?? '-',
-        taxableValue: baseAmt,
-        cgstRate: item.gstRate / 2,
-        cgstAmount: half,
-        sgstRate: item.gstRate / 2,
-        sgstAmount: item.gstAmount - half,
-      });
-    }
-  }
-  return [...groups.values()];
+// The reference invoice always shows money figures with 3 decimal places
+// (e.g. "2,400.000") — cosmetic, since paise is already the smallest unit
+// this app tracks, but matches the source template's look more closely than
+// formatRupees' 0-or-2-decimal convention used by the other print layouts.
+// Scoped to this file only — a4invoice.ts's formatRupees is untouched.
+function formatAmt3(paise: number): string {
+  return paisaToRupee(paise).toLocaleString('en-IN', {
+    minimumFractionDigits: 3,
+    maximumFractionDigits: 3,
+  });
 }
 
 interface RowLayout {
@@ -305,6 +285,7 @@ export async function generateMmA4InvoicePDF(bill: Bill, settings: Partial<Setti
   const hsnGroups = computeHsnSummary(bill);
   const gstRates = [...new Set(bill.items.filter((i) => i.gstRate > 0).map((i) => i.gstRate))];
   const halfRate = gstRates.length === 1 ? gstRates[0]! / 2 : undefined;
+  const fullRate = gstRates.length === 1 ? gstRates[0]! : undefined;
 
   const TOTAL_ROW_H = 20;
   // "Amount in words" wraps to a variable number of lines depending on the
@@ -385,9 +366,9 @@ export async function generateMmA4InvoicePDF(bill: Bill, settings: Partial<Setti
       const baseAmt = item.totalAmount - item.gstAmount;
       const baseUnitPrice = item.qty ? baseAmt / item.qty : item.unitPrice;
       text(`${formatQty(item.qty)} ${item.unit}`, cols[3]!.x, rowMid, { size: 8.5, color: BODY, align: 'center', maxWidth: cols[3]!.w });
-      text(paisaToRupee(baseUnitPrice).toFixed(2), cols[4]!.x, rowMid, { size: 8.5, color: BODY, align: 'center', maxWidth: cols[4]!.w });
+      text(formatAmt3(baseUnitPrice), cols[4]!.x, rowMid, { size: 8.5, color: BODY, align: 'center', maxWidth: cols[4]!.w });
       text(item.unit, cols[5]!.x, rowMid, { size: 8.5, color: BODY, align: 'center', maxWidth: cols[5]!.w });
-      text(formatRupees(baseAmt), cols[6]!.x, rowMid, { size: 8.5, color: BODY, align: 'right', maxWidth: cols[6]!.w - 6 });
+      text(formatAmt3(baseAmt), cols[6]!.x, rowMid, { size: 8.5, color: BODY, align: 'right', maxWidth: cols[6]!.w - 6 });
       ty -= rl.height;
       itemIndex++;
     }
@@ -423,7 +404,7 @@ export async function generateMmA4InvoicePDF(bill: Bill, settings: Partial<Setti
       if (sameUnit) {
         text(`${formatQty(totalQty)} ${bill.items[0]!.unit}`, cols[3]!.x, totalBaseline, { size: 9, font: bold, align: 'center', maxWidth: cols[3]!.w });
       }
-      text(formatRupees(bill.items.reduce((s, i) => s + (i.totalAmount - i.gstAmount), 0)), cols[6]!.x, totalBaseline, {
+      text(formatAmt3(bill.items.reduce((s, i) => s + (i.totalAmount - i.gstAmount), 0)), cols[6]!.x, totalBaseline, {
         size: 9,
         font: bold,
         align: 'right',
@@ -460,18 +441,25 @@ export async function generateMmA4InvoicePDF(bill: Bill, settings: Partial<Setti
 
       let ry = sy - 14;
       const gstAmountTotal = bill.gstAmount;
-      const halfGst = Math.floor(gstAmountTotal / 2);
-      text(halfRate !== undefined ? `Output CGST @ ${halfRate}%` : 'Output CGST', rightX + 8, ry, { size: 8.5 });
-      text(formatRupees(halfGst), right - 8, ry, { size: 8.5, align: 'right' });
-      ry -= 13;
-      text(halfRate !== undefined ? `Output SGST @ ${halfRate}%` : 'Output SGST', rightX + 8, ry, { size: 8.5 });
-      text(formatRupees(gstAmountTotal - halfGst), right - 8, ry, { size: 8.5, align: 'right' });
+      if (bill.isInterState) {
+        text(fullRate !== undefined ? `Output IGST @ ${fullRate}%` : 'Output IGST', rightX + 8, ry, { size: 8.5 });
+        text(formatAmt3(gstAmountTotal), right - 8, ry, { size: 8.5, align: 'right' });
+        ry -= 13;
+      } else {
+        const { cgstP, sgstP } = splitTaxP(gstAmountTotal, false);
+        text(halfRate !== undefined ? `Output CGST @ ${halfRate}%` : 'Output CGST', rightX + 8, ry, { size: 8.5 });
+        text(formatAmt3(cgstP), right - 8, ry, { size: 8.5, align: 'right' });
+        ry -= 13;
+        text(halfRate !== undefined ? `Output SGST @ ${halfRate}%` : 'Output SGST', rightX + 8, ry, { size: 8.5 });
+        text(formatAmt3(sgstP), right - 8, ry, { size: 8.5, align: 'right' });
+        ry -= 13;
+      }
       ry -= 15;
       hline(ry, rightX, right);
       ry -= 13;
       shadeRect(rightX, ry - 5, right - rightX, 18);
       text('Total Value', rightX + 8, ry, { size: 9.5, font: bold });
-      text(formatRupees(bill.grandTotal), right - 8, ry, { size: 9.5, font: bold, align: 'right' });
+      text(formatAmt3(bill.grandTotal), right - 8, ry, { size: 9.5, font: bold, align: 'right' });
 
       sy -= WORDS_BANK_H;
       hline(sy);
@@ -480,15 +468,28 @@ export async function generateMmA4InvoicePDF(bill: Bill, settings: Partial<Setti
       {
         // Shortened labels — the reference's full "SGST/UTGST Rate/Amount"
         // wording doesn't fit a 10-14%-wide column at readable size.
-        const hsnCols = [
-          { label: 'HSN/SAC', x: left, w: contentW * 0.16 },
-          { label: 'Taxable Value', x: 0, w: contentW * 0.18 },
-          { label: 'CGST Rate', x: 0, w: contentW * 0.1 },
-          { label: 'CGST Amt', x: 0, w: contentW * 0.14 },
-          { label: 'SGST Rate', x: 0, w: contentW * 0.1 },
-          { label: 'SGST Amt', x: 0, w: contentW * 0.14 },
-          { label: 'Total Tax Amt', x: 0, w: contentW * 0.18 },
-        ];
+        // Two column sets sharing the same contentW budget: intra-state
+        // keeps the CGST+SGST pair, inter-state shows a single wider IGST
+        // pair instead — same row count either way (computeHsnSummary always
+        // fills all three rate/amount fields, just with the inactive pair
+        // zeroed), so pagination height (hsnTableH) is unaffected.
+        const hsnCols = bill.isInterState
+          ? [
+              { label: 'HSN/SAC', x: left, w: contentW * 0.16 },
+              { label: 'Taxable Value', x: 0, w: contentW * 0.22 },
+              { label: 'IGST Rate', x: 0, w: contentW * 0.14 },
+              { label: 'IGST Amt', x: 0, w: contentW * 0.22 },
+              { label: 'Total Tax Amt', x: 0, w: contentW * 0.26 },
+            ]
+          : [
+              { label: 'HSN/SAC', x: left, w: contentW * 0.16 },
+              { label: 'Taxable Value', x: 0, w: contentW * 0.18 },
+              { label: 'CGST Rate', x: 0, w: contentW * 0.1 },
+              { label: 'CGST Amt', x: 0, w: contentW * 0.14 },
+              { label: 'SGST Rate', x: 0, w: contentW * 0.1 },
+              { label: 'SGST Amt', x: 0, w: contentW * 0.14 },
+              { label: 'Total Tax Amt', x: 0, w: contentW * 0.18 },
+            ];
         {
           let cx = left;
           for (const c of hsnCols) {
@@ -501,25 +502,38 @@ export async function generateMmA4InvoicePDF(bill: Bill, settings: Partial<Setti
         for (const c of hsnCols) text(c.label, c.x, hy, { size: 7.5, font: bold, align: 'center', maxWidth: c.w });
         hy -= HSN_ROW_H;
         hline(hy, left, right);
+        const lastCol = hsnCols.length - 1;
         for (const g of hsnGroups) {
           text(g.hsnSac, hsnCols[0]!.x, hy - 10, { size: 8, align: 'center', maxWidth: hsnCols[0]!.w });
-          text(formatRupees(g.taxableValue), hsnCols[1]!.x, hy - 10, { size: 8, align: 'center', maxWidth: hsnCols[1]!.w });
-          text(`${g.cgstRate}%`, hsnCols[2]!.x, hy - 10, { size: 8, align: 'center', maxWidth: hsnCols[2]!.w });
-          text(formatRupees(g.cgstAmount), hsnCols[3]!.x, hy - 10, { size: 8, align: 'center', maxWidth: hsnCols[3]!.w });
-          text(`${g.sgstRate}%`, hsnCols[4]!.x, hy - 10, { size: 8, align: 'center', maxWidth: hsnCols[4]!.w });
-          text(formatRupees(g.sgstAmount), hsnCols[5]!.x, hy - 10, { size: 8, align: 'center', maxWidth: hsnCols[5]!.w });
-          text(formatRupees(g.cgstAmount + g.sgstAmount), hsnCols[6]!.x, hy - 10, { size: 8, align: 'center', maxWidth: hsnCols[6]!.w });
+          text(formatAmt3(g.taxableValue), hsnCols[1]!.x, hy - 10, { size: 8, align: 'center', maxWidth: hsnCols[1]!.w });
+          if (bill.isInterState) {
+            text(`${g.igstRate}%`, hsnCols[2]!.x, hy - 10, { size: 8, align: 'center', maxWidth: hsnCols[2]!.w });
+            text(formatAmt3(g.igstAmount), hsnCols[3]!.x, hy - 10, { size: 8, align: 'center', maxWidth: hsnCols[3]!.w });
+            text(formatAmt3(g.igstAmount), hsnCols[4]!.x, hy - 10, { size: 8, align: 'center', maxWidth: hsnCols[4]!.w });
+          } else {
+            text(`${g.cgstRate}%`, hsnCols[2]!.x, hy - 10, { size: 8, align: 'center', maxWidth: hsnCols[2]!.w });
+            text(formatAmt3(g.cgstAmount), hsnCols[3]!.x, hy - 10, { size: 8, align: 'center', maxWidth: hsnCols[3]!.w });
+            text(`${g.sgstRate}%`, hsnCols[4]!.x, hy - 10, { size: 8, align: 'center', maxWidth: hsnCols[4]!.w });
+            text(formatAmt3(g.sgstAmount), hsnCols[5]!.x, hy - 10, { size: 8, align: 'center', maxWidth: hsnCols[5]!.w });
+            text(formatAmt3(g.cgstAmount + g.sgstAmount), hsnCols[lastCol]!.x, hy - 10, { size: 8, align: 'center', maxWidth: hsnCols[lastCol]!.w });
+          }
           hy -= HSN_ROW_H;
         }
         hline(hy, left, right);
         const totalTaxable = hsnGroups.reduce((s, g) => s + g.taxableValue, 0);
         const totalCgst = hsnGroups.reduce((s, g) => s + g.cgstAmount, 0);
         const totalSgst = hsnGroups.reduce((s, g) => s + g.sgstAmount, 0);
+        const totalIgst = hsnGroups.reduce((s, g) => s + g.igstAmount, 0);
         text('Total', hsnCols[0]!.x, hy - 10, { size: 8, font: bold, align: 'center', maxWidth: hsnCols[0]!.w });
-        text(formatRupees(totalTaxable), hsnCols[1]!.x, hy - 10, { size: 8, font: bold, align: 'center', maxWidth: hsnCols[1]!.w });
-        text(formatRupees(totalCgst), hsnCols[3]!.x, hy - 10, { size: 8, font: bold, align: 'center', maxWidth: hsnCols[3]!.w });
-        text(formatRupees(totalSgst), hsnCols[5]!.x, hy - 10, { size: 8, font: bold, align: 'center', maxWidth: hsnCols[5]!.w });
-        text(formatRupees(totalCgst + totalSgst), hsnCols[6]!.x, hy - 10, { size: 8, font: bold, align: 'center', maxWidth: hsnCols[6]!.w });
+        text(formatAmt3(totalTaxable), hsnCols[1]!.x, hy - 10, { size: 8, font: bold, align: 'center', maxWidth: hsnCols[1]!.w });
+        if (bill.isInterState) {
+          text(formatAmt3(totalIgst), hsnCols[3]!.x, hy - 10, { size: 8, font: bold, align: 'center', maxWidth: hsnCols[3]!.w });
+          text(formatAmt3(totalIgst), hsnCols[4]!.x, hy - 10, { size: 8, font: bold, align: 'center', maxWidth: hsnCols[4]!.w });
+        } else {
+          text(formatAmt3(totalCgst), hsnCols[3]!.x, hy - 10, { size: 8, font: bold, align: 'center', maxWidth: hsnCols[3]!.w });
+          text(formatAmt3(totalSgst), hsnCols[5]!.x, hy - 10, { size: 8, font: bold, align: 'center', maxWidth: hsnCols[5]!.w });
+          text(formatAmt3(totalCgst + totalSgst), hsnCols[lastCol]!.x, hy - 10, { size: 8, font: bold, align: 'center', maxWidth: hsnCols[lastCol]!.w });
+        }
         hy -= HSN_ROW_H;
         sy = hy;
         hline(sy, left, right);

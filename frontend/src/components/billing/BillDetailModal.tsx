@@ -162,6 +162,12 @@ export function BillDetailModal({ bill, settings, onClose, onEdit }: BillDetailM
 
             {/* Totals */}
             <div className="bg-slate-50 rounded-lg p-4 space-y-1.5">
+              {bill.paymentMode && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Payment Mode</span>
+                  <span className="font-medium">{bill.paymentMode}</span>
+                </div>
+              )}
               <div className="flex justify-between text-sm">
                 <span className="text-muted-foreground">Sub Total</span>
                 <span>{formatCurrency(bill.subTotal)}</span>

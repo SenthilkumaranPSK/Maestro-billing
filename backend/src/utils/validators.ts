@@ -134,6 +134,7 @@ export const createBillSchema = z.object({
   items: z.array(billItemSchema).min(1, 'At least one item required'),
   notes: z.string().max(2000, 'Notes too long').optional(),
   discountAmount: z.number().int().min(0).optional(),
+  paymentMode: z.enum(['CASH', 'UPI', 'CARD', 'CHEQUE']).optional(),
   // Rounding to the nearest rupee can never require more than 99 paise of
   // adjustment either way — bounding it catches a garbage/malicious value
   // (e.g. -999999) that would otherwise silently produce a wildly wrong
@@ -145,6 +146,7 @@ export const createBillSchema = z.object({
   // Arbitrary list of service dates, replacing the old from/to range.
   serviceDates: z.array(z.string().refine(isValidDateString, 'Invalid service date')).max(20, 'Too many service dates').optional(),
   gstInclusive: z.boolean().optional(),
+  isInterState: z.boolean().optional(),
   // MM/A4 "Tax Invoice" layout only — see the matching schema.prisma comment.
   vehicleNo: z.string().max(50, 'Vehicle No too long').optional(),
   despatchedThrough: z.string().max(100, 'Despatched Through too long').optional(),

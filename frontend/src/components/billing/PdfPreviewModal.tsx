@@ -1,4 +1,4 @@
-import { X, Printer, Download } from 'lucide-react';
+import { X, Printer, Download, Loader2 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
@@ -11,6 +11,13 @@ interface PdfPreviewModalProps {
   settings: Partial<Settings>;
   layout: BillLayout;
   onClose: () => void;
+  /**
+   * True when previewing unsaved form state (bill.id === 0, a draft built by
+   * lib/draftBill). Hides Print/Download so the operator can't physically
+   * print a thermal receipt or hand out a PDF for a bill that has no row in
+   * the database yet — Preview is look-only until the bill is actually saved.
+   */
+  readOnly?: boolean;
 }
 
 /**
@@ -20,14 +27,34 @@ interface PdfPreviewModalProps {
  * functions as Print/Download, never the print/download helpers themselves,
  * which have their own side effects (an OS print dialog or a file save).
  */
-export function PdfPreviewModal({ bill, settings, layout, onClose }: PdfPreviewModalProps) {
+export function PdfPreviewModal({ bill, settings, layout, onClose, readOnly = false }: PdfPreviewModalProps) {
   const { closing, requestClose } = useClosingTransition(onClose);
   const { toast } = useToast();
   const [url, setUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const urlRef = useRef<string | null>(null);
+  // One generated PDF per layout, kept for as long as this modal instance is
+  // open — so comparing Thermal → A4 → MM-A4 back and forth via LayoutToggle
+  // reuses what's already been built instead of silently regenerating every
+  // click. Keyed only by layout because `bill` itself is stable for the
+  // modal's lifetime (a saved Bill never mutates; a pre-save draft is
+  // memoized by the caller) — a genuine `bill` change below still wipes it.
+  const cacheRef = useRef<Map<BillLayout, string>>(new Map());
+  const billRef = useRef(bill);
 
   useEffect(() => {
+    if (billRef.current !== bill) {
+      cacheRef.current.forEach((cachedUrl) => URL.revokeObjectURL(cachedUrl));
+      cacheRef.current.clear();
+      billRef.current = bill;
+    }
+
+    const cached = cacheRef.current.get(layout);
+    if (cached) {
+      setUrl(cached);
+      setError(null);
+      return;
+    }
+
     let cancelled = false;
     setUrl(null);
     setError(null);
@@ -47,7 +74,7 @@ export function PdfPreviewModal({ bill, settings, layout, onClose }: PdfPreviewM
         if (cancelled) return;
         const blob = new Blob([bytes.buffer as ArrayBuffer], { type: 'application/pdf' });
         const objectUrl = URL.createObjectURL(blob);
-        urlRef.current = objectUrl;
+        cacheRef.current.set(layout, objectUrl);
         setUrl(objectUrl);
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err));
@@ -55,12 +82,17 @@ export function PdfPreviewModal({ bill, settings, layout, onClose }: PdfPreviewM
     })();
     return () => {
       cancelled = true;
-      if (urlRef.current) {
-        URL.revokeObjectURL(urlRef.current);
-        urlRef.current = null;
-      }
     };
   }, [bill, layout, settings]);
+
+  // Revoke every cached object URL once the modal itself closes — not on
+  // every layout switch, since the whole point of the cache is to survive those.
+  useEffect(() => {
+    return () => {
+      cacheRef.current.forEach((cachedUrl) => URL.revokeObjectURL(cachedUrl));
+      cacheRef.current.clear();
+    };
+  }, []);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -116,14 +148,25 @@ export function PdfPreviewModal({ bill, settings, layout, onClose }: PdfPreviewM
     >
       <div className={`bg-white rounded-xl shadow-soft-lg w-full ${widthClass} h-[90vh] flex flex-col duration-200 ${closing ? 'animate-out fade-out-0 zoom-out-95' : 'animate-in fade-in-0 zoom-in-95'}`}>
         <div className="flex items-center justify-between px-5 py-3 border-b shrink-0">
-          <h3 className="font-bold text-base">Preview — {bill.billNumber}</h3>
+          <div className="flex items-center gap-2">
+            <h3 className="font-bold text-base">Preview — {bill.billNumber}</h3>
+            {readOnly && (
+              <span className="text-[11px] font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5">
+                Unsaved draft
+              </span>
+            )}
+          </div>
           <div className="flex items-center space-x-2">
-            <Button variant="outline" size="sm" onClick={handleDownload}>
-              <Download className="h-4 w-4 mr-1" /> Download
-            </Button>
-            <Button variant="default" size="sm" onClick={handlePrint}>
-              <Printer className="h-4 w-4 mr-1" /> Print
-            </Button>
+            {!readOnly && (
+              <>
+                <Button variant="outline" size="sm" onClick={handleDownload}>
+                  <Download className="h-4 w-4 mr-1" /> Download
+                </Button>
+                <Button variant="default" size="sm" onClick={handlePrint}>
+                  <Printer className="h-4 w-4 mr-1" /> Print
+                </Button>
+              </>
+            )}
             <Button variant="ghost" size="icon" onClick={requestClose}>
               <X className="h-4 w-4" />
             </Button>
@@ -137,7 +180,10 @@ export function PdfPreviewModal({ bill, settings, layout, onClose }: PdfPreviewM
           ) : url ? (
             <iframe src={url} title={`${bill.billNumber} preview`} className="w-full h-full border-0" />
           ) : (
-            <div className="h-full flex items-center justify-center text-sm text-muted-foreground">Generating preview…</div>
+            <div className="h-full flex flex-col items-center justify-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="h-6 w-6 animate-spin" />
+              Generating preview…
+            </div>
           )}
         </div>
       </div>

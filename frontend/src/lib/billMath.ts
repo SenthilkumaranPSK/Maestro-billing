@@ -56,3 +56,21 @@ export function computeLineTotals(
 
   return { subTotalP, gstTotalP };
 }
+
+/**
+ * Splits a bill/item's single blended gstAmountP into CGST+SGST
+ * (intra-state) or IGST (inter-state) — mirrors the backend's
+ * utils/taxSplit.ts splitTax exactly. The total tax amount never changes
+ * between the two; only how it's split/labeled does, since gstAmountP is
+ * already computed above from the full GST rate regardless of isInterState.
+ */
+export function splitTaxP(
+  gstAmountP: number,
+  isInterState: boolean,
+): { cgstP: number; sgstP: number; igstP: number } {
+  if (isInterState) {
+    return { cgstP: 0, sgstP: 0, igstP: gstAmountP };
+  }
+  const half = Math.floor(gstAmountP / 2);
+  return { cgstP: half, sgstP: gstAmountP - half, igstP: 0 };
+}

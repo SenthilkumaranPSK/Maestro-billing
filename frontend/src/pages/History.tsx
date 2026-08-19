@@ -205,7 +205,7 @@ export default function HistoryPage() {
             <table className="w-full">
               <thead>
                 <tr className="border-b bg-slate-50/80">
-                  {['Bill No', 'Date', 'Customer', 'Items', 'Amount', 'Status', 'Actions'].map((h) => (
+                  {['Bill No', 'Date', 'Customer', 'Items', 'Amount', 'Payment', 'Status', 'Actions'].map((h) => (
                     <th key={h} className="text-left py-2.5 px-4 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{h}</th>
                   ))}
                 </tr>
@@ -213,12 +213,12 @@ export default function HistoryPage() {
               <tbody className="stagger-children">
                 {isLoading && (
                   <tr>
-                    <td colSpan={7} className="py-10 text-center text-muted-foreground text-sm">Loading…</td>
+                    <td colSpan={8} className="py-10 text-center text-muted-foreground text-sm">Loading…</td>
                   </tr>
                 )}
                 {!isLoading && data?.data.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="py-10 text-center text-muted-foreground text-sm">No bills found</td>
+                    <td colSpan={8} className="py-10 text-center text-muted-foreground text-sm">No bills found</td>
                   </tr>
                 )}
                 {data?.data.map((bill) => (
@@ -239,6 +239,7 @@ export default function HistoryPage() {
                     </td>
                     <td className="py-3 px-4 text-sm text-muted-foreground">{bill.items?.length ?? 0} items</td>
                     <td className="py-3 px-4 text-sm font-semibold tabular-nums">{formatCurrency(bill.grandTotal)}</td>
+                    <td className="py-3 px-4 text-sm text-muted-foreground">{bill.paymentMode ?? '—'}</td>
                     <td className="py-3 px-4">
                       <Badge variant={statusVariant[bill.status as BillStatus] ?? 'secondary'}>
                         {bill.status}

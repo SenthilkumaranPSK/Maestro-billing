@@ -1,5 +1,5 @@
 import { api } from './client';
-import type { Bill, ApiResponse, PaginatedResponse } from '@/types';
+import type { Bill, ApiResponse, PaginatedResponse, PaymentMode } from '@/types';
 
 export interface CreateBillPayload {
   customerId?: number;
@@ -20,12 +20,17 @@ export interface CreateBillPayload {
   notes?: string;
   discountAmount?: number; // paise
   roundOffAmount?: number; // paise
+  // Shown in the bill form and history/detail views only — never on the
+  // printed receipt/invoice. See backend schema.prisma Bill.paymentMode.
+  paymentMode?: PaymentMode;
   // A4 "Service Bill" layout only — see backend schema.prisma Bill model.
   serviceDescription?: string;
   serviceFrom?: string;
   serviceTo?: string;
   serviceDates?: string[];
   gstInclusive?: boolean;
+  // See backend schema.prisma Bill.isInterState.
+  isInterState?: boolean;
   // MM/A4 "Tax Invoice" layout only — see backend schema.prisma Bill model.
   vehicleNo?: string;
   despatchedThrough?: string;

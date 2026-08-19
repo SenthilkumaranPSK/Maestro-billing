@@ -5,6 +5,20 @@
     <link rel="icon" type="image/png" href="/Logo-receipt.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Maestro Billing</title>
+    <script>
+      // Applies a saved dark-mode preference before first paint, so it
+      // doesn't flash light for a frame while React boots — kept in sync
+      // afterwards by hooks/use-theme.ts.
+      (function () {
+        try {
+          if (localStorage.getItem('maestro-billing:theme') === 'dark') {
+            document.documentElement.classList.add('dark');
+          }
+        } catch (e) {
+          // localStorage unavailable — just start light
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

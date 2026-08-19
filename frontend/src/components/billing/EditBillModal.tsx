@@ -10,13 +10,14 @@ import { LineItemRow } from '@/components/billing/LineItemRow';
 import { LayoutToggle, guessBillLayout, type BillLayout } from '@/components/billing/LayoutToggle';
 import { GstModeToggle } from '@/components/billing/GstModeToggle';
 import { ServiceDescriptionInput } from '@/components/billing/ServiceDescriptionInput';
+import { PaymentModeSelect } from '@/components/billing/PaymentModeSelect';
 import { billsApi } from '@/api/bills';
 import { customersApi } from '@/api/customers';
 import { useToast } from '@/hooks/use-toast';
 import { useClosingTransition } from '@/hooks/use-closing-transition';
-import { computeLineTotals } from '@/lib/billMath';
+import { computeLineTotals, splitTaxP } from '@/lib/billMath';
 import { newId } from '@/lib/utils';
-import type { Bill, BillItemForm } from '@/types';
+import type { Bill, BillItemForm, PaymentMode } from '@/types';
 import { paisaToRupee, rupeeToPaisa, formatCurrency } from '@/types';
 
 const newEmptyItem = (): BillItemForm => ({
@@ -69,6 +70,8 @@ export function EditBillModal({ bill, onClose, onSaved }: EditBillModalProps) {
   // of fields this bill already has data in — see guessBillLayout.
   const [layout, setLayout] = useState<BillLayout>(() => guessBillLayout(bill));
   const [gstInclusive, setGstInclusive] = useState(bill.gstInclusive);
+  const [isInterState, setIsInterState] = useState(bill.isInterState);
+  const [paymentMode, setPaymentMode] = useState<PaymentMode | ''>(bill.paymentMode ?? '');
   const [serviceDescription, setServiceDescription] = useState(bill.serviceDescription ?? '');
   // Prefer the new serviceDates list; fall back to the old from/to range for
   // a bill saved before this field existed, so editing it doesn't lose data.
@@ -95,6 +98,7 @@ export function EditBillModal({ bill, onClose, onSaved }: EditBillModalProps) {
   const { subTotalP, gstTotalP } = computeLineTotals(countedItems, gstInclusive);
   const _activeRates = [...new Set(countedItems.filter(i => i.gstRate > 0).map(i => i.gstRate))];
   const gstHalfRate  = _activeRates.length === 1 ? _activeRates[0] / 2 : null;
+  const gstFullRate  = _activeRates.length === 1 ? _activeRates[0] : null;
   const rawTotalP   = subTotalP + gstTotalP - discountP;
   const roundOffP   = Math.round(rawTotalP / 100) * 100 - rawTotalP;
   const grandTotalP = rawTotalP + roundOffP;
@@ -164,6 +168,7 @@ export function EditBillModal({ bill, onClose, onSaved }: EditBillModalProps) {
       notes: bill.notes,
       discountAmount: bill.discountAmount,
       roundOffAmount: roundOffP,
+      paymentMode: paymentMode || undefined,
       // Not gated on `layout` — that toggle only controls which fields are
       // shown/editable in the form. Submitting must reflect whatever's
       // actually in state, or switching back to Thermal right before Save
@@ -171,6 +176,7 @@ export function EditBillModal({ bill, onClose, onSaved }: EditBillModalProps) {
       serviceDescription: serviceDescription.trim() || undefined,
       serviceDates: filledServiceDates.length ? filledServiceDates : undefined,
       gstInclusive,
+      isInterState,
       vehicleNo: vehicleNo.trim() || undefined,
       despatchedThrough: despatchedThrough.trim() || undefined,
       destination: destination.trim() || undefined,
@@ -208,15 +214,19 @@ export function EditBillModal({ bill, onClose, onSaved }: EditBillModalProps) {
           {/* Customer + Date */}
           <Card className="border-brand-500/30 bg-brand-50/60">
             <CardContent className="pt-4 pb-4 grid grid-cols-12 gap-4 items-end">
-              <div className="col-span-8">
+              <div className="col-span-6">
                 <Label className="text-xs text-muted-foreground mb-1.5 block">Customer</Label>
                 <CustomerBar value={customer} onChange={setCustomer} showAddress={layout === 'a4' || layout === 'mm_a4'} />
               </div>
-              <div className="col-span-4">
+              <div className="col-span-3">
                 <Label className="text-xs text-muted-foreground mb-1.5 block">Date</Label>
                 <p className="h-10 flex items-center px-3 rounded-lg border border-slate-200 bg-slate-50 text-sm font-medium text-slate-700">
                   {new Date(bill.billDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
                 </p>
+              </div>
+              <div className="col-span-3">
+                <Label className="text-xs text-muted-foreground mb-1.5 block">Payment Mode</Label>
+                <PaymentModeSelect value={paymentMode} onChange={setPaymentMode} />
               </div>
             </CardContent>
           </Card>
@@ -279,7 +289,7 @@ export function EditBillModal({ bill, onClose, onSaved }: EditBillModalProps) {
             <Card className="border-slate-200 animate-in fade-in slide-in-from-top-1 duration-200">
               <CardContent className="pt-3 pb-3 space-y-3">
                 <p className="text-xs font-medium text-slate-500 uppercase tracking-wide">
-                  Tax Invoice Details <span className="normal-case font-normal text-muted-foreground">(optional — MM/A4 only)</span>
+                  Tax Invoice Details <span className="normal-case font-normal text-muted-foreground">(optional — Tax Invoice layout only)</span>
                 </p>
                 <div className="grid grid-cols-12 gap-3">
                   <div className="col-span-3">
@@ -349,6 +359,14 @@ export function EditBillModal({ bill, onClose, onSaved }: EditBillModalProps) {
                   <CardTitle className="text-sm">Bill Items</CardTitle>
                   <div className="flex items-center gap-2">
                     <GstModeToggle value={gstInclusive} onChange={setGstInclusive} />
+                    <label className="flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer" title="Apply IGST instead of CGST+SGST">
+                      <input
+                        type="checkbox"
+                        checked={isInterState}
+                        onChange={(e) => setIsInterState(e.target.checked)}
+                      />
+                      Inter-state (IGST)
+                    </label>
                     <Button
                       variant="outline"
                       size="sm"
@@ -410,14 +428,23 @@ export function EditBillModal({ bill, onClose, onSaved }: EditBillModalProps) {
                     <span className="text-muted-foreground">Sub Total</span>
                     <span className="font-medium tabular-nums">₹{paisaToRupee(subTotalP).toFixed(2)}</span>
                   </div>
-                  <div className="flex justify-between text-sm">
-                    <span className="text-muted-foreground">{gstHalfRate !== null ? `CGST (${gstHalfRate}%)` : 'CGST'}</span>
-                    <span className="font-medium tabular-nums">₹{paisaToRupee(gstTotalP / 2).toFixed(2)}</span>
-                  </div>
-                  <div className="flex justify-between text-sm">
-                    <span className="text-muted-foreground">{gstHalfRate !== null ? `SGST (${gstHalfRate}%)` : 'SGST'}</span>
-                    <span className="font-medium tabular-nums">₹{paisaToRupee(gstTotalP / 2).toFixed(2)}</span>
-                  </div>
+                  {isInterState ? (
+                    <div className="flex justify-between text-sm">
+                      <span className="text-muted-foreground">{gstFullRate !== null ? `IGST (${gstFullRate}%)` : 'IGST'}</span>
+                      <span className="font-medium tabular-nums">₹{paisaToRupee(gstTotalP).toFixed(2)}</span>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="flex justify-between text-sm">
+                        <span className="text-muted-foreground">{gstHalfRate !== null ? `CGST (${gstHalfRate}%)` : 'CGST'}</span>
+                        <span className="font-medium tabular-nums">₹{paisaToRupee(splitTaxP(gstTotalP, false).cgstP).toFixed(2)}</span>
+                      </div>
+                      <div className="flex justify-between text-sm">
+                        <span className="text-muted-foreground">{gstHalfRate !== null ? `SGST (${gstHalfRate}%)` : 'SGST'}</span>
+                        <span className="font-medium tabular-nums">₹{paisaToRupee(splitTaxP(gstTotalP, false).sgstP).toFixed(2)}</span>
+                      </div>
+                    </>
+                  )}
                   {discountP > 0 && (
                     <div className="flex justify-between text-sm">
                       <span className="text-muted-foreground">Discount</span>

@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { PrismaClient } from '@prisma/client';
+import { splitTax } from '../utils/taxSplit';
 
 export class ReportError extends Error {
   constructor(message: string) {
@@ -15,6 +16,7 @@ interface RateRow {
   taxableValue: number; // paise
   cgst: number; // paise
   sgst: number; // paise
+  igst: number; // paise
 }
 
 function paisaToRupee(paise: number): number {
@@ -114,19 +116,20 @@ export class ReportService {
     const byRate = new Map<number, RateRow>();
     for (const bill of bills) {
       for (const item of bill.items) {
-        const row = byRate.get(item.gstRate) ?? { rate: item.gstRate, taxableValue: 0, cgst: 0, sgst: 0 };
+        const row = byRate.get(item.gstRate) ?? { rate: item.gstRate, taxableValue: 0, cgst: 0, sgst: 0, igst: 0 };
         // Not qty*unitPrice — for a GST-inclusive item, unitPrice is the
         // all-in (tax-included) price, so that product overstates the
         // taxable base by the tax amount itself. totalAmount-gstAmount is
         // the actual taxable value in both inclusive and exclusive modes,
         // since that's how BillService already computes/stores each item.
         row.taxableValue += item.totalAmount - item.gstAmount;
-        // Integer paise only — splitting an odd gstAmount in half must not
-        // produce a .5 paise fraction (money() would then silently round it
-        // away, making CGST+SGST not add back up to the printed total tax).
-        const half = Math.floor(item.gstAmount / 2);
-        row.cgst += half;
-        row.sgst += item.gstAmount - half;
+        // Same rate can have both intra-state and inter-state bills within
+        // one month, so a rate row accumulates all three columns — whichever
+        // pair is nonzero for a given bill depends on its own isInterState.
+        const { cgst, sgst, igst } = splitTax(item.gstAmount, bill.isInterState);
+        row.cgst += cgst;
+        row.sgst += sgst;
+        row.igst += igst;
         byRate.set(item.gstRate, row);
       }
     }
@@ -134,6 +137,7 @@ export class ReportService {
     const totalTaxable = rows.reduce((s, r) => s + r.taxableValue, 0);
     const totalCgst = rows.reduce((s, r) => s + r.cgst, 0);
     const totalSgst = rows.reduce((s, r) => s + r.sgst, 0);
+    const totalIgst = rows.reduce((s, r) => s + r.igst, 0);
     const totalDiscount = bills.reduce((s, b) => s + b.discountAmount, 0);
     const totalInvoiced = bills.reduce((s, b) => s + b.grandTotal, 0);
     const displayMonth = from.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
@@ -167,11 +171,12 @@ export class ReportService {
 
     // Table
     const cols = [
-      { key: 'rate', label: 'GST Rate', x: marginX, w: 90 },
-      { key: 'taxable', label: 'Taxable Value', x: marginX + 90, w: 120 },
-      { key: 'cgst', label: 'CGST', x: marginX + 210, w: 105 },
-      { key: 'sgst', label: 'SGST', x: marginX + 315, w: 105 },
-      { key: 'total', label: 'Total Tax', x: marginX + 420, w: 105 },
+      { key: 'rate', label: 'GST Rate', x: marginX, w: 65 },
+      { key: 'taxable', label: 'Taxable Value', x: marginX + 65, w: 100 },
+      { key: 'cgst', label: 'CGST', x: marginX + 165, w: 78 },
+      { key: 'sgst', label: 'SGST', x: marginX + 243, w: 78 },
+      { key: 'igst', label: 'IGST', x: marginX + 321, w: 78 },
+      { key: 'total', label: 'Total Tax', x: marginX + 399, w: 100 },
     ];
     const rowH = 20;
     page.drawRectangle({ x: marginX, y: y - 6, width: 595.28 - marginX * 2, height: rowH, color: rgb(0.96, 0.96, 0.94) });
@@ -181,7 +186,7 @@ export class ReportService {
     y -= rowH;
 
     const drawRow = (
-      cells: [string, string, string, string, string],
+      cells: [string, string, string, string, string, string],
       opts: { boldRow?: boolean } = {},
     ) => {
       const rowFont = opts.boldRow ? bold : font;
@@ -201,7 +206,8 @@ export class ReportService {
           money(r.taxableValue),
           money(r.cgst),
           money(r.sgst),
-          money(r.cgst + r.sgst),
+          money(r.igst),
+          money(r.cgst + r.sgst + r.igst),
         ]);
       }
     }
@@ -214,7 +220,7 @@ export class ReportService {
     });
     y -= 4;
     drawRow(
-      ['TOTAL', money(totalTaxable), money(totalCgst), money(totalSgst), money(totalCgst + totalSgst)],
+      ['TOTAL', money(totalTaxable), money(totalCgst), money(totalSgst), money(totalIgst), money(totalCgst + totalSgst + totalIgst)],
       { boldRow: true },
     );
 
