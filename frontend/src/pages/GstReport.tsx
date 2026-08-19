@@ -161,7 +161,10 @@ export default function GstReportPage() {
 
   const handleExportDetailedCsv = () => {
     const lines: string[] = [];
-    lines.push('S.No,Bill No,Date,Name,GSTIN,HSN,Taxable Value (Before TAX),IGST,CGST,SGST,NET Value');
+    // Header text matches the client's own template exactly, "SGCT" typo
+    // included — the underlying field is still SGST (sgstAmount) throughout
+    // the app; only this displayed column label differs.
+    lines.push('S.No,Bill No,Date,Name,GSTIN,HSN,Taxable Value (Before TAX),IGST,CGST,SGCT,NET Value');
     detailRows.forEach(({ bill, group: g }, i) => {
       const netValue = g.taxableValue + g.cgstAmount + g.sgstAmount + g.igstAmount;
       lines.push(
