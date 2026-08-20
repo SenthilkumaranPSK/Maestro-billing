@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { X, Save, Plus } from 'lucide-react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -12,7 +12,7 @@ import { GstModeToggle } from '@/components/billing/GstModeToggle';
 import { ServiceDescriptionInput } from '@/components/billing/ServiceDescriptionInput';
 import { PaymentModeSelect } from '@/components/billing/PaymentModeSelect';
 import { BilledBySelect } from '@/components/billing/BilledBySelect';
-import { STAFF_LIST } from '@/lib/staff';
+import { staffApi } from '@/api/staff';
 import { billsApi } from '@/api/bills';
 import { customersApi } from '@/api/customers';
 import { useToast } from '@/hooks/use-toast';
@@ -41,6 +41,10 @@ export function EditBillModal({ bill, onClose, onSaved }: EditBillModalProps) {
   const { toast } = useToast();
   const qc = useQueryClient();
   const { closing, requestClose } = useClosingTransition(onClose);
+  const { data: staff } = useQuery({
+    queryKey: ['staff'],
+    queryFn: () => staffApi.list(),
+  });
 
   const [customer, setCustomer] = useState<CustomerInfo>({
     id: bill.customer?.id,
@@ -199,7 +203,7 @@ export function EditBillModal({ bill, onClose, onSaved }: EditBillModalProps) {
       // billedById is already guaranteed a number here — the empty-string
       // ('') case returned early above.
       billedById,
-      billedByName: STAFF_LIST.find((s) => s.id === billedById)?.name,
+      billedByName: staff?.find((s) => s.id === billedById)?.name,
     });
   };
 

@@ -13,7 +13,7 @@ import { GstModeToggle } from '@/components/billing/GstModeToggle';
 import { ServiceDescriptionInput } from '@/components/billing/ServiceDescriptionInput';
 import { PaymentModeSelect } from '@/components/billing/PaymentModeSelect';
 import { BilledBySelect } from '@/components/billing/BilledBySelect';
-import { STAFF_LIST } from '@/lib/staff';
+import { staffApi } from '@/api/staff';
 import { billsApi } from '@/api/bills';
 import { settingsApi } from '@/api/settings';
 import { customersApi } from '@/api/customers';
@@ -158,6 +158,10 @@ export default function BillingPage() {
     queryKey: ['settings'],
     queryFn: settingsApi.get,
   });
+  const { data: staff } = useQuery({
+    queryKey: ['staff'],
+    queryFn: () => staffApi.list(),
+  });
   // Settings → WhatsApp Integration → "Show WhatsApp option on the New Bill
   // screen". Missing (older installs) or anything but the literal string
   // 'false' means show — must default to today's behaviour on upgrade.
@@ -208,9 +212,9 @@ export default function BillingPage() {
         roundOffP,
         serviceDescription,
         serviceDates: serviceDates.filter(Boolean),
-        billedByName: STAFF_LIST.find((s) => s.id === billedById)?.name,
+        billedByName: staff?.find((s) => s.id === billedById)?.name,
       }),
-    [nextNumber, items, gstInclusive, isInterState, customer, roundOffP, serviceDescription, serviceDates, billedById],
+    [nextNumber, items, gstInclusive, isInterState, customer, roundOffP, serviceDescription, serviceDates, billedById, staff],
   );
 
   const createBillMutation = useMutation({
@@ -338,7 +342,7 @@ export default function BillingPage() {
       // billedById is already guaranteed a number here — the empty-string
       // ('') case returned early above.
       billedById,
-      billedByName: STAFF_LIST.find((s) => s.id === billedById)?.name,
+      billedByName: staff?.find((s) => s.id === billedById)?.name,
     });
   };
 

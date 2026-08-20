@@ -14,5 +14,11 @@ export const productsApi = {
   update: (id: number, data: Partial<Product>) =>
     api.put<ApiResponse<Product>>(`/products/${id}`, data).then((r) => r.data.data),
 
+  // Reorders the FULL active-product id list at once — the route reassigns
+  // sortOrder = array index for each, so a caller always sends the whole
+  // desired order, not a per-row move.
+  reorder: (ids: number[]) =>
+    api.put<ApiResponse<Product[]>>('/products/reorder', { ids }).then((r) => r.data.data),
+
   delete: (id: number) => api.delete(`/products/${id}`),
 };

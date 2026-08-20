@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Plus, Pencil, Trash2 } from 'lucide-react';
+import { Plus, Pencil, Trash2, ArrowUpDown, ChevronUp, ChevronDown, Check } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -20,6 +20,9 @@ export default function ServicesPage() {
   const [editing, setEditing] = useState<Partial<Service> | null>(null);
   const [isNew, setIsNew] = useState(false);
   const [showInactive, setShowInactive] = useState(false);
+  // Rearrange mode reorders the FULL active list, so it forces search off
+  // and inactive-hidden while on — see Products.tsx for the same reasoning.
+  const [rearranging, setRearranging] = useState(false);
 
   const { data: services, isLoading } = useQuery({
     queryKey: ['services', search, showInactive],
@@ -40,6 +43,29 @@ export default function ServicesPage() {
     mutationFn: servicesApi.delete,
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['services'] }); toast({ title: 'Service deactivated' }); },
   });
+
+  const reorderMutation = useMutation({
+    mutationFn: (ids: number[]) => servicesApi.reorder(ids),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['services'] }),
+    onError: (err: Error) => toast({ title: 'Could not reorder', description: err.message, variant: 'destructive' }),
+  });
+
+  const moveService = (index: number, direction: -1 | 1) => {
+    if (!services) return;
+    const target = index + direction;
+    if (target < 0 || target >= services.length) return;
+    const ids = services.map((s) => s.id);
+    [ids[index], ids[target]] = [ids[target]!, ids[index]!];
+    reorderMutation.mutate(ids);
+  };
+
+  const toggleRearranging = () => {
+    if (!rearranging) {
+      setSearch('');
+      setShowInactive(false);
+    }
+    setRearranging((r) => !r);
+  };
 
   const handleSave = () => {
     if (!editing?.name?.trim()) { toast({ title: 'Name is required', variant: 'destructive' }); return; }
@@ -63,17 +89,24 @@ export default function ServicesPage() {
 
       <Card>
         <CardHeader className="pb-3">
-          <div className="flex gap-3 items-center">
-            <Input
-              placeholder="Search services…"
-              className="w-72"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
-            <label className="flex items-center gap-2 text-sm cursor-pointer">
-              <input type="checkbox" checked={showInactive} onChange={(e) => setShowInactive(e.target.checked)} />
-              Show inactive
-            </label>
+          <div className="flex gap-3 items-center justify-between">
+            <div className="flex gap-3 items-center">
+              <Input
+                placeholder="Search services…"
+                className="w-72"
+                value={search}
+                disabled={rearranging}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+              <label className="flex items-center gap-2 text-sm cursor-pointer">
+                <input type="checkbox" checked={showInactive} disabled={rearranging} onChange={(e) => setShowInactive(e.target.checked)} />
+                Show inactive
+              </label>
+            </div>
+            <Button variant={rearranging ? 'default' : 'outline'} size="sm" onClick={toggleRearranging}>
+              {rearranging ? <Check className="h-3.5 w-3.5 mr-1.5" /> : <ArrowUpDown className="h-3.5 w-3.5 mr-1.5" />}
+              {rearranging ? 'Done' : 'Rearrange'}
+            </Button>
           </div>
         </CardHeader>
         <CardContent className="p-0">
@@ -88,26 +121,51 @@ export default function ServicesPage() {
             <tbody className="stagger-children">
               {isLoading && <tr><td colSpan={3} className="py-10 text-center text-sm text-muted-foreground">Loading…</td></tr>}
               {!isLoading && services?.length === 0 && <tr><td colSpan={3} className="py-10 text-center text-sm text-muted-foreground">No services found</td></tr>}
-              {services?.map((s) => (
+              {services?.map((s, i) => (
                 <tr key={s.id} className="border-b last:border-b-0 hover:bg-slate-50 transition-colors">
                   <td className="py-3 px-4 font-medium text-sm">{s.name}</td>
                   <td className="py-3 px-4">
                     <Badge variant={s.isActive ? 'success' : 'secondary'}>{s.isActive ? 'Active' : 'Inactive'}</Badge>
                   </td>
                   <td className="py-3 px-4">
-                    <div className="flex gap-1">
-                      <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => { setEditing(s); setIsNew(false); }}>
-                        <Pencil className="h-3.5 w-3.5" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7 text-destructive hover:text-destructive"
-                        onClick={() => { if (confirm('Deactivate this service?')) deleteMutation.mutate(s.id); }}
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
+                    {rearranging ? (
+                      <div className="flex gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7"
+                          title="Move up"
+                          disabled={i === 0 || reorderMutation.isPending}
+                          onClick={() => moveService(i, -1)}
+                        >
+                          <ChevronUp className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7"
+                          title="Move down"
+                          disabled={i === services.length - 1 || reorderMutation.isPending}
+                          onClick={() => moveService(i, 1)}
+                        >
+                          <ChevronDown className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    ) : (
+                      <div className="flex gap-1">
+                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => { setEditing(s); setIsNew(false); }}>
+                          <Pencil className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7 text-destructive hover:text-destructive"
+                          onClick={() => { if (confirm('Deactivate this service?')) deleteMutation.mutate(s.id); }}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    )}
                   </td>
                 </tr>
               ))}

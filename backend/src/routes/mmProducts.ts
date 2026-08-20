@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify';
-import { mmProductSchema, mmRestockSchema, parseId } from '../utils/validators';
+import { mmProductSchema, mmRestockSchema, reorderSchema, parseId } from '../utils/validators';
 import { requireAppHeader } from '../middleware/requireAppHeader';
 
 /** MM billing module's own product catalog — mirrors productRoutes exactly,
@@ -17,7 +17,7 @@ export async function mmProductRoutes(fastify: FastifyInstance) {
         ...(activeOnly ? { isActive: true } : {}),
         ...(search ? { name: { contains: search } } : {}),
       },
-      orderBy: { name: 'asc' },
+      orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
     });
     return reply.send({ success: true, data: products });
   });
@@ -34,8 +34,22 @@ export async function mmProductRoutes(fastify: FastifyInstance) {
 
   fastify.post('/', { preHandler: requireAppHeader }, async (request, reply) => {
     const body = mmProductSchema.parse(request.body);
-    const product = await prisma.mmProduct.create({ data: body });
+    const last = await prisma.mmProduct.findFirst({ orderBy: { sortOrder: 'desc' } });
+    const product = await prisma.mmProduct.create({ data: { ...body, sortOrder: (last?.sortOrder ?? -1) + 1 } });
     return reply.status(201).send({ success: true, data: product });
+  });
+
+  // Reassigns sortOrder = array index for every id in the submitted order.
+  fastify.put('/reorder', { preHandler: requireAppHeader }, async (request, reply) => {
+    const body = reorderSchema.parse(request.body);
+    await prisma.$transaction(
+      body.ids.map((id, index) => prisma.mmProduct.update({ where: { id }, data: { sortOrder: index } })),
+    );
+    const products = await prisma.mmProduct.findMany({
+      where: { isActive: true },
+      orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+    });
+    return reply.send({ success: true, data: products });
   });
 
   fastify.put('/:id', { preHandler: requireAppHeader }, async (request, reply) => {

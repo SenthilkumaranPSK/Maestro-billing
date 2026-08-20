@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Plus, Pencil, Trash2, PackagePlus, History, AlertTriangle } from 'lucide-react';
+import { Plus, Pencil, Trash2, PackagePlus, History, AlertTriangle, ArrowUpDown, ChevronUp, ChevronDown, Check } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -40,6 +40,9 @@ export default function MmProductsPage() {
   const [editing, setEditing] = useState<Partial<MmProduct> & { priceRupees?: number } | null>(null);
   const [isNew, setIsNew] = useState(false);
   const [showInactive, setShowInactive] = useState(false);
+  // Rearrange mode reorders the FULL active catalog, so it forces search off
+  // and inactive-hidden while on — see Products.tsx for the same reasoning.
+  const [rearranging, setRearranging] = useState(false);
 
   // Restock — a proper Goods Received entry (qty + supplier/cost/invoice/
   // notes), not just a number bump. Separate dialog from the full Edit form.
@@ -82,6 +85,29 @@ export default function MmProductsPage() {
     mutationFn: mmProductsApi.delete,
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['mm-products'] }); toast({ title: 'MM product deactivated' }); },
   });
+
+  const reorderMutation = useMutation({
+    mutationFn: (ids: number[]) => mmProductsApi.reorder(ids),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['mm-products'] }),
+    onError: (err: Error) => toast({ title: 'Could not reorder', description: err.message, variant: 'destructive' }),
+  });
+
+  const moveProduct = (index: number, direction: -1 | 1) => {
+    if (!products) return;
+    const target = index + direction;
+    if (target < 0 || target >= products.length) return;
+    const ids = products.map((p) => p.id);
+    [ids[index], ids[target]] = [ids[target]!, ids[index]!];
+    reorderMutation.mutate(ids);
+  };
+
+  const toggleRearranging = () => {
+    if (!rearranging) {
+      setSearch('');
+      setShowInactive(false);
+    }
+    setRearranging((r) => !r);
+  };
 
   const restockMutation = useMutation({
     mutationFn: ({ id, data }: { id: number; data: Parameters<typeof mmProductsApi.restock>[1] }) => mmProductsApi.restock(id, data),
@@ -147,17 +173,24 @@ export default function MmProductsPage() {
 
       <Card>
         <CardHeader className="pb-3">
-          <div className="flex gap-3 items-center">
-            <Input
-              placeholder="Search MM products…"
-              className="w-72"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
-            <label className="flex items-center gap-2 text-sm cursor-pointer">
-              <input type="checkbox" checked={showInactive} onChange={(e) => setShowInactive(e.target.checked)} />
-              Show inactive
-            </label>
+          <div className="flex gap-3 items-center justify-between">
+            <div className="flex gap-3 items-center">
+              <Input
+                placeholder="Search MM products…"
+                className="w-72"
+                value={search}
+                disabled={rearranging}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+              <label className="flex items-center gap-2 text-sm cursor-pointer">
+                <input type="checkbox" checked={showInactive} disabled={rearranging} onChange={(e) => setShowInactive(e.target.checked)} />
+                Show inactive
+              </label>
+            </div>
+            <Button variant={rearranging ? 'default' : 'outline'} size="sm" onClick={toggleRearranging}>
+              {rearranging ? <Check className="h-3.5 w-3.5 mr-1.5" /> : <ArrowUpDown className="h-3.5 w-3.5 mr-1.5" />}
+              {rearranging ? 'Done' : 'Rearrange'}
+            </Button>
           </div>
         </CardHeader>
         <CardContent className="p-0">
@@ -173,7 +206,7 @@ export default function MmProductsPage() {
               <tbody className="stagger-children">
                 {isLoading && <tr><td colSpan={8} className="py-10 text-center text-sm text-muted-foreground">Loading…</td></tr>}
                 {!isLoading && products?.length === 0 && <tr><td colSpan={8} className="py-10 text-center text-sm text-muted-foreground">No MM products found</td></tr>}
-                {products?.map((p) => (
+                {products?.map((p, i) => (
                   <tr key={p.id} className="border-b last:border-b-0 hover:bg-slate-50 transition-colors">
                     <td className="py-3 px-4">
                       <p className="font-medium text-sm">{p.name}</p>
@@ -200,26 +233,51 @@ export default function MmProductsPage() {
                       <Badge variant={p.isActive ? 'success' : 'secondary'}>{p.isActive ? 'Active' : 'Inactive'}</Badge>
                     </td>
                     <td className="py-3 px-4">
-                      <div className="flex gap-1">
-                        <Button variant="ghost" size="icon" className="h-7 w-7 text-emerald-600 hover:text-emerald-700" title="Restock" onClick={() => openRestock(p)}>
-                          <PackagePlus className="h-3.5 w-3.5" />
-                        </Button>
-                        <Button variant="ghost" size="icon" className="h-7 w-7" title="Stock history" onClick={() => setLedgerProduct(p)}>
-                          <History className="h-3.5 w-3.5" />
-                        </Button>
-                        <Button variant="ghost" size="icon" className="h-7 w-7" title="Edit" onClick={() => openEdit(p)}>
-                          <Pencil className="h-3.5 w-3.5" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-7 w-7 text-destructive hover:text-destructive"
-                          title="Deactivate"
-                          onClick={() => { if (confirm('Deactivate this MM product?')) deleteMutation.mutate(p.id); }}
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
+                      {rearranging ? (
+                        <div className="flex gap-1">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7"
+                            title="Move up"
+                            disabled={i === 0 || reorderMutation.isPending}
+                            onClick={() => moveProduct(i, -1)}
+                          >
+                            <ChevronUp className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7"
+                            title="Move down"
+                            disabled={i === products.length - 1 || reorderMutation.isPending}
+                            onClick={() => moveProduct(i, 1)}
+                          >
+                            <ChevronDown className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      ) : (
+                        <div className="flex gap-1">
+                          <Button variant="ghost" size="icon" className="h-7 w-7 text-emerald-600 hover:text-emerald-700" title="Restock" onClick={() => openRestock(p)}>
+                            <PackagePlus className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button variant="ghost" size="icon" className="h-7 w-7" title="Stock history" onClick={() => setLedgerProduct(p)}>
+                            <History className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button variant="ghost" size="icon" className="h-7 w-7" title="Edit" onClick={() => openEdit(p)}>
+                            <Pencil className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7 text-destructive hover:text-destructive"
+                            title="Deactivate"
+                            onClick={() => { if (confirm('Deactivate this MM product?')) deleteMutation.mutate(p.id); }}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      )}
                     </td>
                   </tr>
                 ))}

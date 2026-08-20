@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify';
-import { serviceSchema, parseId } from '../utils/validators';
+import { serviceSchema, reorderSchema, parseId } from '../utils/validators';
 import { requireAppHeader } from '../middleware/requireAppHeader';
 
 // Reusable catalog of service names (e.g. "Wedding Videography") that feeds
@@ -19,7 +19,7 @@ export async function serviceRoutes(fastify: FastifyInstance) {
         ...(activeOnly ? { isActive: true } : {}),
         ...(search ? { name: { contains: search } } : {}),
       },
-      orderBy: { name: 'asc' },
+      orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
     });
     return reply.send({ success: true, data: services });
   });
@@ -36,8 +36,22 @@ export async function serviceRoutes(fastify: FastifyInstance) {
 
   fastify.post('/', { preHandler: requireAppHeader }, async (request, reply) => {
     const body = serviceSchema.parse(request.body);
-    const service = await prisma.service.create({ data: body });
+    const last = await prisma.service.findFirst({ orderBy: { sortOrder: 'desc' } });
+    const service = await prisma.service.create({ data: { ...body, sortOrder: (last?.sortOrder ?? -1) + 1 } });
     return reply.status(201).send({ success: true, data: service });
+  });
+
+  // Reassigns sortOrder = array index for every id in the submitted order.
+  fastify.put('/reorder', { preHandler: requireAppHeader }, async (request, reply) => {
+    const body = reorderSchema.parse(request.body);
+    await prisma.$transaction(
+      body.ids.map((id, index) => prisma.service.update({ where: { id }, data: { sortOrder: index } })),
+    );
+    const services = await prisma.service.findMany({
+      where: { isActive: true },
+      orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+    });
+    return reply.send({ success: true, data: services });
   });
 
   fastify.put('/:id', { preHandler: requireAppHeader }, async (request, reply) => {

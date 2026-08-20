@@ -105,6 +105,18 @@ export const serviceSchema = z.object({
   isActive: z.boolean().optional(),
 });
 
+export const staffSchema = z.object({
+  name: z.string().min(1, 'Staff name is required').max(100, 'Staff name too long'),
+});
+
+// Shared by every "Rearrange" endpoint (staff/products/mmProducts/services):
+// the caller submits the FULL active-list id order, not a per-row delta —
+// each route reassigns sortOrder = array index for every id given, so it can
+// never drift out of a clean 0..n-1 sequence.
+export const reorderSchema = z.object({
+  ids: z.array(z.number().int().positive()).min(1, 'At least one id required'),
+});
+
 export const billItemSchema = z.object({
   productId: z.number().int().positive().optional(),
   // MM billing module only — links a sold item back to its MmProduct so

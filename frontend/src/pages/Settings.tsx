@@ -1,5 +1,8 @@
 import { useState } from 'react';
-import { Smartphone, FileBarChart2, Percent, ChevronRight, Save, FolderCog, DatabaseBackup, Moon, Sun, Lock } from 'lucide-react';
+import {
+  Smartphone, FileBarChart2, Percent, ChevronRight, Save, FolderCog, DatabaseBackup, Moon, Sun, Lock,
+  Users, Plus, ChevronUp, ChevronDown, Trash2,
+} from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
@@ -8,6 +11,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { whatsappApi } from '@/api/whatsapp';
 import { backupsApi } from '@/api/backups';
 import { settingsApi } from '@/api/settings';
+import { staffApi } from '@/api/staff';
 import { useToast } from '@/hooks/use-toast';
 import { useTheme } from '@/hooks/use-theme';
 import { formatDateTime } from '@/lib/utils';
@@ -130,6 +134,72 @@ export default function SettingsPage() {
       return;
     }
     setPasswordMutation.mutate(passwordInput.trim());
+  };
+
+  // Staff list ("Billed By" on the bill form) — see api/staff.ts and backend
+  // schema.prisma Staff. Ordered by sortOrder, active only (deactivated staff
+  // just stop appearing here and in BilledBySelect; already-saved bills keep
+  // their billedByName regardless).
+  const { data: staffList } = useQuery({
+    queryKey: ['staff'],
+    queryFn: () => staffApi.list(),
+  });
+  const [newStaffName, setNewStaffName] = useState('');
+
+  const addStaffMutation = useMutation({
+    mutationFn: (name: string) => staffApi.create(name),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['staff'] });
+      setNewStaffName('');
+    },
+    onError: (err: Error) => {
+      toast({ title: 'Could not add staff', description: err.message, variant: 'destructive' });
+    },
+  });
+
+  const reorderStaffMutation = useMutation({
+    mutationFn: (ids: number[]) => staffApi.reorder(ids),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['staff'] });
+    },
+    onError: (err: Error) => {
+      toast({ title: 'Could not reorder staff', description: err.message, variant: 'destructive' });
+    },
+  });
+
+  const removeStaffMutation = useMutation({
+    mutationFn: (id: number) => staffApi.deactivate(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['staff'] });
+    },
+    onError: (err: Error) => {
+      toast({ title: 'Could not remove staff', description: err.message, variant: 'destructive' });
+    },
+  });
+
+  const handleAddStaff = () => {
+    if (!newStaffName.trim()) {
+      toast({ title: 'Enter a name', variant: 'destructive' });
+      return;
+    }
+    addStaffMutation.mutate(newStaffName.trim());
+  };
+
+  // Swaps the row at `index` with its neighbour, then submits the FULL
+  // resulting id order — staffApi.reorder always reassigns sortOrder from
+  // the whole list it's given, not a per-row delta.
+  const moveStaff = (index: number, direction: -1 | 1) => {
+    if (!staffList) return;
+    const target = index + direction;
+    if (target < 0 || target >= staffList.length) return;
+    const ids = staffList.map((s) => s.id);
+    [ids[index], ids[target]] = [ids[target]!, ids[index]!];
+    reorderStaffMutation.mutate(ids);
+  };
+
+  const handleRemoveStaff = (name: string, id: number) => {
+    const ok = confirm(`Remove "${name}" from the Billed By list?\n\nBills already billed by them keep showing their name — this only affects new bills.`);
+    if (ok) removeStaffMutation.mutate(id);
   };
 
   return (
@@ -311,6 +381,78 @@ export default function SettingsPage() {
                     >
                       <Save className="h-3.5 w-3.5 mr-1.5" />
                       Save a Copy
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <Users className="h-4 w-4" />
+            Staff
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-xs text-muted-foreground">
+            Who shows up in "Billed By" on the bill form, in this order. Removing someone here
+            doesn't change bills they already billed — those keep their name.
+          </p>
+
+          <div className="flex items-center gap-2">
+            <Input
+              value={newStaffName}
+              onChange={(e) => setNewStaffName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') handleAddStaff(); }}
+              placeholder="New staff name"
+              className="h-8 text-sm"
+            />
+            <Button size="sm" onClick={handleAddStaff} disabled={addStaffMutation.isPending}>
+              <Plus className="h-3.5 w-3.5 mr-1" />
+              Add
+            </Button>
+          </div>
+
+          {(staffList?.length ?? 0) === 0 ? (
+            <p className="text-sm text-muted-foreground py-3 text-center">No staff yet.</p>
+          ) : (
+            <div className="border rounded-lg divide-y">
+              {staffList!.map((s, i) => (
+                <div key={s.id} className="flex items-center justify-between px-3 py-2">
+                  <span className="text-sm font-medium">{s.name}</span>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7"
+                      title="Move up"
+                      disabled={i === 0 || reorderStaffMutation.isPending}
+                      onClick={() => moveStaff(i, -1)}
+                    >
+                      <ChevronUp className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7"
+                      title="Move down"
+                      disabled={i === staffList!.length - 1 || reorderStaffMutation.isPending}
+                      onClick={() => moveStaff(i, 1)}
+                    >
+                      <ChevronDown className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-destructive hover:text-destructive"
+                      title="Remove"
+                      onClick={() => handleRemoveStaff(s.name, s.id)}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
                     </Button>
                   </div>
                 </div>

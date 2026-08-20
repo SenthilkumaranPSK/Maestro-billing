@@ -12,6 +12,7 @@ import { mmCustomerRoutes } from './routes/mmCustomers';
 import { productRoutes } from './routes/products';
 import { mmProductRoutes } from './routes/mmProducts';
 import { serviceRoutes } from './routes/services';
+import { staffRoutes } from './routes/staff';
 import { billRoutes } from './routes/bills';
 import { settingsRoutes } from './routes/settings';
 import { whatsappRoutes } from './routes/whatsapp';
@@ -113,6 +114,7 @@ async function main() {
   await app.register(productRoutes,  { prefix: '/api/v1/products'  });
   await app.register(mmProductRoutes, { prefix: '/api/v1/mm-products' });
   await app.register(serviceRoutes,  { prefix: '/api/v1/services'  });
+  await app.register(staffRoutes,    { prefix: '/api/v1/staff'     });
   await app.register(billRoutes,     { prefix: '/api/v1/bills'     });
   await app.register(settingsRoutes, { prefix: '/api/v1/settings'  });
   await app.register(whatsappRoutes, { prefix: '/api/v1/whatsapp'  });

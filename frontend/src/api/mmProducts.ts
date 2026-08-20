@@ -16,6 +16,12 @@ export const mmProductsApi = {
   update: (id: number, data: Partial<MmProduct>) =>
     api.put<ApiResponse<MmProduct>>(`/mm-products/${id}`, data).then((r) => r.data.data),
 
+  // Reorders the FULL active-product id list at once — the route reassigns
+  // sortOrder = array index for each, so a caller always sends the whole
+  // desired order, not a per-row move.
+  reorder: (ids: number[]) =>
+    api.put<ApiResponse<MmProduct[]>>('/mm-products/reorder', { ids }).then((r) => r.data.data),
+
   delete: (id: number) => api.delete(`/mm-products/${id}`),
 
   // Manual restock — records a PURCHASE ledger entry with supplier/cost/

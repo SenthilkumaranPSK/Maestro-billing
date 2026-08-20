@@ -72,6 +72,12 @@ model Product {
   unitPrice   Int       @map("unit_price")  // in paise (integer cents)
   gstRate     Float     @default(0) @map("gst_rate") // e.g. 18.00 for 18%
   hsnSac      String?   @map("hsn_sac") // HSN (goods) / SAC (services) code — printed on the A4 invoice layout
+  // Manual display order (Products page → Rearrange), same convention as
+  // Staff.sortOrder — the whole active list is reassigned 0..n-1 on every
+  // reorder, never per-row deltas. Existing rows were backfilled to their
+  // prior alphabetical order when this column was introduced, so upgrading
+  // doesn't visibly reshuffle anyone's catalog until they actually reorder.
+  sortOrder   Int       @default(0) @map("sort_order")
   isActive    Boolean   @default(true) @map("is_active")
   createdAt   DateTime  @default(now()) @map("created_at")
   updatedAt   DateTime  @updatedAt @map("updated_at")
@@ -102,6 +108,10 @@ model MmProduct {
   // default) means "no alert configured" — the low-stock badge only shows
   // once a studio actually sets a real threshold for a product.
   reorderLevel Float    @default(0) @map("reorder_level")
+  // Manual display/catalog order (MM Products page → Rearrange) — unrelated
+  // to reorderLevel above (that's a stock-restock threshold). Same
+  // convention as Staff.sortOrder/Product.sortOrder.
+  sortOrder   Int       @default(0) @map("sort_order")
   isActive    Boolean   @default(true) @map("is_active")
   createdAt   DateTime  @default(now()) @map("created_at")
   updatedAt   DateTime  @updatedAt @map("updated_at")
@@ -149,11 +159,34 @@ model MmStockMovement {
 model Service {
   id        Int      @id @default(autoincrement())
   name      String
+  // Manual display order (Services page → Rearrange) — same convention as
+  // Staff.sortOrder/Product.sortOrder.
+  sortOrder Int      @default(0) @map("sort_order")
   isActive  Boolean  @default(true) @map("is_active")
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
   @@map("services")
+}
+
+// ─── Staff (the "Billed By" list, managed in Settings) ────────────────────────
+// Replaces the earlier hardcoded frontend/src/lib/staff.ts constant. Real
+// table now, same soft-delete convention as Product/Service (isActive, never
+// hard-deleted) — a bill's Bill.billedById/billedByName is denormalized
+// (schema comment on Bill), so deactivating or renaming a staff member here
+// never changes what an already-saved bill shows or prints. sortOrder drives
+// both the Settings management list and the BilledBySelect dropdown order —
+// Settings → Staff reassigns it for the full active list on every reorder,
+// not per-row deltas, so it can never drift out of a clean 0..n-1 sequence.
+model Staff {
+  id        Int      @id @default(autoincrement())
+  name      String
+  sortOrder Int      @default(0) @map("sort_order")
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("staff")
 }
 
 // ─── Bills ────────────────────────────────────────────────────────────────────

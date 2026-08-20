@@ -39,6 +39,9 @@ export interface Product {
   unitPrice: number; // paise
   gstRate: number;
   hsnSac?: string;
+  // Manual display order (Products page → Rearrange). Not the price/GST
+  // "reorder" — see MmProduct.reorderLevel below for that unrelated concept.
+  sortOrder: number;
   isActive: boolean;
 }
 
@@ -55,6 +58,9 @@ export interface MmProduct {
   stockQty: number;
   // Minimum stock level before a reorder alert shows. 0 = no alert configured.
   reorderLevel: number;
+  // Manual display/catalog order (MM Products page → Rearrange) — unrelated
+  // to reorderLevel above (that's a stock-restock threshold).
+  sortOrder: number;
   isActive: boolean;
 }
 
@@ -80,6 +86,17 @@ export interface MmStockMovement {
 export interface Service {
   id: number;
   name: string;
+  // Manual display order (Services page → Rearrange).
+  sortOrder: number;
+  isActive: boolean;
+}
+
+// The "Billed By" list, managed in Settings — see lib/api/staff.ts and
+// backend schema.prisma Staff.
+export interface Staff {
+  id: number;
+  name: string;
+  sortOrder: number;
   isActive: boolean;
 }
 

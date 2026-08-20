@@ -1,5 +1,5 @@
 ﻿import { FastifyInstance } from 'fastify';
-import { productSchema, parseId } from '../utils/validators';
+import { productSchema, reorderSchema, parseId } from '../utils/validators';
 import { requireAppHeader } from '../middleware/requireAppHeader';
 
 export async function productRoutes(fastify: FastifyInstance) {
@@ -15,7 +15,10 @@ export async function productRoutes(fastify: FastifyInstance) {
         ...(activeOnly ? { isActive: true } : {}),
         ...(search ? { name: { contains: search } } : {}),
       },
-      orderBy: { name: 'asc' },
+      // sortOrder first (the operator's own Rearrange order), name only as a
+      // tiebreaker for rows that happen to share one (e.g. two rows created
+      // before this column existed, both backfilled the same way).
+      orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
     });
     return reply.send({ success: true, data: products });
   });
@@ -32,8 +35,24 @@ export async function productRoutes(fastify: FastifyInstance) {
 
   fastify.post('/', { preHandler: requireAppHeader }, async (request, reply) => {
     const body = productSchema.parse(request.body);
-    const product = await prisma.product.create({ data: body });
+    // New products go to the end of the list — one more than the current
+    // highest sortOrder, so Add never has to know Rearrange's own numbering.
+    const last = await prisma.product.findFirst({ orderBy: { sortOrder: 'desc' } });
+    const product = await prisma.product.create({ data: { ...body, sortOrder: (last?.sortOrder ?? -1) + 1 } });
     return reply.status(201).send({ success: true, data: product });
+  });
+
+  // Reassigns sortOrder = array index for every id in the submitted order.
+  fastify.put('/reorder', { preHandler: requireAppHeader }, async (request, reply) => {
+    const body = reorderSchema.parse(request.body);
+    await prisma.$transaction(
+      body.ids.map((id, index) => prisma.product.update({ where: { id }, data: { sortOrder: index } })),
+    );
+    const products = await prisma.product.findMany({
+      where: { isActive: true },
+      orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+    });
+    return reply.send({ success: true, data: products });
   });
 
   fastify.put('/:id', { preHandler: requireAppHeader }, async (request, reply) => {
