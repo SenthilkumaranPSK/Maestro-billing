@@ -10,6 +10,7 @@ import { CustomerBar, type CustomerInfo } from '@/components/billing/CustomerBar
 import { LineItemRow } from '@/components/billing/LineItemRow';
 import { PdfPreviewModal } from '@/components/billing/PdfPreviewModal';
 import { PaymentModeSelect } from '@/components/billing/PaymentModeSelect';
+import { GstModeToggle } from '@/components/billing/GstModeToggle';
 import { billsApi } from '@/api/bills';
 import { mmCustomersApi } from '@/api/mmCustomers';
 import { settingsApi } from '@/api/settings';
@@ -103,6 +104,10 @@ export default function MmBillingPage() {
   // exclusive, see schema.prisma Bill.isInterState. Auto-suggested below
   // from GSTIN state codes when the customer changes, but always overridable.
   const [isInterState, setIsInterState] = useState(false);
+  // Whole-bill GST pricing mode — same as the main Billing page. Exclusive
+  // (default): GST added on top of the entered price. Inclusive: extracted
+  // from within it. See schema.prisma Bill.gstInclusive.
+  const [gstInclusive, setGstInclusive] = useState(false);
   // Internal record only — never printed on the Tax Invoice (same rule as
   // paymentMode above). See schema.prisma Bill.notes.
   const [notes, setNotes] = useState('');
@@ -159,7 +164,7 @@ export default function MmBillingPage() {
   }, [customer.gstin, settings?.studio?.studio_gstin]);
 
   const countedItems = items.filter((i) => i.productName.trim() && i.qty > 0);
-  const { subTotalP, gstTotalP } = computeLineTotals(countedItems, false);
+  const { subTotalP, gstTotalP } = computeLineTotals(countedItems, gstInclusive);
   const gstRates = [...new Set(countedItems.filter((i) => i.gstRate > 0).map((i) => i.gstRate))];
   const gstHalfRate = gstRates.length === 1 ? gstRates[0]! / 2 : null;
   const gstFullRate = gstRates.length === 1 ? gstRates[0]! : null;
@@ -176,7 +181,7 @@ export default function MmBillingPage() {
       buildDraftBill({
         billNumber: nextNumber ?? 'DRAFT',
         items,
-        gstInclusive: false,
+        gstInclusive,
         isInterState,
         customer,
         roundOffP,
@@ -195,7 +200,7 @@ export default function MmBillingPage() {
         buyerGstin: buyerManualEntry ? buyerGstin : undefined,
       }),
     [
-      nextNumber, items, isInterState, customer, roundOffP, vehicleNo, despatchedThrough, destination,
+      nextNumber, items, gstInclusive, isInterState, customer, roundOffP, vehicleNo, despatchedThrough, destination,
       otherReference, ewayBillNo, irnNo, consigneeName, consigneeAddress, consigneeGstin,
       buyerManualEntry, buyerName, buyerAddress, buyerGstin,
     ],
@@ -297,6 +302,7 @@ export default function MmBillingPage() {
       roundOffAmount: roundOffP,
       paymentMode: paymentMode || undefined,
       notes: notes.trim() || undefined,
+      gstInclusive,
       isInterState,
       vehicleNo: vehicleNo.trim() || undefined,
       despatchedThrough: despatchedThrough.trim() || undefined,
@@ -362,6 +368,7 @@ export default function MmBillingPage() {
     setSavedBill(null);
     setSendOnWhatsApp(false);
     setPaymentMode('');
+    setGstInclusive(false);
     setNotes('');
     setVehicleNo('');
     setDespatchedThrough('');
@@ -562,6 +569,7 @@ export default function MmBillingPage() {
               <CardTitle className="text-sm">MM Bill Items</CardTitle>
               {!savedBill && (
                 <div className="flex items-center gap-2">
+                  <GstModeToggle value={gstInclusive} onChange={setGstInclusive} />
                   <label className="flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer" title="Apply IGST instead of CGST+SGST">
                     <input
                       type="checkbox"
@@ -604,7 +612,7 @@ export default function MmBillingPage() {
                         item={item}
                         catalog="mm"
                         showHsnSac
-                        gstInclusive={false}
+                        gstInclusive={gstInclusive}
                         disabled={!!savedBill}
                         onChange={(updated) =>
                           setItems((prev) => prev.map((i, j) => (j === idx ? updated : i)))

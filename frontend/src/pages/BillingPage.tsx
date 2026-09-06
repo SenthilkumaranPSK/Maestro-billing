@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { Plus, Printer, FileText, ScanEye, Save, RotateCcw, CalendarDays, X } from 'lucide-react';
+import { Plus, Printer, FileText, ScanEye, Save, RotateCcw, X } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -559,22 +559,14 @@ export default function BillingPage() {
         </div>
       </div>
 
-      {/* ── Customer + Date bar ─────────────────────────────── */}
+      {/* ── Customer bar ─────────────────────────────── */}
       <Card className="border-brand-500/30 bg-brand-50/60">
         <CardContent className="pt-4 pb-4 grid grid-cols-12 gap-4 items-end">
-          <div className="col-span-5">
+          <div className="col-span-6">
             <Label className="text-xs text-muted-foreground mb-1.5 block">Customer</Label>
             <CustomerBar value={customer} onChange={setCustomer} disabled={!!savedBill} showAddress={layout === 'a4'} />
           </div>
-          <div className="col-span-2">
-            <Label className="text-xs text-muted-foreground mb-1.5 flex items-center gap-1">
-              <CalendarDays className="w-3.5 h-3.5" /> Date
-            </Label>
-            <p className="h-10 flex items-center px-3 rounded-lg border border-slate-200 bg-slate-50 text-sm font-medium text-slate-700">
-              {new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
-            </p>
-          </div>
-          <div className="col-span-2">
+          <div className="col-span-3">
             <Label className="text-xs text-muted-foreground mb-1.5 block">Payment Mode</Label>
             <PaymentModeSelect value={paymentMode} onChange={setPaymentMode} disabled={!!savedBill} />
           </div>

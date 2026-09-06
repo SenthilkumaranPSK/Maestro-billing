@@ -16,6 +16,7 @@
     "db:seed": "npm run db:seed --workspace=backend"
   },
   "dependencies": {
-    "puppeteer-core": "24.38.0"
+    "puppeteer": "25.10.0",
+    "puppeteer-core": "^25.10.0"
   }
 }

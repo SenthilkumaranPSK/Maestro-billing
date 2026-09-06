@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { CustomerBar, type CustomerInfo } from '@/components/billing/CustomerBar';
 import { LineItemRow } from '@/components/billing/LineItemRow';
 import { PaymentModeSelect } from '@/components/billing/PaymentModeSelect';
+import { GstModeToggle } from '@/components/billing/GstModeToggle';
 import { billsApi } from '@/api/bills';
 import { mmCustomersApi } from '@/api/mmCustomers';
 import { useToast } from '@/hooks/use-toast';
@@ -68,6 +69,7 @@ export function MmEditBillModal({ bill, onClose, onSaved }: MmEditBillModalProps
   const [paymentMode, setPaymentMode] = useState<PaymentMode | ''>(bill.paymentMode ?? '');
   const [notes, setNotes] = useState(bill.notes ?? '');
   const [isInterState, setIsInterState] = useState(bill.isInterState);
+  const [gstInclusive, setGstInclusive] = useState(bill.gstInclusive);
   const [vehicleNo, setVehicleNo] = useState(bill.vehicleNo ?? '');
   const [despatchedThrough, setDespatchedThrough] = useState(bill.despatchedThrough ?? '');
   const [destination, setDestination] = useState(bill.destination ?? '');
@@ -83,7 +85,7 @@ export function MmEditBillModal({ bill, onClose, onSaved }: MmEditBillModalProps
   const [buyerGstin, setBuyerGstin] = useState(bill.buyerGstin ?? '');
 
   const countedItems = items.filter((i) => i.productName.trim() && i.qty > 0);
-  const { subTotalP, gstTotalP } = computeLineTotals(countedItems, false);
+  const { subTotalP, gstTotalP } = computeLineTotals(countedItems, gstInclusive);
   const _activeRates = [...new Set(countedItems.filter((i) => i.gstRate > 0).map((i) => i.gstRate))];
   const gstHalfRate = _activeRates.length === 1 ? _activeRates[0] / 2 : null;
   const gstFullRate = _activeRates.length === 1 ? _activeRates[0] : null;
@@ -154,6 +156,7 @@ export function MmEditBillModal({ bill, onClose, onSaved }: MmEditBillModalProps
       discountAmount: bill.discountAmount,
       roundOffAmount: roundOffP,
       paymentMode: paymentMode || undefined,
+      gstInclusive,
       isInterState,
       vehicleNo: vehicleNo.trim() || undefined,
       despatchedThrough: despatchedThrough.trim() || undefined,
@@ -298,6 +301,7 @@ export function MmEditBillModal({ bill, onClose, onSaved }: MmEditBillModalProps
                 <CardHeader className="pb-3 flex flex-row items-center justify-between">
                   <CardTitle className="text-sm">MM Bill Items</CardTitle>
                   <div className="flex items-center gap-2">
+                    <GstModeToggle value={gstInclusive} onChange={setGstInclusive} />
                     <label className="flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer" title="Apply IGST instead of CGST+SGST">
                       <input
                         type="checkbox"
@@ -338,7 +342,7 @@ export function MmEditBillModal({ bill, onClose, onSaved }: MmEditBillModalProps
                             item={item}
                             catalog="mm"
                             showHsnSac
-                            gstInclusive={false}
+                            gstInclusive={gstInclusive}
                             onChange={(u) => setItems((p) => p.map((i, j) => (j === idx ? u : i)))}
                             onRemove={() => setItems((p) => p.filter((_, j) => j !== idx))}
                             includeInactive

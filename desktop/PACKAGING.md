@@ -17,10 +17,28 @@ npm install
 # 1. Build both packages
 npm run build
 
-# 2. Fresh template database (ships inside the installer; used on first run)
+# 2. Fresh template database (ships inside the installer; used on first run —
+#    see desktop/main.js's TEMPLATE_DB/prepareDataDir(), which fs.copyFileSync()s
+#    this file verbatim as the starting database for a genuinely new install).
+#    THIS STEP IS EASY TO SKIP — `npm run build` / `npm run dist` do NOT touch
+#    desktop/template/studio.db at all, so skipping it silently ships whatever
+#    stale template happens to already be sitting there. That exact mistake
+#    shipped in 2.5.0: the template hadn't been regenerated since 2026-07-28,
+#    before the MM billing module existed, so a genuine first-run install had
+#    no mm_products table's worth of data — "MM Products" looked empty even
+#    though the schema itself was fine (migrations still ran correctly against
+#    the copied file; there was just nothing in the newer tables to show).
+#    Delete any existing template first — prisma migrate deploy only APPLIES
+#    migrations to whatever's already at that path, it doesn't create a DB
+#    from scratch.
+rm -f "<ABSOLUTE_PATH_TO_REPO>/desktop/template/studio.db"
 cd backend
 DATABASE_URL="file:<ABSOLUTE_PATH_TO_REPO>/desktop/template/studio.db" ./node_modules/.bin/prisma migrate deploy
 DATABASE_URL="file:<ABSOLUTE_PATH_TO_REPO>/desktop/template/studio.db" ./node_modules/.bin/tsx src/seed.ts
+# Checkpoint the WAL into the main file — the copy in main.js only copies the
+# single .db file, no -wal/-shm sidecars, so any uncommitted WAL data would
+# otherwise just be silently missing from every fresh install.
+sqlite3 "<ABSOLUTE_PATH_TO_REPO>/desktop/template/studio.db" "PRAGMA wal_checkpoint(TRUNCATE);"
 
 # 3. Icon (square PNG is generated from frontend/public/Logo.png — see git
 #    history for the PowerShell System.Drawing snippet if build/icon-256.png
