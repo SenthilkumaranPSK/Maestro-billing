@@ -1,6 +1,7 @@
 import { NavLink, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Receipt, Users, Package, ListChecks, History, Settings, FileSpreadsheet, ArrowLeftRight,
+  MessageCircle,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -11,6 +12,7 @@ const nav = [
   { to: '/products',   icon: Package,          label: 'Products' },
   { to: '/services',   icon: ListChecks,       label: 'Services' },
   { to: '/history',    icon: History,          label: 'Bill History' },
+  { to: '/whatsapp',   icon: MessageCircle,    label: 'WhatsApp' },
   { to: '/settings',   icon: Settings,         label: 'Settings' },
 ];
 

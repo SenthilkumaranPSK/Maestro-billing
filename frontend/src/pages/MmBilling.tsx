@@ -15,6 +15,8 @@ import { billsApi } from '@/api/bills';
 import { mmCustomersApi } from '@/api/mmCustomers';
 import { settingsApi } from '@/api/settings';
 import { whatsappApi } from '@/api/whatsapp';
+import { useNavigate } from 'react-router-dom';
+import { isWhatsAppEmbedAvailable, requestWhatsAppChat } from '@/lib/whatsappWeb';
 import { useToast } from '@/hooks/use-toast';
 import { isValidIndianPhone, newId } from '@/lib/utils';
 import { computeLineTotals, splitTaxP } from '@/lib/billMath';
@@ -96,6 +98,7 @@ export default function MmBillingPage() {
   const [savedBill, setSavedBill] = useState<Bill | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [sendOnWhatsApp, setSendOnWhatsApp] = useState(false);
+  const navigate = useNavigate();
   const [sendingWhatsApp, setSendingWhatsApp] = useState(false);
   // How the bill was paid — shown in the form and history/detail views only,
   // never on the printed invoice. See components/billing/PaymentModeSelect.
@@ -206,6 +209,37 @@ export default function MmBillingPage() {
     ],
   );
 
+  /**
+   * Hand one saved MM bill to the embedded WhatsApp Web panel: save the Tax
+   * Invoice PDF, open the customer's chat with the caption already typed, and
+   * switch to the WhatsApp page, so the operator only has to attach the file.
+   *
+   * Shared by BOTH send paths — the manual "Send Bill on WhatsApp" button and
+   * the "Send on WhatsApp after saving" checkbox. The checkbox path used to
+   * skip this and always POST to the backend service, which inside the
+   * desktop app is the dead headless-puppeteer path: it fails every time with
+   * "Link WhatsApp in Settings", even though the panel right there is logged
+   * in. Any new send path must branch on isWhatsAppEmbedAvailable() too.
+   *
+   * Takes the bill as an argument rather than reading `savedBill`: the
+   * checkbox path runs inside this mutation's own onSuccess, whose closure
+   * still sees the pre-save value (null).
+   */
+  const shareViaEmbeddedWhatsApp = async (bill: Bill, phone: string) => {
+    const { downloadMmA4InvoicePDF } = await loadMmA4Lib();
+    await downloadMmA4InvoicePDF(bill, settings ?? {});
+    requestWhatsAppChat({
+      phone,
+      caption: buildWhatsAppCaption(bill.billNumber, bill.grandTotal, bill.mmCustomer?.name),
+    });
+    navigate('/whatsapp');
+    toast({
+      title: 'Chat opened',
+      description: `Attach ${bill.billNumber}.pdf in the chat and send.`,
+      variant: 'success',
+    });
+  };
+
   const createBillMutation = useMutation({
     mutationFn: billsApi.create,
     onSuccess: async (bill) => {
@@ -220,6 +254,8 @@ export default function MmBillingPage() {
             description: 'Bill saved but not sent on WhatsApp.',
             variant: 'destructive',
           });
+        } else if (isWhatsAppEmbedAvailable()) {
+          await shareViaEmbeddedWhatsApp(bill, customer.phone.trim());
         } else {
           setSendingWhatsApp(true);
           try {
@@ -332,6 +368,17 @@ export default function MmBillingPage() {
     await downloadMmA4InvoicePDF(savedBill, settings ?? {});
   };
 
+  /**
+   * "Send on WhatsApp" after a bill is saved.
+   *
+   * Inside the desktop app this hands the bill to the embedded WhatsApp Web
+   * panel: download the PDF, open the customer's chat with the caption
+   * already typed, and switch to the WhatsApp page, so the operator only has
+   * to attach the file they just saved and press send. The old path — POSTing
+   * the PDF to the backend for whatsapp-web.js to deliver headlessly — stays
+   * as the fallback for a plain browser (Vite dev, or a two-PC client opened
+   * outside the desktop shell), where no <webview> exists.
+   */
   const handleWhatsAppShare = async () => {
     if (!savedBill || !customer.phone) return;
     if (!isValidIndianPhone(customer.phone.trim())) {
@@ -342,6 +389,15 @@ export default function MmBillingPage() {
       });
       return;
     }
+
+    if (isWhatsAppEmbedAvailable()) {
+      // Saves the PDF first: the operator attaches it from the chat, and the
+      // native file dialog reopens in whichever folder they used last, so
+      // after the first bill this is two clicks.
+      await shareViaEmbeddedWhatsApp(savedBill, customer.phone.trim());
+      return;
+    }
+
     setSendingWhatsApp(true);
     try {
       await sendBillViaWhatsApp(savedBill, customer.phone.trim(), settings ?? {});

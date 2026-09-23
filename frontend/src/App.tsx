@@ -46,6 +46,10 @@ export default function App() {
             <Route path="month-report" element={<MonthReportPage />} />
             <Route path="gst-report" element={<GstReportPage />} />
             <Route path="settings" element={<SettingsPage />} />
+            {/* The WhatsApp page renders nothing of its own: AppShell mounts
+                the persistent <WhatsAppPanel /> outside the routed <Outlet />
+                so the embedded session is never torn down by navigation. */}
+            <Route path="whatsapp" element={<div />} />
             <Route path="mm-dashboard" element={<MmDashboardPage />} />
             <Route path="mm-billing" element={<MmBillingPage />} />
             <Route path="mm-products" element={<MmProductsPage />} />

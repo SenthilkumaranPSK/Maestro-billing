@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { Header } from './Header';
+import { WhatsAppPanel } from '@/components/whatsapp/WhatsAppPanel';
 
 const titles: Record<string, string> = {
   '/dashboard':  'Dashboard',
@@ -13,6 +14,7 @@ const titles: Record<string, string> = {
   '/day-report': 'Day Report',
   '/month-report': 'Month Report',
   '/gst-report': 'GST Report',
+  '/whatsapp':   'WhatsApp',
   '/settings':   'Settings',
 };
 
@@ -46,17 +48,23 @@ function FadeUpPage({ children }: { children: React.ReactNode }) {
 export function AppShell() {
   const { pathname } = useLocation();
   const title = titles[pathname] ?? 'Photo Studio Billing';
+  // The WhatsApp panel is a sibling of <main>, not a routed page, and is only
+  // hidden — never unmounted — when the operator navigates elsewhere. See the
+  // component for why (WhatsApp Web is slow to boot and re-handshakes on every
+  // load, so a route-owned instance would reconnect on every single visit).
+  const onWhatsApp = pathname === '/whatsapp';
 
   return (
     <div className="flex h-screen overflow-hidden bg-slate-50">
       <Sidebar />
       <div className="flex-1 flex flex-col overflow-hidden">
         <Header title={title} />
-        <main className="flex-1 overflow-auto p-7">
+        <main className={onWhatsApp ? 'hidden' : 'flex-1 overflow-auto p-7'}>
           <FadeUpPage key={pathname}>
             <Outlet />
           </FadeUpPage>
         </main>
+        <WhatsAppPanel active={onWhatsApp} />
       </div>
     </div>
   );

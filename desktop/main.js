@@ -563,6 +563,12 @@ function createWindow() {
       // The UI is our own local site — no Node access needed in the renderer.
       nodeIntegration: false,
       contextIsolation: true,
+      // Lets the billing UI host WhatsApp Web in a <webview> (see
+      // configureWhatsAppGuest below). A <webview> is a separate,
+      // out-of-process webContents with its own session — it is NOT an
+      // iframe, so the backend's helmet CSP frame-src does not apply to it,
+      // and nothing it loads shares a process or a cookie jar with our UI.
+      webviewTag: true,
     },
   });
 
@@ -645,6 +651,14 @@ function createWindow() {
       });
   });
 
+  // The WhatsApp Web <webview> mounted by the renderer arrives here once,
+  // when it attaches. Everything security-relevant about it is set from the
+  // main process rather than from renderer attributes, so the page cannot
+  // widen its own guest's privileges.
+  mainWindow.webContents.on('did-attach-webview', (_e, guest) => {
+    configureWhatsAppGuest(guest);
+  });
+
   mainWindow.loadURL(APP_URL);
 
   if (focusPending) {
@@ -689,6 +703,116 @@ function setupBackupDownloads() {
     } else {
       item.cancel();
     }
+  });
+}
+
+// ─── WhatsApp Web (embedded) ────────────────────────────────────────────────
+//
+// The app used to drive WhatsApp by launching a SECOND headless Chrome via
+// puppeteer + the stealth plugin and handing whatsapp-web.js its WS endpoint
+// (backend/src/services/WhatsAppService.ts). That approach could never
+// persist a login — LocalAuth persists by setting `userDataDir`, which is a
+// puppeteer *launch* option, and the WS-endpoint path goes through
+// puppeteer.connect(), which ignores launch options entirely. So the session
+// folder was created and never written to, and every app restart demanded a
+// fresh QR scan.
+//
+// Hosting WhatsApp Web in our own window on a persistent partition removes
+// that whole class of problem: Electron stores cookies/IndexedDB for
+// `persist:whatsapp` in the user's profile exactly like a normal browser, so
+// the operator scans once and stays linked. No second browser process, no
+// stealth plugin, no puppeteer-core version trap.
+const WHATSAPP_PARTITION = 'persist:whatsapp';
+
+// WhatsApp Web sniffs the UA and shows "update your browser" for anything it
+// doesn't recognise — Electron's default UA carries both an `Electron/33`
+// and a `Maestro Billing/x.y.z` token, neither of which it knows. Strip them
+// so what's left is the plain Chrome UA that the bundled Chromium genuinely
+// is. Deriving it from the real UA (rather than hardcoding a Chrome version)
+// keeps it truthful and correct across Electron upgrades.
+function whatsappUserAgent() {
+  // Keep only the product tokens a real Chrome UA carries and drop every
+  // other "Name/version" token. Electron's default adds two that WhatsApp
+  // does not recognise — its own "Electron/33.4.11" and an app token — and a
+  // single unknown token is enough for WhatsApp Web to serve the
+  // "WhatsApp works with Google Chrome 100+ / update Chrome" page instead of
+  // the QR, even though the underlying Chromium is new enough.
+  //
+  // Do NOT go back to removing the app token by exact string
+  // (` ${app.getName()}/${app.getVersion()}`): Electron strips the spaces
+  // out of the product name when it builds userAgentFallback, so
+  // "Maestro Billing" appears as "MaestroBilling/2.5.2" and the exact match
+  // silently fails — observed live, which is how the update-Chrome page was
+  // found. An allowlist is immune to that and to any future rename.
+  const CHROME_UA_PRODUCTS = new Set(['Mozilla', 'AppleWebKit', 'Chrome', 'Safari']);
+  return app.userAgentFallback
+    .split(' ')
+    .filter((token) => {
+      const slash = token.indexOf('/');
+      return slash === -1 || CHROME_UA_PRODUCTS.has(token.slice(0, slash));
+    })
+    .join(' ');
+}
+
+function isWhatsAppUrl(url) {
+  try {
+    const { hostname, protocol } = new URL(url);
+    if (protocol !== 'https:') return false;
+    return (
+      hostname === 'web.whatsapp.com' ||
+      hostname === 'whatsapp.com' ||
+      hostname.endsWith('.whatsapp.com') ||
+      hostname.endsWith('.whatsapp.net')
+    );
+  } catch {
+    return false;
+  }
+}
+
+// Called once per app run, before the renderer mounts its <webview>, so the
+// very first request already carries the right UA and download handling.
+function setupWhatsAppSession() {
+  const waSession = session.fromPartition(WHATSAPP_PARTITION);
+  waSession.setUserAgent(whatsappUserAgent());
+
+  // Downloads started from inside WhatsApp Web (a customer sending back a
+  // photo or document) hit this session, not defaultSession — so
+  // setupBackupDownloads()'s handler never sees them. Without a handler of
+  // its own they would land silently in the OS Downloads folder; prompt
+  // instead, same as every other download this app produces.
+  waSession.on('will-download', (_event, item) => {
+    const chosenPath = dialog.showSaveDialogSync(mainWindow ?? undefined, {
+      title: 'Save File from WhatsApp',
+      defaultPath: item.getFilename(),
+    });
+    if (chosenPath) item.setSavePath(chosenPath);
+    else item.cancel();
+  });
+
+  // WhatsApp asks for notifications and (on a call) camera/mic. This is a
+  // billing terminal, not a chat client — nothing here needs either, and a
+  // permission prompt appearing over a half-finished bill is pure noise.
+  waSession.setPermissionRequestHandler((_wc, permission, callback) => {
+    callback(permission === 'clipboard-read' || permission === 'clipboard-sanitized-write');
+  });
+}
+
+// Applied to the guest webContents itself once the renderer's <webview>
+// attaches. Keeps WhatsApp inside WhatsApp: any link a customer sends opens
+// in the operator's real browser instead of replacing the chat UI, and the
+// guest can never be navigated somewhere unrelated.
+function configureWhatsAppGuest(guest) {
+  guest.setUserAgent(whatsappUserAgent());
+
+  guest.setWindowOpenHandler(({ url }) => {
+    if (/^https?:/.test(url)) shell.openExternal(url);
+    return { action: 'deny' };
+  });
+
+  guest.on('will-navigate', (event, url) => {
+    if (isWhatsAppUrl(url)) return;
+    event.preventDefault();
+    if (/^https?:/.test(url)) shell.openExternal(url);
   });
 }
 
@@ -963,6 +1087,7 @@ app.whenReady().then(() => {
   // a Save As dialog per stacked listener, each racing setSavePath/cancel on
   // the same item.
   setupBackupDownloads();
+  setupWhatsAppSession();
   // A missing config is NOT a question to ask — it's every existing install
   // on upgrade, plus every fresh single-PC install. Boot normally; two-PC
   // mode is opt-in via Setup → Connection Setup (Ctrl+Shift+C).

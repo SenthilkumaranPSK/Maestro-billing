@@ -111,6 +111,34 @@ incompatible internal dependency resolutions — this once manifested as
 crashing WhatsApp init at boot. If you bump one, bump the other to match,
 exactly.
 
+**Do not move the puppeteer family to 25.x.** Both `puppeteer@25` and
+`puppeteer-core@25` are pure ESM (`"type": "module"`). The backend compiles to
+CommonJS and Electron 33 bundles Node 20, which cannot `require()` an ES
+module, so `whatsapp-web.js`'s top-level `require('puppeteer')` throws
+`ERR_REQUIRE_ESM` at module load — and since `main.js` boots the backend
+in-process, the whole app dies with only a native "Error" box. `24.38.0` is
+also exactly what `whatsapp-web.js@1.34.7` pins, which keeps npm from nesting
+a second copy. This shipped once (bumped 2026-09-06, caught 2026-09-23).
+
+**electron-builder strips every nested `node_modules` when it packs the
+asar.** Measured on a real build: `staging/root_node_modules` contained
+`whatsapp-web.js/node_modules/puppeteer`, and the packed `app.asar` had zero
+`node_modules/*/node_modules` entries across all 339 packages. `stage.ps1`
+copies them fine — electron-builder drops them. So every package in the
+installer resolves dependencies from the flat root only, and a package
+needing a nested version silently gets root's instead. Keep root versions
+equal to whatever nested packages pin.
+
+**Therefore: `npm start` passing does NOT mean the installer works.** The
+25.x breakage above ran fine under `npm start` (dev resolves the nested
+CommonJS copy) and was fatal in the packaged app (nested copy gone). After
+any dependency change, launch `release/win-unpacked/Maestro Billing.exe` and
+confirm a real window plus `http://127.0.0.1:3179/health`. If it fails, the
+error text is in a native dialog that `console.log` never reaches — capture
+it with `PrintWindow` against the window handle, or run the extracted asar's
+`backend/dist/server.js` under plain `node` to separate backend faults from
+Electron ones.
+
 ## Requirements on the client PC
 
 - Windows 10/11, 64-bit

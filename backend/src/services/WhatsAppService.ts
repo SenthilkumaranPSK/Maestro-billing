@@ -4,7 +4,6 @@ import path from 'path';
 import fs from 'fs';
 import puppeteer from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
-import { executablePath } from 'puppeteer';
 
 puppeteer.use(StealthPlugin());
 
@@ -63,10 +62,21 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 }
 
 /**
- * Find a Chromium-based browser on this machine. On a customer PC there is no
- * puppeteer-downloaded Chrome, so look for installed Chrome first and fall
- * back to Edge (preinstalled on every Windows 10/11). Dev machines fall
- * through to puppeteer's own download as a last resort.
+ * Find a Chromium-based browser on this machine: installed Chrome first, then
+ * Edge (preinstalled on every Windows 10/11, and this app ships only on
+ * Windows), then give up.
+ *
+ * There used to be a final fallback to puppeteer's own downloaded Chrome via
+ * `executablePath()` from the `puppeteer` package. That import is gone, and
+ * must not come back while this backend compiles to CommonJS: puppeteer 25 is
+ * pure ESM ("type": "module"), so `require()`-ing it throws ERR_REQUIRE_ESM
+ * at load time — which took down the ENTIRE desktop app, not just WhatsApp,
+ * because desktop/main.js boots the backend in-process and this module is
+ * reached through server.js's import graph. A dynamic `import()` is not an
+ * escape either: TypeScript downlevels it straight back to `require()` under
+ * `module: CommonJS`. The fallback only ever served a dev machine with
+ * neither Chrome nor Edge installed, which is worth far less than the app
+ * starting at all.
  */
 function findBrowserPath(): string | null {
   const pf = process.env['PROGRAMFILES'] ?? 'C:\\Program Files';
@@ -82,12 +92,6 @@ function findBrowserPath(): string | null {
   ];
   for (const c of candidates) {
     if (c && fs.existsSync(c)) return c;
-  }
-  try {
-    const p = executablePath();
-    if (p && fs.existsSync(p)) return p;
-  } catch {
-    // puppeteer has no downloaded browser — nothing more to try
   }
   return null;
 }
