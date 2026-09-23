@@ -16,7 +16,7 @@ import { mmCustomersApi } from '@/api/mmCustomers';
 import { settingsApi } from '@/api/settings';
 import { whatsappApi } from '@/api/whatsapp';
 import { useNavigate } from 'react-router-dom';
-import { isWhatsAppEmbedAvailable, requestWhatsAppChat } from '@/lib/whatsappWeb';
+import { isWhatsAppEmbedAvailable, isWhatsAppAutoSendAvailable, requestWhatsAppChat, sendBillOnWhatsApp } from '@/lib/whatsappWeb';
 import { useToast } from '@/hooks/use-toast';
 import { isValidIndianPhone, newId } from '@/lib/utils';
 import { computeLineTotals, splitTaxP } from '@/lib/billMath';
@@ -226,16 +226,46 @@ export default function MmBillingPage() {
    * still sees the pre-save value (null).
    */
   const shareViaEmbeddedWhatsApp = async (bill: Bill, phone: string) => {
+    const caption = buildWhatsAppCaption(bill.billNumber, bill.grandTotal, bill.mmCustomer?.name);
+    const fileName = `${bill.billNumber}.pdf`;
+
+    // Preferred path: the desktop app attaches and sends the Tax Invoice
+    // itself. Showing the panel first both mounts the <webview> the send needs
+    // and lets the operator watch it happen.
+    if (isWhatsAppAutoSendAvailable()) {
+      navigate('/whatsapp');
+      setSendingWhatsApp(true);
+      try {
+        const { generateMmA4InvoicePDFBase64 } = await loadMmA4Lib();
+        const pdfBase64 = await generateMmA4InvoicePDFBase64(bill, settings ?? {});
+        await sendBillOnWhatsApp({ phone, caption, pdfBase64, fileName });
+        toast({
+          title: 'Sent on WhatsApp!',
+          description: `${fileName} delivered to ${phone}.`,
+          variant: 'success',
+        });
+        return;
+      } catch (err) {
+        // Fall through to the manual flow rather than leaving the operator
+        // believing the bill went out.
+        toast({
+          title: 'Could not send automatically',
+          description: `${err instanceof Error ? err.message : 'WhatsApp send failed'} — attach ${fileName} in the chat instead.`,
+          variant: 'destructive',
+        });
+      } finally {
+        setSendingWhatsApp(false);
+      }
+    }
+
+    // Manual fallback: save the PDF and open the chat with the caption typed.
     const { downloadMmA4InvoicePDF } = await loadMmA4Lib();
     await downloadMmA4InvoicePDF(bill, settings ?? {});
-    requestWhatsAppChat({
-      phone,
-      caption: buildWhatsAppCaption(bill.billNumber, bill.grandTotal, bill.mmCustomer?.name),
-    });
+    requestWhatsAppChat({ phone, caption });
     navigate('/whatsapp');
     toast({
       title: 'Chat opened',
-      description: `Attach ${bill.billNumber}.pdf in the chat and send.`,
+      description: `Attach ${fileName} in the chat and send.`,
       variant: 'success',
     });
   };

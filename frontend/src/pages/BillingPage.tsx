@@ -23,7 +23,7 @@ const loadPdfLib = () => import('@/lib/pdf');
 const loadA4Lib = () => import('@/lib/a4invoice');
 import { whatsappApi } from '@/api/whatsapp';
 import { useNavigate } from 'react-router-dom';
-import { isWhatsAppEmbedAvailable, requestWhatsAppChat } from '@/lib/whatsappWeb';
+import { isWhatsAppEmbedAvailable, isWhatsAppAutoSendAvailable, requestWhatsAppChat, sendBillOnWhatsApp } from '@/lib/whatsappWeb';
 import { useToast } from '@/hooks/use-toast';
 import { isValidIndianPhone, newId } from '@/lib/utils';
 import { computeLineTotals, splitTaxP } from '@/lib/billMath';
@@ -255,15 +255,49 @@ export default function BillingPage() {
    * in. Any new send path must branch on isWhatsAppEmbedAvailable() too.
    */
   const shareViaEmbeddedWhatsApp = async (bill: Bill, phone: string) => {
+    const caption = buildWhatsAppCaption(bill.billNumber, bill.grandTotal, bill.customer?.name);
+    const fileName = `${bill.billNumber}.pdf`;
+
+    // Preferred path: the desktop app attaches and sends the bill itself.
+    // Showing the panel first both mounts the <webview> the send needs and
+    // lets the operator watch it happen rather than staring at a spinner.
+    if (isWhatsAppAutoSendAvailable()) {
+      navigate('/whatsapp');
+      setSendingWhatsApp(true);
+      try {
+        const pdfBase64 =
+          layout === 'a4'
+            ? await (await loadA4Lib()).generateA4InvoicePDFBase64(bill, settings ?? {})
+            : await (await loadPdfLib()).generateBillPDFBase64(bill, settings ?? {});
+        await sendBillOnWhatsApp({ phone, caption, pdfBase64, fileName });
+        toast({
+          title: 'Sent on WhatsApp!',
+          description: `${fileName} delivered to ${phone}.`,
+          variant: 'success',
+        });
+        return;
+      } catch (err) {
+        // Fall through to the manual flow below rather than leaving the
+        // operator believing the bill went out. WhatsApp's own UI is being
+        // driven here, so this is expected to break occasionally.
+        toast({
+          title: 'Could not send automatically',
+          description: `${err instanceof Error ? err.message : 'WhatsApp send failed'} — attach ${fileName} in the chat instead.`,
+          variant: 'destructive',
+        });
+      } finally {
+        setSendingWhatsApp(false);
+      }
+    }
+
+    // Manual fallback: save the PDF and open the chat with the caption typed,
+    // so the operator only has to attach the file they just saved.
     await downloadBillPdfFor(bill, layout, settings ?? {});
-    requestWhatsAppChat({
-      phone,
-      caption: buildWhatsAppCaption(bill.billNumber, bill.grandTotal, bill.customer?.name),
-    });
+    requestWhatsAppChat({ phone, caption });
     navigate('/whatsapp');
     toast({
       title: 'Chat opened',
-      description: `Attach ${bill.billNumber}.pdf in the chat and send.`,
+      description: `Attach ${fileName} in the chat and send.`,
       variant: 'success',
     });
   };

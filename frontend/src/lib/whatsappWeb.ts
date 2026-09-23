@@ -56,6 +56,48 @@ export function isWhatsAppEmbedAvailable(): boolean {
 }
 
 /**
+ * Automated send, exposed by desktop/preload.js.
+ *
+ * Present only in the packaged desktop app — a plain browser has no bridge and
+ * every caller must fall back to the manual flow (open the chat, operator
+ * attaches the downloaded PDF). The main process drives WhatsApp's own UI over
+ * CDP to do the attach; see sendWhatsAppPdf in desktop/main.js for why it can't
+ * live here in the renderer.
+ */
+export interface WhatsAppAutoSendPayload {
+  phone: string;
+  caption: string;
+  pdfBase64: string;
+  fileName: string;
+}
+
+interface MaestroWhatsAppBridge {
+  send(payload: WhatsAppAutoSendPayload): Promise<{ ok: boolean; error?: string }>;
+}
+
+function bridge(): MaestroWhatsAppBridge | null {
+  const w = window as unknown as { maestroWhatsApp?: MaestroWhatsAppBridge };
+  return w.maestroWhatsApp ?? null;
+}
+
+/** True when the bill can be attached and sent without the operator touching a file dialog. */
+export function isWhatsAppAutoSendAvailable(): boolean {
+  return isWhatsAppEmbedAvailable() && !!bridge();
+}
+
+/**
+ * Attach and send one bill. Resolves only once WhatsApp has accepted the
+ * message; rejects on any failure so the caller can fall back to opening the
+ * chat manually rather than leaving the operator thinking a bill went out.
+ */
+export async function sendBillOnWhatsApp(payload: WhatsAppAutoSendPayload): Promise<void> {
+  const api = bridge();
+  if (!api) throw new Error('WhatsApp automation is only available in the desktop app');
+  const result = await api.send(payload);
+  if (!result?.ok) throw new Error(result?.error || 'WhatsApp could not send the bill');
+}
+
+/**
  * A one-slot request channel between a billing page and the WhatsApp panel.
  *
  * The panel is mounted once at the AppShell level and deliberately never

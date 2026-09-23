@@ -4,7 +4,7 @@
 // (database, backups, WhatsApp session) lives in the per-user app-data
 // folder, because the install directory is not writable.
 
-const { app, BrowserWindow, Menu, dialog, shell, session } = require('electron');
+const { app, BrowserWindow, Menu, dialog, shell, session, ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
@@ -569,6 +569,9 @@ function createWindow() {
       // iframe, so the backend's helmet CSP frame-src does not apply to it,
       // and nothing it loads shares a process or a cookie jar with our UI.
       webviewTag: true,
+      // Exposes exactly one function to the billing UI: "send this PDF on
+      // WhatsApp". See preload.js and the whatsapp:send handler below.
+      preload: path.join(__dirname, 'preload.js'),
     },
   });
 
@@ -657,6 +660,10 @@ function createWindow() {
   // widen its own guest's privileges.
   mainWindow.webContents.on('did-attach-webview', (_e, guest) => {
     configureWhatsAppGuest(guest);
+    whatsappGuest = guest;
+    guest.once('destroyed', () => {
+      if (whatsappGuest === guest) whatsappGuest = null;
+    });
   });
 
   mainWindow.loadURL(APP_URL);
@@ -815,6 +822,219 @@ function configureWhatsAppGuest(guest) {
     if (/^https?:/.test(url)) shell.openExternal(url);
   });
 }
+
+// ── Automated WhatsApp send ──────────────────────────────────────────────
+//
+// Drives the WhatsApp Web guest to attach a bill PDF and send it, so the
+// operator does not have to save the file and re-pick it from a file dialog.
+//
+// Everything here runs against WhatsApp's real UI through the CDP debugger,
+// for two reasons that are not negotiable:
+//
+//  * `DOM.setFileInputFiles` is the only way to put a file into WhatsApp's
+//    <input type="file"> without popping a native file picker. A native
+//    dialog would block the whole app, and the operator picking the file is
+//    exactly the step being removed.
+//  * WhatsApp ignores untrusted events. A plain `element.click()` from
+//    executeJavaScript does NOT open the attach menu (measured); only real
+//    input events via `Input.dispatchMouseEvent` do. Same for the synthetic
+//    drag-and-drop route — `DragEvent` with a DataTransfer is silently
+//    dropped because `isTrusted` is false.
+//
+// This is DOM automation against someone else's app, so it WILL break when
+// WhatsApp reorganises its UI. Every step is therefore verified and the whole
+// thing fails closed: any failure returns {ok:false} and the caller falls
+// back to the manual attach flow. It must never send a half-built message —
+// notably, the caption is inserted with `Input.insertText` rather than typed,
+// because a literal Enter keystroke in WhatsApp's caption box sends the
+// message immediately, which on a multi-line caption would fire off the bill
+// before the text was complete.
+let whatsappGuest = null;
+
+const WA_SEND_TIMEOUT_MS = 45_000;
+
+/** Poll an in-page predicate until it returns truthy, or give up. */
+async function waitInGuest(dbg, expression, timeoutMs, label) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const r = await dbg.sendCommand('Runtime.evaluate', {
+      expression, returnByValue: true, awaitPromise: true,
+    });
+    if (r?.result?.value) return r.result.value;
+    await new Promise((res) => setTimeout(res, 400));
+  }
+  throw new Error(`Timed out waiting for ${label}`);
+}
+
+async function evalInGuest(dbg, expression) {
+  const r = await dbg.sendCommand('Runtime.evaluate', {
+    expression, returnByValue: true, awaitPromise: true,
+  });
+  if (r?.exceptionDetails) {
+    throw new Error(r.exceptionDetails.exception?.description || `Failed evaluating ${expression.slice(0, 40)}`);
+  }
+  return r?.result?.value;
+}
+
+/** A real, trusted left click at viewport coordinates. */
+async function clickInGuest(dbg, point) {
+  await dbg.sendCommand('Input.dispatchMouseEvent', { type: 'mouseMoved', x: point.x, y: point.y, buttons: 0 });
+  await new Promise((r) => setTimeout(r, 120));
+  await dbg.sendCommand('Input.dispatchMouseEvent', { type: 'mousePressed', x: point.x, y: point.y, button: 'left', buttons: 1, clickCount: 1 });
+  await new Promise((r) => setTimeout(r, 80));
+  await dbg.sendCommand('Input.dispatchMouseEvent', { type: 'mouseReleased', x: point.x, y: point.y, button: 'left', buttons: 0, clickCount: 1 });
+}
+
+/** Centre of the first element matching `selector`, or null if not present. */
+function centreOfExpr(selector) {
+  return `(() => {
+    const el = document.querySelector(${JSON.stringify(selector)});
+    if (!el) return null;
+    const t = el.closest('button') || el.closest('[role=button]') || el;
+    const r = t.getBoundingClientRect();
+    if (!r.width || !r.height) return null;
+    return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+  })()`;
+}
+
+async function sendWhatsAppPdf({ phone, caption, pdfBase64, fileName }) {
+  // The guest only exists once the renderer has mounted the WhatsApp panel,
+  // which it does lazily. A send fired in the same tick as that navigation
+  // would otherwise lose the race on the very first bill of a session.
+  const guestDeadline = Date.now() + 20_000;
+  while ((!whatsappGuest || whatsappGuest.isDestroyed()) && Date.now() < guestDeadline) {
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  if (!whatsappGuest || whatsappGuest.isDestroyed()) {
+    throw new Error('WhatsApp panel is not open yet');
+  }
+  const digits = String(phone || '').replace(/\D/g, '');
+  const number = digits.length === 10 ? `91${digits}` : digits;
+  if (!number) throw new Error('No phone number to send to');
+  const safeName = (fileName || 'invoice.pdf').replace(/[\\/:*?"<>|]/g, '_');
+
+  // A real file on disk is required by DOM.setFileInputFiles. Kept in the
+  // per-user temp dir and removed in the finally below, sent or not.
+  const tmpPath = path.join(app.getPath('temp'), `maestro-wa-${Date.now()}-${safeName}`);
+  fs.writeFileSync(tmpPath, Buffer.from(pdfBase64, 'base64'));
+
+  const dbg = whatsappGuest.debugger;
+  let attached = false;
+  try {
+    try { dbg.attach('1.3'); attached = true; } catch (err) {
+      // Already attached (e.g. a previous send crashed mid-flight) is fine.
+      if (!/already attached/i.test(String(err))) throw err;
+    }
+    await dbg.sendCommand('DOM.enable');
+    await dbg.sendCommand('Runtime.enable');
+
+    // 1. Open the conversation. The caption rides along in ?text= so WhatsApp
+    //    itself fills the composer — far more reliable than typing it.
+    const url = `https://web.whatsapp.com/send?phone=${encodeURIComponent(number)}` +
+      (caption ? `&text=${encodeURIComponent(caption)}` : '');
+    await whatsappGuest.loadURL(url);
+    await waitInGuest(dbg, `!!document.querySelector('footer [contenteditable=true]')`, WA_SEND_TIMEOUT_MS, 'the chat to open');
+
+    // A number that is not on WhatsApp produces a dialog instead of a chat.
+    const invalid = await evalInGuest(dbg, `/phone number shared via url is invalid|isn't on WhatsApp|not on WhatsApp/i.test(document.body.innerText)`);
+    if (invalid) throw new Error('That number is not on WhatsApp');
+
+    // 2. Swallow the native file picker and capture the input WhatsApp opens
+    //    it from. Without this, clicking "Document" blocks on an OS dialog.
+    await evalInGuest(dbg, `(() => {
+      window.__maestroCap = null;
+      if (!window.__maestroOrigClick) window.__maestroOrigClick = HTMLInputElement.prototype.click;
+      HTMLInputElement.prototype.click = function () {
+        if (this.type === 'file') { window.__maestroCap = this; return; }
+        return window.__maestroOrigClick.apply(this, arguments);
+      };
+      return true;
+    })()`);
+
+    // 3. Attach menu → Document. The menu is a toggle, so only open it if the
+    //    Document item isn't already showing.
+    const docItemExpr = `(() => {
+      const mi = [...document.querySelectorAll('[role=menuitem]')].find(e => /document/i.test(e.innerText || ''));
+      if (!mi) return null;
+      const r = mi.getBoundingClientRect();
+      return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+    })()`;
+    let docPoint = await evalInGuest(dbg, docItemExpr);
+    if (!docPoint) {
+      const attachPoint = await evalInGuest(dbg, centreOfExpr('[data-icon=ic-attach-file]'));
+      if (!attachPoint) throw new Error('Could not find the attach button');
+      await clickInGuest(dbg, attachPoint);
+      docPoint = await waitInGuest(dbg, docItemExpr, 8000, 'the attach menu');
+    }
+    await clickInGuest(dbg, docPoint);
+
+    // 4. Hand the file straight to the captured input.
+    await waitInGuest(dbg, `!!window.__maestroCap`, 8000, 'the document file input');
+    const ref = await dbg.sendCommand('Runtime.evaluate', { expression: 'window.__maestroCap', returnByValue: false });
+    const objectId = ref?.result?.objectId;
+    if (!objectId) throw new Error('Could not reach the file input');
+    await dbg.sendCommand('DOM.setFileInputFiles', { files: [tmpPath], objectId });
+
+    // 5. Wait for WhatsApp's own preview of THIS file before sending, so a
+    //    failed attach can never send a bare caption to a customer.
+    const nameNoExt = safeName.replace(/\.pdf$/i, '');
+    await waitInGuest(
+      dbg,
+      `document.body.innerText.includes(${JSON.stringify(nameNoExt)})`,
+      20_000,
+      'the attachment preview',
+    );
+
+    // 6. Make sure the caption actually made it into the preview; insert it
+    //    without keystrokes if not (Enter here would send prematurely).
+    if (caption) {
+      const hasCaption = await evalInGuest(dbg, `(() => {
+        const boxes = [...document.querySelectorAll('[contenteditable=true]')];
+        return boxes.some(b => (b.innerText || '').includes(${JSON.stringify(caption.split('\n')[0])}));
+      })()`);
+      if (!hasCaption) {
+        const capPoint = await evalInGuest(dbg, centreOfExpr('[contenteditable=true]'));
+        if (capPoint) {
+          await clickInGuest(dbg, capPoint);
+          await dbg.sendCommand('Input.insertText', { text: caption });
+          await new Promise((r) => setTimeout(r, 400));
+        }
+      }
+    }
+
+    // 7. Send, and confirm the composer actually cleared.
+    const sendPoint = await waitInGuest(dbg, centreOfExpr('[data-icon=wds-ic-send-filled]'), 10_000, 'the send button');
+    await clickInGuest(dbg, sendPoint);
+    await waitInGuest(
+      dbg,
+      `!document.body.innerText.includes(${JSON.stringify(nameNoExt)}) || !document.querySelector('[data-icon=wds-ic-send-filled]')`,
+      20_000,
+      'the message to be sent',
+    );
+
+    return { ok: true };
+  } finally {
+    // Always un-patch: leaving the prototype hooked would break the operator's
+    // own manual attach (the picker would never open again).
+    try {
+      await evalInGuest(dbg, `(() => {
+        if (window.__maestroOrigClick) { HTMLInputElement.prototype.click = window.__maestroOrigClick; delete window.__maestroOrigClick; }
+        window.__maestroCap = null; return true;
+      })()`);
+    } catch { /* guest may be gone; nothing to restore */ }
+    if (attached) { try { dbg.detach(); } catch { /* already detached */ } }
+    try { fs.unlinkSync(tmpPath); } catch { /* best effort */ }
+  }
+}
+
+ipcMain.handle('whatsapp:send', async (_event, payload) => {
+  try {
+    return await sendWhatsAppPdf(payload || {});
+  } catch (err) {
+    console.error('WhatsApp auto-send failed:', err);
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
 
 // A crash in a non-renderer child process (GPU, print backend/spooler
 // service, network service, etc.) doesn't fire render-process-gone above —
