@@ -912,9 +912,18 @@ async function sendWhatsAppPdf({ phone, caption, pdfBase64, fileName }) {
   if (!number) throw new Error('No phone number to send to');
   const safeName = (fileName || 'invoice.pdf').replace(/[\\/:*?"<>|]/g, '_');
 
-  // A real file on disk is required by DOM.setFileInputFiles. Kept in the
-  // per-user temp dir and removed in the finally below, sent or not.
-  const tmpPath = path.join(app.getPath('temp'), `maestro-wa-${Date.now()}-${safeName}`);
+  // A real file on disk is required by DOM.setFileInputFiles. It is removed in
+  // the finally below, sent or not.
+  //
+  // The uniqueness goes in the DIRECTORY name, never the file name. WhatsApp
+  // uploads the file under its basename, so a `maestro-wa-<timestamp>-` prefix
+  // is what the customer actually receives ("maestro-wa-1758712345678-047_2026.pdf"),
+  // and it also pushed the name long enough that WhatsApp truncated it in the
+  // attachment preview — which broke the step-5 check below, since that looks
+  // for the bill number in the preview text and then refuses to click Send.
+  // The net effect was a send that always fell back to "downloaded only".
+  const tmpDir = fs.mkdtempSync(path.join(app.getPath('temp'), 'maestro-wa-'));
+  const tmpPath = path.join(tmpDir, safeName);
   fs.writeFileSync(tmpPath, Buffer.from(pdfBase64, 'base64'));
 
   const dbg = whatsappGuest.debugger;
@@ -974,12 +983,29 @@ async function sendWhatsAppPdf({ phone, caption, pdfBase64, fileName }) {
     if (!objectId) throw new Error('Could not reach the file input');
     await dbg.sendCommand('DOM.setFileInputFiles', { files: [tmpPath], objectId });
 
-    // 5. Wait for WhatsApp's own preview of THIS file before sending, so a
-    //    failed attach can never send a bare caption to a customer.
+    // 5. Confirm THIS file is really attached before sending, so a failed
+    //    attach can never send a bare caption to a customer.
+    //
+    //    Two independent conditions, both required:
+    //      a) the captured <input type=file> actually holds our file — the
+    //         direct, render-independent proof that the attach worked;
+    //      b) WhatsApp has produced a preview for it — either the name appears
+    //         in the document, or the send affordance has appeared.
+    //    (b) used to be the only check, matching on the filename alone. That
+    //    is at WhatsApp's mercy: it truncates long document names in the
+    //    preview, so the match failed, this step timed out, Send was never
+    //    clicked, and every bill fell back to "downloaded only".
     const nameNoExt = safeName.replace(/\.pdf$/i, '');
     await waitInGuest(
       dbg,
-      `document.body.innerText.includes(${JSON.stringify(nameNoExt)})`,
+      `(() => {
+        const cap = window.__maestroCap;
+        const attached = !!(cap && cap.files && cap.files.length === 1 &&
+                            cap.files[0].name === ${JSON.stringify(safeName)});
+        const previewed = document.body.innerText.includes(${JSON.stringify(nameNoExt)}) ||
+                          !!document.querySelector('[data-icon=wds-ic-send-filled]');
+        return attached && previewed;
+      })()`,
       20_000,
       'the attachment preview',
     );
@@ -1022,7 +1048,10 @@ async function sendWhatsAppPdf({ phone, caption, pdfBase64, fileName }) {
       })()`);
     } catch { /* guest may be gone; nothing to restore */ }
     if (attached) { try { dbg.detach(); } catch { /* already detached */ } }
+    // Remove the file and the directory that was created to hold it, so the
+    // temp dir doesn't accumulate one folder per bill sent.
     try { fs.unlinkSync(tmpPath); } catch { /* best effort */ }
+    try { fs.rmdirSync(tmpDir); } catch { /* best effort */ }
   }
 }
 
