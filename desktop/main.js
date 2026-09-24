@@ -896,6 +896,125 @@ function centreOfExpr(selector) {
   })()`;
 }
 
+/**
+ * Centre of the first element matching `selector`, but ONLY once that point
+ * genuinely hits the element (or something inside it).
+ *
+ * `centreOfExpr` above trusts `getBoundingClientRect()` alone, and that is not
+ * enough on WhatsApp Web. Measured 2026-09-24: the attach menu's "Document"
+ * row is `pointer-events: none` and its own rect sits ~21px below the content
+ * it renders, so a click at "the centre of the element" landed on the menu
+ * container and did nothing at all — the silent cause of the automated attach
+ * never working. Hit-testing with elementFromPoint also waits out the menu's
+ * open animation for free, since a mid-animation rect simply fails the test.
+ */
+function hittablePointExpr(selector) {
+  return `(() => {
+    const el = document.querySelector(${JSON.stringify(selector)});
+    if (!el) return null;
+    const target = el.closest('button') || el.closest('[role=button]') || el;
+    for (const cand of [target, ...target.querySelectorAll('*')]) {
+      const r = cand.getBoundingClientRect();
+      if (!r.width || !r.height) continue;
+      if (getComputedStyle(cand).pointerEvents === 'none') continue;
+      const x = Math.round(r.left + r.width / 2);
+      const y = Math.round(r.top + r.height / 2);
+      if (x < 0 || y < 0 || x > innerWidth || y > innerHeight) continue;
+      const at = document.elementFromPoint(x, y);
+      if (at && (target.contains(at) || at === target)) return { x, y };
+    }
+    return null;
+  })()`;
+}
+
+/**
+ * Send one bill to one chat as a plain WhatsApp message.
+ *
+ * This is the path that replaced attaching the PDF. WhatsApp fills its own
+ * composer from the `?text=` deep link, so there is no attach menu, no
+ * `<input type=file>`, no `DOM.setFileInputFiles` and no native picker to
+ * suppress — precisely the machinery that kept failing. The only interaction
+ * left is committing the message.
+ *
+ * It still fails closed: the composer must be carrying THIS bill's number
+ * before anything is committed, so a mis-timed or half-loaded page can never
+ * fire a wrong or empty message at a customer. On any doubt it returns
+ * `{ok:false}` with the message left typed, and the caller tells the operator
+ * to press Send.
+ */
+async function sendWhatsAppText({ phone, text, billNumber }) {
+  const guestDeadline = Date.now() + 20_000;
+  while ((!whatsappGuest || whatsappGuest.isDestroyed()) && Date.now() < guestDeadline) {
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  if (!whatsappGuest || whatsappGuest.isDestroyed()) throw new Error('WhatsApp panel is not open yet');
+
+  const digits = String(phone || '').replace(/\D/g, '');
+  const number = digits.length === 10 ? `91${digits}` : digits;
+  if (!number) throw new Error('No phone number to send to');
+  if (!text) throw new Error('Nothing to send');
+
+  const dbg = whatsappGuest.debugger;
+  let attached = false;
+  try {
+    try { dbg.attach('1.3'); attached = true; } catch (err) {
+      if (!/already attached/i.test(String(err))) throw err;
+    }
+    await dbg.sendCommand('DOM.enable');
+    await dbg.sendCommand('Runtime.enable');
+
+    const url = `https://web.whatsapp.com/send?phone=${encodeURIComponent(number)}` +
+      `&text=${encodeURIComponent(text)}`;
+    await whatsappGuest.loadURL(url);
+    await waitInGuest(dbg, `!!document.querySelector('footer [contenteditable=true]')`, WA_SEND_TIMEOUT_MS, 'the chat to open');
+
+    const invalid = await evalInGuest(dbg, `/phone number shared via url is invalid|isn't on WhatsApp|not on WhatsApp/i.test(document.body.innerText)`);
+    if (invalid) throw new Error('That number is not on WhatsApp');
+
+    // Fail-closed gate: WhatsApp must have actually taken our text. Matching on
+    // the bill number rather than the whole body keeps this robust against
+    // WhatsApp reflowing or truncating what it renders.
+    const marker = String(billNumber || '').trim();
+    const composerHasBill = marker
+      ? `(() => {
+           const box = document.querySelector('footer [contenteditable=true]');
+           return !!box && (box.innerText || '').includes(${JSON.stringify(marker)});
+         })()`
+      : `(() => {
+           const box = document.querySelector('footer [contenteditable=true]');
+           return !!box && (box.innerText || '').trim().length > 0;
+         })()`;
+    await waitInGuest(dbg, composerHasBill, 15_000, 'the message to appear in the composer');
+
+    // Enter commits it. Deliberately NOT the send button: that means finding a
+    // element by coordinates, which is exactly what broke the attach flow.
+    // Enter is also safe HERE in a way it is not in the attachment caption box
+    // (see sendWhatsAppPdf) — the text is already complete, placed by WhatsApp
+    // itself from the URL, so there is no half-written message to fire early.
+    const composerPoint = await waitInGuest(dbg, hittablePointExpr('footer [contenteditable=true]'), 8000, 'the composer');
+    await clickInGuest(dbg, composerPoint);
+    await new Promise((r) => setTimeout(r, 200));
+    await dbg.sendCommand('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13, text: '\r' });
+    await dbg.sendCommand('Input.dispatchKeyEvent', { type: 'keyUp',   key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
+
+    // Confirm it actually left the composer rather than reporting a send that
+    // never happened.
+    await waitInGuest(
+      dbg,
+      `(() => {
+         const box = document.querySelector('footer [contenteditable=true]');
+         return !box || (box.innerText || '').trim().length === 0;
+       })()`,
+      15_000,
+      'the message to be sent',
+    );
+
+    return { ok: true };
+  } finally {
+    if (attached) { try { dbg.detach(); } catch { /* already detached */ } }
+  }
+}
+
 async function sendWhatsAppPdf({ phone, caption, pdfBase64, fileName }) {
   // The guest only exists once the renderer has mounted the WhatsApp panel,
   // which it does lazily. A send fired in the same tick as that navigation
@@ -1060,6 +1179,15 @@ ipcMain.handle('whatsapp:send', async (_event, payload) => {
     return await sendWhatsAppPdf(payload || {});
   } catch (err) {
     console.error('WhatsApp auto-send failed:', err);
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
+ipcMain.handle('whatsapp:send-text', async (_event, payload) => {
+  try {
+    return await sendWhatsAppText(payload || {});
+  } catch (err) {
+    console.error('WhatsApp text send failed:', err);
     return { ok: false, error: String(err && err.message ? err.message : err) };
   }
 });

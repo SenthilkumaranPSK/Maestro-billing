@@ -89,8 +89,16 @@ export interface WhatsAppAutoSendPayload {
   fileName: string;
 }
 
+export interface WhatsAppTextSendPayload {
+  phone: string;
+  text: string;
+  /** Verified against the composer before anything is committed. */
+  billNumber: string;
+}
+
 interface MaestroWhatsAppBridge {
   send(payload: WhatsAppAutoSendPayload): Promise<{ ok: boolean; error?: string }>;
+  sendText?(payload: WhatsAppTextSendPayload): Promise<{ ok: boolean; error?: string }>;
 }
 
 function bridge(): MaestroWhatsAppBridge | null {
@@ -101,6 +109,23 @@ function bridge(): MaestroWhatsAppBridge | null {
 /** True when the bill can be attached and sent without the operator touching a file dialog. */
 export function isWhatsAppAutoSendAvailable(): boolean {
   return isWhatsAppEmbedAvailable() && !!bridge();
+}
+
+/** True when the bill can be sent as a message with no operator interaction at all. */
+export function isWhatsAppTextSendAvailable(): boolean {
+  return isWhatsAppEmbedAvailable() && typeof bridge()?.sendText === 'function';
+}
+
+/**
+ * Send one bill as a WhatsApp message. Resolves only once WhatsApp has
+ * accepted it; rejects otherwise so the caller can leave the message typed for
+ * the operator rather than claiming a send that never happened.
+ */
+export async function sendBillTextOnWhatsApp(payload: WhatsAppTextSendPayload): Promise<void> {
+  const api = bridge();
+  if (!api?.sendText) throw new Error('WhatsApp sending is only available in the desktop app');
+  const result = await api.sendText(payload);
+  if (!result?.ok) throw new Error(result?.error || 'WhatsApp could not send the bill');
 }
 
 /**

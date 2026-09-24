@@ -20,4 +20,12 @@ contextBridge.exposeInMainWorld('maestroWhatsApp', {
    * silently dropping the bill.
    */
   send: (payload) => ipcRenderer.invoke('whatsapp:send', payload),
+
+  /**
+   * Send one bill as a plain WhatsApp message — the path that replaced
+   * attaching the PDF. Same contract as `send`: resolves {ok:true} only once
+   * WhatsApp has actually taken the message, {ok:false, error} otherwise, and
+   * the caller falls back to leaving it typed for the operator to send.
+   */
+  sendText: (payload) => ipcRenderer.invoke('whatsapp:send-text', payload),
 });
