@@ -15,6 +15,10 @@
     "db:migrate:deploy": "npm run db:migrate:deploy --workspace=backend",
     "db:seed": "npm run db:seed --workspace=backend"
   },
+  "comment:glob": "Declared ONLY to force npm to hoist it to the flat root. @fastify/static depends on glob ^13, and npm nests it under node_modules/@fastify/static/node_modules/ — but electron-builder strips EVERY nested node_modules from the asar, so the packaged app cannot resolve it and dies at module load with 'Cannot find module glob' (no window, nothing on port 3179, no error text). This was masked until 2026-09-24 because the puppeteer/whatsapp-web.js tree happened to put a glob at the root; deleting those packages removed the accidental fallback and broke the installer. Keep this in step with what @fastify/static pins. Its own deps (minimatch, brace-expansion, balanced-match) hoist along with it.",
+  "dependencies": {
+    "glob": "^13.0.0"
+  },
   "devDependencies": {
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5"
