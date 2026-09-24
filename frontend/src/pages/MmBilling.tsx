@@ -14,9 +14,14 @@ import { GstModeToggle } from '@/components/billing/GstModeToggle';
 import { billsApi } from '@/api/bills';
 import { mmCustomersApi } from '@/api/mmCustomers';
 import { settingsApi } from '@/api/settings';
-import { whatsappApi } from '@/api/whatsapp';
 import { useNavigate } from 'react-router-dom';
-import { isWhatsAppEmbedAvailable, isWhatsAppAutoSendAvailable, requestWhatsAppChat, sendBillOnWhatsApp } from '@/lib/whatsappWeb';
+import {
+  isWhatsAppEmbedAvailable,
+  isWhatsAppAutoSendAvailable,
+  openWhatsAppChatInNewTab,
+  requestWhatsAppChat,
+  sendBillOnWhatsApp,
+} from '@/lib/whatsappWeb';
 import { useToast } from '@/hooks/use-toast';
 import { isValidIndianPhone, newId } from '@/lib/utils';
 import { computeLineTotals, splitTaxP } from '@/lib/billMath';
@@ -50,34 +55,6 @@ Thank you for your business!
 
 MM Bill No: ${billNumber}
 Total Amount: ${formatCurrency(grandTotal)}`;
-}
-
-async function sendBillViaWhatsApp(bill: Bill, phone: string, settings: Partial<Settings>): Promise<void> {
-  const { generateMmA4InvoicePDFBase64 } = await loadMmA4Lib();
-  const pdfBase64 = await generateMmA4InvoicePDFBase64(bill, settings);
-  await whatsappApi.sendPdf({
-    phone,
-    pdfBase64,
-    fileName: `${bill.billNumber}.pdf`,
-    caption: buildWhatsAppCaption(bill.billNumber, bill.grandTotal, bill.mmCustomer?.name),
-  });
-}
-
-/**
- * Map backend WhatsApp errors to user-friendly messages — same mapping as
- * the main Billing page.
- */
-function whatsappErrorMessage(msg: string): string {
-  if (msg.includes('not linked')) {
-    return 'Link WhatsApp in Settings, then tap Send Bill on WhatsApp.';
-  }
-  if (msg.includes('not registered') || msg.includes('is not a WhatsApp')) {
-    return "This number isn't on WhatsApp. Verify with the customer.";
-  }
-  if (msg.includes('Invalid number') || msg.includes('invalid phone')) {
-    return 'Phone number is invalid for WhatsApp.';
-  }
-  return msg;
 }
 
 const newEmptyItem = (defaultGstRate = 5): BillItemForm => ({
@@ -210,22 +187,19 @@ export default function MmBillingPage() {
   );
 
   /**
-   * Hand one saved MM bill to the embedded WhatsApp Web panel: save the Tax
-   * Invoice PDF, open the customer's chat with the caption already typed, and
-   * switch to the WhatsApp page, so the operator only has to attach the file.
-   *
-   * Shared by BOTH send paths — the manual "Send Bill on WhatsApp" button and
-   * the "Send on WhatsApp after saving" checkbox. The checkbox path used to
-   * skip this and always POST to the backend service, which inside the
-   * desktop app is the dead headless-puppeteer path: it fails every time with
-   * "Link WhatsApp in Settings", even though the panel right there is logged
-   * in. Any new send path must branch on isWhatsAppEmbedAvailable() too.
+   * The ONE WhatsApp send path for this page — used by both the "Send Bill on
+   * WhatsApp" button and the "Send on WhatsApp after saving" checkbox. MM's
+   * twin of BillingPage.shareBillOnWhatsApp; keep the two in step.
    *
    * Takes the bill as an argument rather than reading `savedBill`: the
    * checkbox path runs inside this mutation's own onSuccess, whose closure
    * still sees the pre-save value (null).
+   *
+   * Three tiers, best first. There is no longer a backend send: the headless
+   * whatsapp-web.js service behind it was deleted, so every tier here drives
+   * the operator's own logged-in WhatsApp.
    */
-  const shareViaEmbeddedWhatsApp = async (bill: Bill, phone: string) => {
+  const shareBillOnWhatsApp = async (bill: Bill, phone: string) => {
     const caption = buildWhatsAppCaption(bill.billNumber, bill.grandTotal, bill.mmCustomer?.name);
     const fileName = `${bill.billNumber}.pdf`;
 
@@ -261,8 +235,15 @@ export default function MmBillingPage() {
     // Manual fallback: save the PDF and open the chat with the caption typed.
     const { downloadMmA4InvoicePDF } = await loadMmA4Lib();
     await downloadMmA4InvoicePDF(bill, settings ?? {});
-    requestWhatsAppChat({ phone, caption });
-    navigate('/whatsapp');
+
+    if (isWhatsAppEmbedAvailable()) {
+      requestWhatsAppChat({ phone, caption });
+      navigate('/whatsapp');
+    } else {
+      // Plain browser / two-PC client — see the same branch in BillingPage.
+      openWhatsAppChatInNewTab(phone, caption);
+    }
+
     toast({
       title: 'Chat opened',
       description: `Attach ${fileName} in the chat and send.`,
@@ -284,27 +265,8 @@ export default function MmBillingPage() {
             description: 'Bill saved but not sent on WhatsApp.',
             variant: 'destructive',
           });
-        } else if (isWhatsAppEmbedAvailable()) {
-          await shareViaEmbeddedWhatsApp(bill, customer.phone.trim());
         } else {
-          setSendingWhatsApp(true);
-          try {
-            await sendBillViaWhatsApp(bill, customer.phone.trim(), settings ?? {});
-            toast({
-              title: 'Sent on WhatsApp!',
-              description: `Invoice ${bill.billNumber}.pdf delivered to ${customer.phone}.`,
-              variant: 'success',
-            });
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : 'Could not send via WhatsApp';
-            toast({
-              title: 'WhatsApp send failed',
-              description: whatsappErrorMessage(msg),
-              variant: 'destructive',
-            });
-          } finally {
-            setSendingWhatsApp(false);
-          }
+          await shareBillOnWhatsApp(bill, customer.phone.trim());
         }
       }
     },
@@ -398,17 +360,7 @@ export default function MmBillingPage() {
     await downloadMmA4InvoicePDF(savedBill, settings ?? {});
   };
 
-  /**
-   * "Send on WhatsApp" after a bill is saved.
-   *
-   * Inside the desktop app this hands the bill to the embedded WhatsApp Web
-   * panel: download the PDF, open the customer's chat with the caption
-   * already typed, and switch to the WhatsApp page, so the operator only has
-   * to attach the file they just saved and press send. The old path — POSTing
-   * the PDF to the backend for whatsapp-web.js to deliver headlessly — stays
-   * as the fallback for a plain browser (Vite dev, or a two-PC client opened
-   * outside the desktop shell), where no <webview> exists.
-   */
+  /** "Send Bill on WhatsApp" after a bill is saved — see shareBillOnWhatsApp. */
   const handleWhatsAppShare = async () => {
     if (!savedBill || !customer.phone) return;
     if (!isValidIndianPhone(customer.phone.trim())) {
@@ -420,32 +372,7 @@ export default function MmBillingPage() {
       return;
     }
 
-    if (isWhatsAppEmbedAvailable()) {
-      // Saves the PDF first: the operator attaches it from the chat, and the
-      // native file dialog reopens in whichever folder they used last, so
-      // after the first bill this is two clicks.
-      await shareViaEmbeddedWhatsApp(savedBill, customer.phone.trim());
-      return;
-    }
-
-    setSendingWhatsApp(true);
-    try {
-      await sendBillViaWhatsApp(savedBill, customer.phone.trim(), settings ?? {});
-      toast({
-        title: 'Sent on WhatsApp!',
-        description: `Invoice ${savedBill.billNumber}.pdf delivered to ${customer.phone}.`,
-        variant: 'success',
-      });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Could not send via WhatsApp';
-      toast({
-        title: 'WhatsApp send failed',
-        description: whatsappErrorMessage(msg),
-        variant: 'destructive',
-      });
-    } finally {
-      setSendingWhatsApp(false);
-    }
+    await shareBillOnWhatsApp(savedBill, customer.phone.trim());
   };
 
   const handleReset = () => {

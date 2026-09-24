@@ -506,7 +506,6 @@ function startBackend(share) {
     ? [LOCAL_URL, ...getLanAddresses().map((ip) => `http://${ip}:${PORT}`)].join(',')
     : LOCAL_URL;
   process.env.FRONTEND_DIST = path.join(APP_ROOT, 'frontend', 'dist');
-  process.env.WA_DATA_DIR = dataRoot;
   process.env.LOG_LEVEL = process.env.LOG_LEVEL || 'info';
   process.env.APP_VERSION = app.getVersion();
 

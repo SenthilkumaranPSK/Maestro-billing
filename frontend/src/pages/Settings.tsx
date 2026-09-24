@@ -1,14 +1,13 @@
 import { useState } from 'react';
 import {
   Smartphone, FileBarChart2, Percent, ChevronRight, Save, FolderCog, DatabaseBackup, Moon, Sun, Lock,
-  Users, Plus, ChevronUp, ChevronDown, Trash2,
+  Users, Plus, ChevronUp, ChevronDown, Trash2, ExternalLink,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { whatsappApi } from '@/api/whatsapp';
 import { backupsApi } from '@/api/backups';
 import { settingsApi } from '@/api/settings';
 import { staffApi } from '@/api/staff';
@@ -16,21 +15,13 @@ import { useToast } from '@/hooks/use-toast';
 import { useTheme } from '@/hooks/use-theme';
 import { formatDateTime } from '@/lib/utils';
 import { shouldShowWhatsappOnBilling } from '@/types';
+import { isWhatsAppEmbedAvailable } from '@/lib/whatsappWeb';
 
 export default function SettingsPage() {
   const { toast } = useToast();
   const qc = useQueryClient();
   const navigate = useNavigate();
   const { theme, setTheme } = useTheme();
-
-  const { data: whatsappStatus } = useQuery({
-    queryKey: ['whatsapp', 'status'],
-    queryFn: whatsappApi.getStatus,
-    refetchInterval: (query) => {
-      const status = query.state.data?.status;
-      return status === 'CONNECTED' ? false : 3000;
-    },
-  });
 
   const { data: backupData } = useQuery({
     queryKey: ['backups'],
@@ -46,6 +37,13 @@ export default function SettingsPage() {
   // 'false' means "show" — this has to default to today's behaviour so an
   // upgrade never silently hides a feature nobody asked to hide.
   const showWhatsappOnBilling = shouldShowWhatsappOnBilling(settingsData?.general);
+  // The only WhatsApp fact this screen can state truthfully. Whether the
+  // account is *linked* lives inside the embedded WhatsApp Web session, and
+  // the only way to read it from here would be to scrape the guest's DOM for
+  // a QR canvas — exactly the brittle coupling that breaks whenever WhatsApp
+  // reskins. So this card points at the panel instead of mirroring it; the
+  // panel shows either the QR or the chat list, which is its own answer.
+  const whatsappEmbedded = isWhatsAppEmbedAvailable();
 
   const setShowWhatsappMutation = useMutation({
     mutationFn: (value: boolean) => settingsApi.update('show_whatsapp_on_billing', String(value), 'general'),
@@ -220,46 +218,32 @@ export default function SettingsPage() {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
-          <div className="flex items-center gap-2">
-            <span
-              className={`inline-block w-2.5 h-2.5 rounded-full ${
-                whatsappStatus?.status === 'CONNECTED'
-                  ? 'bg-green-500'
-                  : whatsappStatus?.status === 'QR_READY'
-                    ? 'bg-amber-500 animate-pulse'
-                    : 'bg-slate-300'
-              }`}
-            />
-            <span className="text-sm font-medium">
-              {whatsappStatus?.status === 'CONNECTED' && 'Connected — bills will be sent with PDF attached'}
-              {whatsappStatus?.status === 'QR_READY' && 'Scan QR code with your phone to link WhatsApp'}
-              {whatsappStatus?.status === 'CONNECTING' && 'Starting WhatsApp…'}
-              {(!whatsappStatus || whatsappStatus.status === 'DISCONNECTED') && 'Not connected'}
-            </span>
-          </div>
-
-          {whatsappStatus?.status === 'QR_READY' && whatsappStatus.qrCode && (
-            <div className="flex flex-col items-center gap-2 py-2">
-              <img
-                src={whatsappStatus.qrCode}
-                alt="WhatsApp QR Code"
-                className="w-48 h-48 border rounded-lg"
-              />
-              <p className="text-xs text-muted-foreground text-center max-w-xs">
-                Open WhatsApp on your phone → Linked Devices → Link a Device → scan this code.
+          {whatsappEmbedded ? (
+            <>
+              <p className="text-sm">
+                WhatsApp runs on the{' '}
+                <span className="font-medium">WhatsApp</span> page — scan the QR
+                code there once and this PC stays linked between restarts.
               </p>
-            </div>
-          )}
-
-          {whatsappStatus?.status === 'CONNECTED' && (
-            <p className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
-              WhatsApp is linked. Saving a bill with a customer phone number will automatically send the PDF invoice.
-            </p>
-          )}
-
-          {whatsappStatus?.status !== 'CONNECTED' && whatsappStatus?.status !== 'QR_READY' && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => navigate('/whatsapp')}
+              >
+                <ExternalLink className="h-3.5 w-3.5 mr-1.5" />
+                Open WhatsApp
+              </Button>
+              <p className="text-xs text-muted-foreground">
+                Saving a bill with a customer phone number attaches the PDF and
+                sends it from that session. There is no separate login here.
+              </p>
+            </>
+          ) : (
             <p className="text-xs text-muted-foreground">
-              Link your studio WhatsApp account once. After that, invoices are sent directly with the PDF attached — no manual download needed.
+              WhatsApp sending runs inside the Maestro Billing desktop app,
+              which keeps you signed in between restarts. In a browser, saving a
+              bill downloads the PDF and opens the customer's chat on
+              web.whatsapp.com so you can attach it.
             </p>
           )}
 
@@ -274,7 +258,7 @@ export default function SettingsPage() {
             <span>
               Show WhatsApp option on the New Bill screen
               <span className="block text-xs text-muted-foreground font-normal">
-                Turn off to hide the "Send on WhatsApp" checkbox and buttons while billing. Linking above still works either way.
+                Turn off to hide the "Send on WhatsApp" checkbox and buttons while billing. The WhatsApp page keeps working either way.
               </span>
             </span>
           </label>

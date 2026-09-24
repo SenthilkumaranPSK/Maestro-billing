@@ -16,9 +16,9 @@
  */
 
 /** Phone → WhatsApp's wire format, matching the backend's own normalisation
- * in WhatsAppService.sendPdfInvoice: digits only, and a bare 10-digit Indian
- * number gets the 91 country code. Anything already carrying a country code
- * is left alone. */
+ * in the old backend service (now deleted): digits only, and a bare 10-digit
+ * Indian number gets the 91 country code. Anything already carrying a country
+ * code is left alone. */
 export function normalizeWhatsAppPhone(phone: string): string {
   const digits = phone.replace(/\D/g, '');
   return digits.length === 10 ? `91${digits}` : digits;
@@ -35,6 +35,24 @@ export function buildWhatsAppChatUrl(phone: string, text?: string): string {
 }
 
 export const WHATSAPP_HOME_URL = 'https://web.whatsapp.com';
+
+/**
+ * Open one customer's chat in the operator's own browser, in a new tab.
+ *
+ * This is the path for everything that is NOT the desktop app: a plain
+ * browser in dev, and the client-only second PC in two-PC mode. Those used to
+ * POST the PDF to the backend's headless whatsapp-web.js service, which was
+ * deleted — it could never persist a login (see the note above), stopped
+ * authenticating against WhatsApp Web entirely, and cost a second Chrome on
+ * every boot. Handing the operator the real WhatsApp Web with the number and
+ * caption already filled in is strictly better than a send that fails.
+ *
+ * The PDF is downloaded separately by the caller first, so the only remaining
+ * step is attaching the file that just landed in Downloads.
+ */
+export function openWhatsAppChatInNewTab(phone: string, caption?: string): void {
+  window.open(buildWhatsAppChatUrl(phone, caption), '_blank', 'noopener,noreferrer');
+}
 
 /**
  * True only inside the packaged desktop app. A <webview> needs

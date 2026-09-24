@@ -15,21 +15,18 @@ import { serviceRoutes } from './routes/services';
 import { staffRoutes } from './routes/staff';
 import { billRoutes } from './routes/bills';
 import { settingsRoutes } from './routes/settings';
-import { whatsappRoutes } from './routes/whatsapp';
 import { backupRoutes } from './routes/backups';
 import { printerRoutes } from './routes/printer';
 import { reportRoutes } from './routes/reports';
 import { errorHandler } from './middleware/errorHandler';
-import { WhatsAppService } from './services/WhatsAppService';
 import { BackupService, getConfiguredBackupDir } from './services/BackupService';
 import { ReportService, previousMonthYm } from './services/ReportService';
 import { runPendingMigrations } from './utils/runMigrations';
 
 const prisma = new PrismaClient();
-const whatsapp = new WhatsAppService();
 
-// Safety nets: a stray rejection or exception in a background task (WhatsApp
-// reconnects, auto-backup timer) must never take the billing app down mid-day.
+// Safety nets: a stray rejection or exception in a background task (the
+// auto-backup / auto-report timers) must never take the billing app down mid-day.
 // Log loudly and keep serving — availability wins for a single-user local app.
 process.on('unhandledRejection', (reason) => {
   console.error('[unhandledRejection]', reason);
@@ -59,7 +56,6 @@ async function main() {
 
   // Decorators
   app.decorate('prisma', prisma);
-  app.decorate('whatsapp', whatsapp);
 
   // ── Plugins ──────────────────────────────────────────────────────────────
   // CORS — support a comma-separated list of origins from the env var so the
@@ -117,7 +113,6 @@ async function main() {
   await app.register(staffRoutes,    { prefix: '/api/v1/staff'     });
   await app.register(billRoutes,     { prefix: '/api/v1/bills'     });
   await app.register(settingsRoutes, { prefix: '/api/v1/settings'  });
-  await app.register(whatsappRoutes, { prefix: '/api/v1/whatsapp'  });
   await app.register(backupRoutes,   { prefix: '/api/v1/backups'   });
   await app.register(printerRoutes,  { prefix: '/api/v1/printer'   });
   await app.register(reportRoutes,   { prefix: '/api/v1/reports'   });
@@ -189,8 +184,8 @@ async function main() {
   // process.exit() while one was mid-write (fs.copyFileSync / PDF
   // generation), leaving a truncated backup or report file behind — worse
   // than not having one, since a truncated .db still looks like a valid
-  // backup in the list until someone tries to restore it. Cleared/awaited
-  // here the same way WhatsAppService already tracks its own init timer.
+  // backup in the list until someone tries to restore it. Cleared and
+  // awaited here so a quit always lands between writes, never inside one.
   let backupTimer: NodeJS.Timeout | undefined;
   let reportTimer: NodeJS.Timeout | undefined;
   let backupInFlight: Promise<void> | null = null;
@@ -201,11 +196,10 @@ async function main() {
     app.log.info(`Received ${signal}, shutting down…`);
     clearTimeout(backupTimer);
     clearTimeout(reportTimer);
-    // Failsafe: if close hangs (e.g. WhatsApp's Chrome refusing to die),
-    // force-exit after 10s rather than leaving a zombie process.
+    // Failsafe: if close hangs, force-exit after 10s rather than leaving a
+    // zombie process behind holding the SQLite file open.
     const failsafe = setTimeout(() => process.exit(1), 10_000);
     failsafe.unref();
-    await whatsapp.shutdown().catch(() => {});
     await (backupInFlight ?? Promise.resolve()).catch(() => {});
     await (reportInFlight ?? Promise.resolve()).catch(() => {});
     await app.close();
@@ -292,6 +286,5 @@ main().catch((err) => {
 declare module 'fastify' {
   interface FastifyInstance {
     prisma: PrismaClient;
-    whatsapp: WhatsAppService;
   }
 }

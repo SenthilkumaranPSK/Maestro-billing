@@ -15,8 +15,8 @@
     "db:migrate:deploy": "npm run db:migrate:deploy --workspace=backend",
     "db:seed": "npm run db:seed --workspace=backend"
   },
-  "dependencies": {
-    "puppeteer": "24.38.0",
-    "puppeteer-core": "24.38.0"
+  "devDependencies": {
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5"
   }
 }

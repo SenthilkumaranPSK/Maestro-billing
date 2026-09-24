@@ -18,8 +18,8 @@ function isValidDateString(s: string): boolean {
   return d.getFullYear() === year && d.getMonth() === month - 1 && d.getDate() === day;
 }
 
-// Shared phone rule — used for customers and WhatsApp sends alike so the two
-// paths can never drift apart on what counts as a valid number.
+// Shared phone rule — used by both the studio and MM customer schemas so the
+// two paths can never drift apart on what counts as a valid number.
 export const phoneSchema = z
   .string()
   .min(10, 'Valid phone required')
