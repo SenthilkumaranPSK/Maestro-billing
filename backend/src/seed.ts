@@ -1,4 +1,10 @@
 import 'dotenv/config';
+import {
+  DEFAULT_PRODUCTS,
+  DEFAULT_MM_PRODUCT_NAMES,
+  DEFAULT_MM_PRODUCT_FIELDS,
+  DEFAULT_SERVICE_NAMES,
+} from './utils/catalogDefaults';
 import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
@@ -45,21 +51,10 @@ async function main() {
   }
   console.log('✓ Default settings created');
 
-  // Sample products
-  const products = [
-    { name: 'Passport Size Photo (6 pcs)', unit: 'set', unitPrice: 10000, gstRate: 18 },
-    { name: 'Studio Portrait 4x6', unit: 'photo', unitPrice: 3000, gstRate: 18 },
-    { name: 'Studio Portrait 6x8', unit: 'photo', unitPrice: 5000, gstRate: 18 },
-    { name: 'Wedding Album 12x16 (20 pgs)', unit: 'album', unitPrice: 250000, gstRate: 18 },
-    { name: 'Canvas Print 12x16', unit: 'piece', unitPrice: 75000, gstRate: 18 },
-    { name: 'Photo Frame 8x10', unit: 'piece', unitPrice: 45000, gstRate: 18 },
-    { name: 'Vinyl Banner 3x6 ft', unit: 'piece', unitPrice: 120000, gstRate: 18 },
-    { name: 'Baby Photo Shoot (1 hr)', unit: 'session', unitPrice: 300000, gstRate: 18 },
-    { name: 'ID Card Photo', unit: 'set', unitPrice: 5000, gstRate: 18 },
-    { name: 'Soft Copy (Pen Drive)', unit: 'piece', unitPrice: 20000, gstRate: 18 },
-  ];
-
-  for (const p of products) {
+  // Catalog defaults live in utils/catalogDefaults.ts so that this seed and
+  // the Alt → Setup → "Restore Default Products & Services" route can never
+  // disagree about what "default" means.
+  for (const p of DEFAULT_PRODUCTS) {
     const existing = await prisma.product.findFirst({ where: { name: p.name } });
     if (!existing) {
       await prisma.product.create({
@@ -69,55 +64,15 @@ async function main() {
   }
   console.log('✓ Sample products created');
 
-  // MM billing module's own catalog — separate table (MmProduct), separate
-  // from the products list above. From the studio's reference wholesale tax
-  // invoice: names with the "1Q Bulk"/"1 Q BULK" prefix stripped, all HSN
-  // 210690, unit Kgs, GST 5% (2.5% CGST + 2.5% SGST), Rs.120/kg to match that
-  // reference — editable per bill same as any product.
-  const mmProducts = [
-    'Thenkuzhal Murukku',
-    'Butter Muruku',
-    'Spring Muruku',
-    'Garlic Mixture',
-    'Pepper Sev',
-    'Sirai Pakkoda',
-    'Kara Boondhi',
-    'Madras Mixture',
-    'Kara Sev',
-    'Mini Kara Sev',
-    'Mullu Murukku',
-    'Bombay Mixture',
-    'Double Ring Murukku',
-    'Onion Murukku',
-    'Baby Nippet Chilly',
-    'Avul Mixture',
-  ];
-
-  for (const name of mmProducts) {
+  for (const name of DEFAULT_MM_PRODUCT_NAMES) {
     const existing = await prisma.mmProduct.findFirst({ where: { name } });
     if (!existing) {
-      await prisma.mmProduct.create({
-        data: { name, unit: 'Kgs', unitPrice: 12000, gstRate: 5, hsnSac: '210690' },
-      });
+      await prisma.mmProduct.create({ data: { name, ...DEFAULT_MM_PRODUCT_FIELDS } });
     }
   }
   console.log('✓ MM products created');
 
-  // Sample services — feeds the A4 invoice's Service Description autocomplete.
-  // Deliberately just names, no HSN/SAC/price here: those are studio/CA-specific
-  // and shouldn't ship as a guessed default.
-  const services = [
-    'Wedding Photography',
-    'Wedding Videography',
-    'Pre-Wedding Shoot',
-    'Product Photography',
-    'Product Video Shoot',
-    'Baby / Family Portrait Session',
-    'Birthday & Event Coverage',
-    'Passport / ID Photo Service',
-  ];
-
-  for (const name of services) {
+  for (const name of DEFAULT_SERVICE_NAMES) {
     const existing = await prisma.service.findFirst({ where: { name } });
     if (!existing) {
       await prisma.service.create({ data: { name } });

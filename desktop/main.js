@@ -1404,6 +1404,78 @@ async function restoreFromBackup() {
   app.quit(); // graceful: before-quit still runs the backend's SIGTERM shutdown
 }
 
+/**
+ * Alt → Setup → "Restore Default Products & Services…".
+ *
+ * Puts back catalog items that ship with a fresh install and have since been
+ * deleted. Additive only — it never edits or removes anything, so unlike
+ * "Restore from Backup…" above it needs no restart, no file swap, and cannot
+ * lose work. The confirmation wording says so plainly rather than using the
+ * usual scary-warning tone, because a warning that doesn't match the risk just
+ * trains people to click through the ones that matter.
+ *
+ * Uses APP_URL rather than LOCAL_URL so a two-PC client correctly targets the
+ * Main PC's database — the catalog lives there, and a client has no local one.
+ */
+async function restoreCatalogDefaults() {
+  const { response } = await dialog.showMessageBox(mainWindow ?? undefined, {
+    type: 'question',
+    title: 'Maestro Billing',
+    message: 'Restore the default products and services?',
+    detail:
+      'Any standard item that was deleted comes back. Nothing is removed and no ' +
+      'prices are changed — items you added yourself, and any price or GST you ' +
+      'have edited, are left exactly as they are.',
+    buttons: ['Restore Defaults', 'Cancel'],
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true,
+  });
+  if (response !== 0) return;
+
+  try {
+    const res = await fetch(`${APP_URL}/api/v1/catalog/restore-defaults`, {
+      method: 'POST',
+      // Mutating routes require this header (see middleware/requireAppHeader).
+      headers: { 'X-Requested-With': 'maestro-billing-app', 'Content-Type': 'application/json' },
+    });
+    if (!res.ok) throw new Error(`Server returned ${res.status}`);
+    const body = await res.json();
+    const d = (body && body.data) || {};
+    const line = (label, c) =>
+      c ? `${label}: ${c.created} added, ${c.reactivated} restored, ${c.unchanged} already there` : null;
+    const summary = [
+      line('Products', d.products),
+      line('MM Products', d.mmProducts),
+      line('Services', d.services),
+    ].filter(Boolean).join('\n');
+    const touched =
+      (d.products?.created ?? 0) + (d.products?.reactivated ?? 0) +
+      (d.mmProducts?.created ?? 0) + (d.mmProducts?.reactivated ?? 0) +
+      (d.services?.created ?? 0) + (d.services?.reactivated ?? 0);
+
+    // The catalog pages hold their lists in TanStack Query caches, so a reload
+    // is what actually makes the restored rows appear.
+    if (touched > 0 && mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.reload();
+
+    await dialog.showMessageBox(mainWindow ?? undefined, {
+      type: 'info',
+      title: 'Maestro Billing',
+      message: touched > 0 ? 'Default items restored.' : 'Nothing to restore.',
+      detail: touched > 0
+        ? summary
+        : 'Every default product and service is already in your catalog.\n\n' + summary,
+      buttons: ['OK'],
+      noLink: true,
+    });
+  } catch (err) {
+    dialog.showErrorBox(
+      'Maestro Billing',
+      `The default products and services could not be restored:\n${err.message}`,
+    );
+  }
+}
+
 function buildMenu() {
   Menu.setApplicationMenu(
     Menu.buildFromTemplate([
@@ -1417,6 +1489,10 @@ function buildMenu() {
                 dialog.showErrorBox('Maestro Billing', `Restore could not be started:\n${err.message}`);
               });
             },
+          },
+          {
+            label: 'Restore Default Products & Services…',
+            click: () => { void restoreCatalogDefaults(); },
           },
           { type: 'separator' },
           {

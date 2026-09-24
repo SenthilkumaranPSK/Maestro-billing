@@ -18,6 +18,7 @@ import { settingsRoutes } from './routes/settings';
 import { backupRoutes } from './routes/backups';
 import { printerRoutes } from './routes/printer';
 import { reportRoutes } from './routes/reports';
+import { catalogRoutes } from './routes/catalog';
 import { errorHandler } from './middleware/errorHandler';
 import { BackupService, getConfiguredBackupDir } from './services/BackupService';
 import { ReportService, previousMonthYm } from './services/ReportService';
@@ -116,6 +117,7 @@ async function main() {
   await app.register(backupRoutes,   { prefix: '/api/v1/backups'   });
   await app.register(printerRoutes,  { prefix: '/api/v1/printer'   });
   await app.register(reportRoutes,   { prefix: '/api/v1/reports'   });
+  await app.register(catalogRoutes,  { prefix: '/api/v1/catalog'   });
 
   // ── Static frontend (single-process mode) ────────────────────────────────
   // When a built frontend exists (production / desktop app), serve it from
