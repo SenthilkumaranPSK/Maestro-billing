@@ -17,6 +17,8 @@ import { PdfPreviewModal } from '@/components/billing/PdfPreviewModal';
 import { PasswordGateModal } from '@/components/billing/PasswordGateModal';
 import { EditBillModal } from '@/components/billing/EditBillModal';
 import { LayoutToggle, guessBillLayout, type BillLayout } from '@/components/billing/LayoutToggle';
+import { WhatsAppIcon } from '@/components/whatsapp/WhatsAppIcon';
+import { WhatsAppShareDialog } from '@/components/whatsapp/WhatsAppShareDialog';
 import { billsApi } from '@/api/bills';
 import { settingsApi } from '@/api/settings';
 // pdf-lib is heavy (~400KB) — loaded on demand so the app starts fast.
@@ -42,6 +44,7 @@ export default function HistoryPage() {
   const [page, setPage] = useState(1);
   const [editingBill, setEditingBill] = useState<Bill | null>(null);
   const [previewBill, setPreviewBill] = useState<Bill | null>(null);
+  const [shareWhatsAppBill, setShareWhatsAppBill] = useState<Bill | null>(null);
   // Editing a bill is gated behind the bill-edit password (Settings →
   // Security) — this holds the bill until the password is confirmed or
   // cancelled.
@@ -255,6 +258,15 @@ export default function HistoryPage() {
                         <Button variant="ghost" size="icon" className="h-7 w-7" title="Download PDF" onClick={() => handleDownloadPDF(bill)}>
                           <FileText className="h-3.5 w-3.5" />
                         </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50"
+                          title="Share on WhatsApp"
+                          onClick={() => setShareWhatsAppBill(bill)}
+                        >
+                          <WhatsAppIcon className="h-3.5 w-3.5" />
+                        </Button>
                         {bill.status !== 'CANCELLED' && (
                           <Button
                             variant="ghost"
@@ -322,6 +334,15 @@ export default function HistoryPage() {
           }}
         />
       )}
+
+      <WhatsAppShareDialog
+        open={!!shareWhatsAppBill}
+        onOpenChange={(open) => {
+          if (!open) setShareWhatsAppBill(null);
+        }}
+        bill={shareWhatsAppBill}
+        settings={settings ?? {}}
+      />
     </div>
   );
 }

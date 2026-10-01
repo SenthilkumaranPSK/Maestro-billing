@@ -12,46 +12,27 @@ import type { ElectronWebviewElement } from '@/types/webview';
 /**
  * WhatsApp Web, hosted inside the desktop app on a persistent session.
  *
- * Mounted ONCE by AppShell and then kept alive for the rest of the session —
- * hidden with CSS when the operator is on another page, never unmounted.
- * WhatsApp Web takes roughly ten seconds to boot and re-runs its whole
- * handshake on every load, so unmounting it on navigation (the natural
- * outcome of putting it behind a route) would make every visit feel broken
- * and would interrupt an in-flight send.
- *
- * It is also mounted lazily: an operator who never opens this page never pays
- * the load cost, and no WhatsApp connection is opened behind their back.
+ * Mounted ONCE by AppShell and kept alive in the background so the WhatsApp session
+ * is immediately available for background bill dispatches, without jarring screen transitions.
+ * When the operator is on another page, it sits off-screen with full layout dimensions
+ * so CDP coordinate calculations remain valid and messages commit seamlessly.
  */
 export function WhatsAppPanel({ active }: { active: boolean }) {
   const webviewRef = useRef<ElectronWebviewElement | null>(null);
   const [loading, setLoading] = useState(true);
-  // Latches on first activation and never clears — this is what keeps the
-  // session alive across navigation once the operator has opened it.
-  const [everActivated, setEverActivated] = useState(false);
   const available = isWhatsAppEmbedAvailable();
 
+  // Billing pages ask for a specific chat via the module-level channel in lib/whatsappWeb.ts.
   useEffect(() => {
-    if (active) setEverActivated(true);
-  }, [active]);
-
-  // Billing pages ask for a specific chat via the module-level channel in
-  // lib/whatsappWeb.ts. Requests made before this panel exists are queued
-  // there and replayed the moment it subscribes, so the very first
-  // "Send on WhatsApp" — which mounts this component *and* asks it to open a
-  // chat in the same tick — is not lost.
-  useEffect(() => {
-    if (!everActivated) return;
+    if (!available) return;
     return subscribeToWhatsAppChatRequests(({ phone, caption }) => {
       const view = webviewRef.current;
       if (!view) return;
-      // loadURL rather than setting src: src only triggers a navigation when
-      // the value actually changes, so sending two bills to the same number
-      // in a row would silently do nothing the second time.
       void view.loadURL(buildWhatsAppChatUrl(phone, caption)).catch(() => {
         /* a navigation the guest refuses is surfaced by the page itself */
       });
     });
-  }, [everActivated]);
+  }, [available]);
 
   useEffect(() => {
     const view = webviewRef.current;
@@ -64,7 +45,7 @@ export function WhatsAppPanel({ active }: { active: boolean }) {
       view.removeEventListener('did-start-loading', start);
       view.removeEventListener('did-stop-loading', stop);
     };
-  }, [everActivated]);
+  }, [available]);
 
   if (!available) {
     return (
@@ -85,7 +66,14 @@ export function WhatsAppPanel({ active }: { active: boolean }) {
   }
 
   return (
-    <div className={active ? 'flex-1 flex flex-col overflow-hidden' : 'hidden'}>
+    <div
+      className={
+        active
+          ? 'flex-1 flex flex-col overflow-hidden relative'
+          : 'fixed -left-[9999px] top-0 w-[1280px] h-[800px] pointer-events-none opacity-0 -z-50'
+      }
+      aria-hidden={!active}
+    >
       <div className="flex items-center gap-2 border-b border-slate-200 bg-white px-4 py-2">
         <MessageCircle className="w-4 h-4 text-brand-500 shrink-0" />
         <span className="text-sm font-medium text-slate-700">WhatsApp</span>
@@ -119,19 +107,12 @@ export function WhatsAppPanel({ active }: { active: boolean }) {
         </div>
       </div>
 
-      {/* Only rendered once the page has actually been opened — see
-          everActivated above. Kept mounted from then on. */}
-      {everActivated && (
-        <webview
-          ref={webviewRef as React.Ref<HTMLElement>}
-          src={WHATSAPP_HOME_URL}
-          // The whole point: Electron persists cookies/IndexedDB for this
-          // partition in the user profile, so the link survives restarts.
-          // Must match WHATSAPP_PARTITION in desktop/main.js.
-          partition="persist:whatsapp"
-          className="flex-1 w-full"
-        />
-      )}
+      <webview
+        ref={webviewRef as React.Ref<HTMLElement>}
+        src={WHATSAPP_HOME_URL}
+        partition="persist:whatsapp"
+        className="flex-1 w-full"
+      />
     </div>
   );
 }

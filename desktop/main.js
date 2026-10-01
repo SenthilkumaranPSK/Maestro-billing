@@ -966,10 +966,34 @@ async function sendWhatsAppText({ phone, text, billNumber }) {
     const url = `https://web.whatsapp.com/send?phone=${encodeURIComponent(number)}` +
       `&text=${encodeURIComponent(text)}`;
     await whatsappGuest.loadURL(url);
-    await waitInGuest(dbg, `!!document.querySelector('footer [contenteditable=true]')`, WA_SEND_TIMEOUT_MS, 'the chat to open');
 
-    const invalid = await evalInGuest(dbg, `/phone number shared via url is invalid|isn't on WhatsApp|not on WhatsApp/i.test(document.body.innerText)`);
-    if (invalid) throw new Error('That number is not on WhatsApp');
+    const deadline = Date.now() + WA_SEND_TIMEOUT_MS;
+    let composerFound = false;
+    while (Date.now() < deadline) {
+      const state = await evalInGuest(
+        dbg,
+        `(() => {
+          if (document.querySelector('footer [contenteditable=true]')) return 'chat_ready';
+          if (/phone number shared via url is invalid|isn't on WhatsApp|not on WhatsApp/i.test(document.body.innerText)) return 'invalid_number';
+          if (/To use WhatsApp on your computer|Scan this QR code/i.test(document.body.innerText) || document.querySelector('canvas[aria-label]')) return 'needs_login';
+          return 'loading';
+        })()`
+      );
+      if (state === 'chat_ready') {
+        composerFound = true;
+        break;
+      }
+      if (state === 'invalid_number') {
+        throw new Error('That phone number is not registered on WhatsApp');
+      }
+      if (state === 'needs_login') {
+        throw new Error('WhatsApp is not logged in. Open the WhatsApp tab to scan QR code');
+      }
+      await new Promise((res) => setTimeout(res, 400));
+    }
+    if (!composerFound) {
+      throw new Error('Timed out waiting for the WhatsApp chat to open');
+    }
 
     // Fail-closed gate: WhatsApp must have actually taken our text. Matching on
     // the bill number rather than the whole body keeps this robust against
