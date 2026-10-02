@@ -1,7 +1,8 @@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import type { PaymentMode } from '@/types';
 
-const MODES: PaymentMode[] = ['CASH', 'UPI', 'CARD', 'CHEQUE'];
+const MODES: PaymentMode[] = ['CASH', 'UPI', 'CARD', 'CHEQUE', 'SPLIT'];
+
 const UNSET = 'UNSET';
 
 interface PaymentModeSelectProps {

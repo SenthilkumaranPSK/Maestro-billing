@@ -1228,6 +1228,25 @@ ipcMain.handle('whatsapp:send-text', async (_event, payload) => {
   }
 });
 
+ipcMain.handle('whatsapp:status', async () => {
+  if (!whatsappGuest || whatsappGuest.isDestroyed()) {
+    return { status: 'disconnected' };
+  }
+  try {
+    const res = await whatsappGuest.executeJavaScript(`(() => {
+      if (document.querySelector('footer [contenteditable=true]') || document.querySelector('#pane-side') || document.querySelector('[data-icon=chat]')) return 'connected';
+      if (/To use WhatsApp on your computer|Scan this QR code/i.test(document.body?.innerText || '') || document.querySelector('canvas[aria-label]')) return 'qr_ready';
+      if (/Connecting|Trying to connect/i.test(document.body?.innerText || '')) return 'connecting';
+      if (document.querySelector('[data-icon=refresh]')) return 'disconnected';
+      return 'loading';
+    })()`).catch(() => 'loading');
+    return { status: res || 'loading' };
+  } catch {
+    return { status: 'loading' };
+  }
+});
+
+
 // A crash in a non-renderer child process (GPU, print backend/spooler
 // service, network service, etc.) doesn't fire render-process-gone above —
 // that's renderer-only. Printing in particular can spin up its own

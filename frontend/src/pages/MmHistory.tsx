@@ -145,8 +145,57 @@ export default function MmHistoryPage() {
               Clear
             </Button>
           </div>
+
+          <div className="flex items-center gap-2 text-xs text-muted-foreground pt-1 border-t border-slate-100">
+            <span className="font-medium">Quick Dates:</span>
+            <button
+              type="button"
+              className={`px-2 py-1 rounded transition-colors ${
+                from === new Date().toISOString().slice(0, 10) && to === new Date().toISOString().slice(0, 10)
+                  ? 'bg-brand-500 text-white font-medium'
+                  : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+              }`}
+              onClick={() => {
+                const today = new Date().toISOString().slice(0, 10);
+                setFrom(today);
+                setTo(today);
+                setPage(1);
+              }}
+            >
+              Today
+            </button>
+            <button
+              type="button"
+              className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors"
+              onClick={() => {
+                const d = new Date();
+                d.setDate(d.getDate() - 1);
+                const yest = d.toISOString().slice(0, 10);
+                setFrom(yest);
+                setTo(yest);
+                setPage(1);
+              }}
+            >
+              Yesterday
+            </button>
+            <button
+              type="button"
+              className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors"
+              onClick={() => {
+                const d = new Date();
+                const start = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
+                const end = d.toISOString().slice(0, 10);
+                setFrom(start);
+                setTo(end);
+                setPage(1);
+              }}
+            >
+              This Month
+            </button>
+          </div>
         </CardContent>
       </Card>
+
 
       {/* Bills Table */}
       <Card>

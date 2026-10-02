@@ -204,9 +204,28 @@ async function main() {
     failsafe.unref();
     await (backupInFlight ?? Promise.resolve()).catch(() => {});
     await (reportInFlight ?? Promise.resolve()).catch(() => {});
+
+    try {
+      // Perform database maintenance & flush WAL before closing
+      await prisma.$queryRawUnsafe('PRAGMA wal_checkpoint(TRUNCATE)');
+      await prisma.$queryRawUnsafe('PRAGMA optimize');
+    } catch (err) {
+      app.log.warn({ err }, 'Shutdown SQLite maintenance warning');
+    }
+
+    try {
+      // Safety auto-backup on exit to capture the final day state
+      const customDir = await getConfiguredBackupDir(prisma);
+      const svc = new BackupService(customDir);
+      await svc.backup();
+    } catch {
+      /* best effort on shutdown */
+    }
+
     await app.close();
     await prisma.$disconnect();
     process.exit(0);
+
   }
   process.on('SIGINT',  () => closeHandler('SIGINT'));
   process.on('SIGTERM', () => closeHandler('SIGTERM'));

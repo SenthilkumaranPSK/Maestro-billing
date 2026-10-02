@@ -149,7 +149,8 @@ export const createBillSchema = z.object({
   // `null`, not `undefined` (same reasoning as billItemSchema.hsnSac above).
   notes: z.string().max(2000, 'Notes too long').nullable().optional(),
   discountAmount: z.number().int().min(0).optional(),
-  paymentMode: z.enum(['CASH', 'UPI', 'CARD', 'CHEQUE']).optional(),
+  paymentMode: z.enum(['CASH', 'UPI', 'CARD', 'CHEQUE', 'SPLIT']).optional(),
+
   // Rounding to the nearest rupee can never require more than 99 paise of
   // adjustment either way — bounding it catches a garbage/malicious value
   // (e.g. -999999) that would otherwise silently produce a wildly wrong

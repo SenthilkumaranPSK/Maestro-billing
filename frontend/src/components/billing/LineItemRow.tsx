@@ -121,36 +121,53 @@ export function LineItemRow({ index, item, onChange, onRemove, includeInactive =
           />
           {showDropdown && (
             <div className="absolute z-50 w-full min-w-[250px] mt-1 bg-white border rounded-lg shadow-soft-md overflow-y-auto max-h-60 animate-in fade-in-0 zoom-in-95 duration-150">
-              {products?.map((p) => (
-                <button
-                  key={p.id}
-                  className="w-full text-left px-3 py-2 hover:bg-slate-50 text-sm border-b last:border-b-0"
-                  onClick={() => {
-                    setProductSearch(p.name);
-                    onChange({
-                      ...item,
-                      // BillItem.productId is a foreign key into the Product
-                      // table only — an MmProduct's id is a different row
-                      // entirely (or doesn't exist there), so setting it here
-                      // would violate that FK the moment the bill is saved.
-                      // MM line items are already fully denormalized (name/
-                      // hsn/unit/price/gst all copied below), same as any
-                      // manually-typed item with no catalog link.
-                      productId: catalog === 'mm' ? undefined : p.id,
-                      mmProductId: catalog === 'mm' ? p.id : undefined,
-                      productName: p.name,
-                      hsnSac: p.hsnSac,
-                      unit: p.unit,
-                      unitPrice: paisaToRupee(p.unitPrice),
-                      gstRate: p.gstRate,
-                    });
-                    setShowDropdown(false);
-                  }}
-                >
-                  <span className="font-medium">{p.name}</span>
-                  <span className="text-muted-foreground ml-2">₹{paisaToRupee(p.unitPrice).toFixed(2)}</span>
-                </button>
-              ))}
+              {products?.map((p) => {
+                const isMm = 'stockQty' in p;
+                const mmStock = isMm ? (p as any).stockQty : null;
+                const mmReorder = isMm ? (p as any).reorderLevel : 0;
+                const isLow = isMm && mmReorder > 0 && mmStock <= mmReorder;
+                const isZero = isMm && mmStock <= 0;
+
+                return (
+                  <button
+                    key={p.id}
+                    className="w-full text-left px-3 py-2 hover:bg-slate-50 text-sm border-b last:border-b-0 flex items-center justify-between"
+                    onClick={() => {
+                      setProductSearch(p.name);
+                      onChange({
+                        ...item,
+                        productId: catalog === 'mm' ? undefined : p.id,
+                        mmProductId: catalog === 'mm' ? p.id : undefined,
+                        productName: p.name,
+                        hsnSac: p.hsnSac,
+                        unit: p.unit,
+                        unitPrice: paisaToRupee(p.unitPrice),
+                        gstRate: p.gstRate,
+                      });
+                      setShowDropdown(false);
+                    }}
+                  >
+                    <div>
+                      <span className="font-medium text-slate-800">{p.name}</span>
+                      <span className="text-muted-foreground ml-2 text-xs">₹{paisaToRupee(p.unitPrice).toFixed(2)}</span>
+                    </div>
+                    {isMm && (
+                      <span
+                        className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${
+                          isZero
+                            ? 'bg-red-100 text-red-700'
+                            : isLow
+                            ? 'bg-amber-100 text-amber-800'
+                            : 'bg-slate-100 text-slate-600'
+                        }`}
+                      >
+                        {mmStock} {p.unit} {isLow ? '(Low)' : ''}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+
               {products?.length === 0 && (
                 <div className="px-3 py-2 text-xs text-muted-foreground text-center">No products found</div>
               )}

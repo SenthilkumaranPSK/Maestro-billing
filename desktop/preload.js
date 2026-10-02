@@ -28,4 +28,11 @@ contextBridge.exposeInMainWorld('maestroWhatsApp', {
    * the caller falls back to leaving it typed for the operator to send.
    */
   sendText: (payload) => ipcRenderer.invoke('whatsapp:send-text', payload),
+
+  /**
+   * Check the live connection status of the embedded WhatsApp session.
+   * Resolves { status: 'connected' | 'qr_ready' | 'connecting' | 'disconnected' | 'loading' }
+   */
+  getStatus: () => ipcRenderer.invoke('whatsapp:status'),
 });
+

@@ -160,12 +160,25 @@ export default function MmProductsPage() {
     setIsNew(false);
   };
 
+  const [onlyLowStock, setOnlyLowStock] = useState(false);
+
   const isLowStock = (p: MmProduct) => p.reorderLevel > 0 && p.stockQty <= p.reorderLevel;
+
+  const lowStockCount = products?.filter(isLowStock).length ?? 0;
+  const displayedProducts = products?.filter((p) => !onlyLowStock || isLowStock(p));
 
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold">MM/Products</h2>
+        <div className="flex items-center gap-3">
+          <h2 className="text-lg font-semibold">MM/Products</h2>
+          {lowStockCount > 0 && (
+            <Badge variant="destructive" className="gap-1">
+              <AlertTriangle className="h-3 w-3" />
+              {lowStockCount} Low Stock
+            </Badge>
+          )}
+        </div>
         <Button onClick={() => { setEditing({ ...EMPTY, gstRate: defaultGstRate, priceRupees: paisaToRupee(EMPTY.unitPrice ?? 0) }); setIsNew(true); }}>
           <Plus className="h-4 w-4 mr-1" /> Add MM Product
         </Button>
@@ -174,7 +187,7 @@ export default function MmProductsPage() {
       <Card>
         <CardHeader className="pb-3">
           <div className="flex gap-3 items-center justify-between">
-            <div className="flex gap-3 items-center">
+            <div className="flex gap-4 items-center">
               <Input
                 placeholder="Search MM products…"
                 className="w-72"
@@ -185,6 +198,10 @@ export default function MmProductsPage() {
               <label className="flex items-center gap-2 text-sm cursor-pointer">
                 <input type="checkbox" checked={showInactive} disabled={rearranging} onChange={(e) => setShowInactive(e.target.checked)} />
                 Show inactive
+              </label>
+              <label className="flex items-center gap-2 text-sm cursor-pointer font-medium text-amber-700">
+                <input type="checkbox" checked={onlyLowStock} disabled={rearranging} onChange={(e) => setOnlyLowStock(e.target.checked)} />
+                Low stock only
               </label>
             </div>
             <Button variant={rearranging ? 'default' : 'outline'} size="sm" onClick={toggleRearranging}>
@@ -205,8 +222,9 @@ export default function MmProductsPage() {
               </thead>
               <tbody className="stagger-children">
                 {isLoading && <tr><td colSpan={8} className="py-10 text-center text-sm text-muted-foreground">Loading…</td></tr>}
-                {!isLoading && products?.length === 0 && <tr><td colSpan={8} className="py-10 text-center text-sm text-muted-foreground">No MM products found</td></tr>}
-                {products?.map((p, i) => (
+                {!isLoading && displayedProducts?.length === 0 && <tr><td colSpan={8} className="py-10 text-center text-sm text-muted-foreground">No MM products found</td></tr>}
+                {displayedProducts?.map((p, i) => (
+
                   <tr key={p.id} className="border-b last:border-b-0 hover:bg-slate-50 transition-colors">
                     <td className="py-3 px-4">
                       <p className="font-medium text-sm">{p.name}</p>
@@ -250,7 +268,7 @@ export default function MmProductsPage() {
                             size="icon"
                             className="h-7 w-7"
                             title="Move down"
-                            disabled={i === products.length - 1 || reorderMutation.isPending}
+                            disabled={i === (products?.length ?? 0) - 1 || reorderMutation.isPending}
                             onClick={() => moveProduct(i, 1)}
                           >
                             <ChevronDown className="h-3.5 w-3.5" />

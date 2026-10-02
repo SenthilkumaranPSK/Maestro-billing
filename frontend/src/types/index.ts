@@ -134,7 +134,8 @@ export const billStatusVariant: Record<BillStatus, 'success' | 'warning' | 'dest
   PARTIAL: 'warning',
   CANCELLED: 'destructive',
 };
-export type PaymentMode = 'CASH' | 'UPI' | 'CARD' | 'CHEQUE';
+export type PaymentMode = 'CASH' | 'UPI' | 'CARD' | 'CHEQUE' | 'SPLIT';
+
 
 export interface Bill {
   id: number;

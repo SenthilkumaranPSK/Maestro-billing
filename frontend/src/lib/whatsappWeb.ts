@@ -96,14 +96,29 @@ export interface WhatsAppTextSendPayload {
   billNumber: string;
 }
 
+export type WhatsAppLiveStatus = 'connected' | 'qr_ready' | 'connecting' | 'disconnected' | 'loading' | 'unavailable';
+
 interface MaestroWhatsAppBridge {
   send(payload: WhatsAppAutoSendPayload): Promise<{ ok: boolean; error?: string }>;
   sendText?(payload: WhatsAppTextSendPayload): Promise<{ ok: boolean; error?: string }>;
+  getStatus?(): Promise<{ status: WhatsAppLiveStatus }>;
 }
 
 function bridge(): MaestroWhatsAppBridge | null {
   const w = window as unknown as { maestroWhatsApp?: MaestroWhatsAppBridge };
   return w.maestroWhatsApp ?? null;
+}
+
+/** Check the live connection status of WhatsApp Web in the desktop app. */
+export async function getWhatsAppStatus(): Promise<WhatsAppLiveStatus> {
+  const api = bridge();
+  if (!api?.getStatus || !isWhatsAppEmbedAvailable()) return 'unavailable';
+  try {
+    const res = await api.getStatus();
+    return res?.status || 'disconnected';
+  } catch {
+    return 'disconnected';
+  }
 }
 
 /** True when the bill can be attached and sent without the operator touching a file dialog. */
@@ -127,6 +142,7 @@ export async function sendBillTextOnWhatsApp(payload: WhatsAppTextSendPayload): 
   const result = await api.sendText(payload);
   if (!result?.ok) throw new Error(result?.error || 'WhatsApp could not send the bill');
 }
+
 
 /**
  * Attach and send one bill. Resolves only once WhatsApp has accepted the

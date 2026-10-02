@@ -65,7 +65,14 @@ export const WhatsAppPanel = React.memo(function WhatsAppPanel({ active }: { act
   }
 
   return (
-    <div className={active ? 'flex-1 flex flex-col overflow-hidden h-full' : 'hidden'}>
+    <div
+      className={
+        active
+          ? 'flex-1 flex flex-col overflow-hidden h-full w-full'
+          : 'fixed -top-[99999px] -left-[99999px] w-[1280px] h-[800px] opacity-0 pointer-events-none'
+      }
+      aria-hidden={!active}
+    >
       <div className="flex items-center gap-2 border-b border-slate-200 bg-white px-4 py-2 shrink-0">
         <MessageCircle className="w-4 h-4 text-brand-500 shrink-0" />
         <span className="text-sm font-medium text-slate-700">WhatsApp</span>
@@ -98,3 +105,4 @@ export const WhatsAppPanel = React.memo(function WhatsAppPanel({ active }: { act
     </div>
   );
 });
+
