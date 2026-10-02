@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
-import { Loader2, RefreshCw, MessageCircle, ExternalLink } from 'lucide-react';
+import React, { useEffect, useRef } from 'react';
+import { RefreshCw, MessageCircle, ExternalLink } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   WHATSAPP_HOME_URL,
@@ -10,41 +10,40 @@ import {
 import type { ElectronWebviewElement } from '@/types/webview';
 
 /**
- * WhatsApp Web, hosted inside the desktop app on a persistent session.
+ * Stable, isolated WhatsApp Web panel.
  *
- * Mounted ONCE by AppShell and kept alive in the background so the WhatsApp session
- * is immediately available for background bill dispatches, without jarring screen transitions.
- * When the operator is on another page, it sits off-screen with full layout dimensions
- * so CDP coordinate calculations remain valid and messages commit seamlessly.
+ * Mounted once in AppShell. Uses an unmanaged DOM container for the <webview> element
+ * so React's virtual DOM reconciliation NEVER touches, re-sets, or reloads the webview's
+ * `src` attribute on component re-renders or page navigation.
  */
-export function WhatsAppPanel({ active }: { active: boolean }) {
+export const WhatsAppPanel = React.memo(function WhatsAppPanel({ active }: { active: boolean }) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const webviewRef = useRef<ElectronWebviewElement | null>(null);
-  const [loading, setLoading] = useState(true);
   const available = isWhatsAppEmbedAvailable();
 
-  // Billing pages ask for a specific chat via the module-level channel in lib/whatsappWeb.ts.
+  useEffect(() => {
+    if (!available || !containerRef.current) return;
+
+    // Create the <webview> DOM node natively ONCE.
+    // This prevents React from reconciling its attributes or re-triggering `src` on render.
+    if (!webviewRef.current) {
+      const webview = document.createElement('webview') as unknown as ElectronWebviewElement;
+      webview.setAttribute('src', WHATSAPP_HOME_URL);
+      webview.setAttribute('partition', 'persist:whatsapp');
+      webview.className = 'flex-1 w-full h-full border-0';
+      webviewRef.current = webview;
+      containerRef.current.appendChild(webview as unknown as Node);
+    }
+  }, [available]);
+
+  // Handle programmatic chat opening requests (e.g. from New Bill or History)
   useEffect(() => {
     if (!available) return;
     return subscribeToWhatsAppChatRequests(({ phone, caption }) => {
       const view = webviewRef.current;
       if (!view) return;
-      void view.loadURL(buildWhatsAppChatUrl(phone, caption)).catch(() => {
-        /* a navigation the guest refuses is surfaced by the page itself */
-      });
+      void view.loadURL(buildWhatsAppChatUrl(phone, caption)).catch(() => {});
     });
-  }, [available]);
-
-  useEffect(() => {
-    const view = webviewRef.current;
-    if (!view) return;
-    const start = () => setLoading(true);
-    const stop = () => setLoading(false);
-    view.addEventListener('did-start-loading', start);
-    view.addEventListener('did-stop-loading', stop);
-    return () => {
-      view.removeEventListener('did-start-loading', start);
-      view.removeEventListener('did-stop-loading', stop);
-    };
   }, [available]);
 
   if (!available) {
@@ -66,23 +65,10 @@ export function WhatsAppPanel({ active }: { active: boolean }) {
   }
 
   return (
-    <div
-      className={
-        active
-          ? 'flex-1 flex flex-col overflow-hidden relative'
-          : 'fixed -left-[9999px] top-0 w-[1280px] h-[800px] pointer-events-none opacity-0 -z-50'
-      }
-      aria-hidden={!active}
-    >
-      <div className="flex items-center gap-2 border-b border-slate-200 bg-white px-4 py-2">
+    <div className={active ? 'flex-1 flex flex-col overflow-hidden h-full' : 'hidden'}>
+      <div className="flex items-center gap-2 border-b border-slate-200 bg-white px-4 py-2 shrink-0">
         <MessageCircle className="w-4 h-4 text-brand-500 shrink-0" />
         <span className="text-sm font-medium text-slate-700">WhatsApp</span>
-        {loading && (
-          <span className="flex items-center gap-1.5 text-xs text-slate-400">
-            <Loader2 className="w-3 h-3 animate-spin" />
-            Loading…
-          </span>
-        )}
         <div className="ml-auto flex items-center gap-1.5">
           <Button
             variant="outline"
@@ -107,12 +93,8 @@ export function WhatsAppPanel({ active }: { active: boolean }) {
         </div>
       </div>
 
-      <webview
-        ref={webviewRef as React.Ref<HTMLElement>}
-        src={WHATSAPP_HOME_URL}
-        partition="persist:whatsapp"
-        className="flex-1 w-full"
-      />
+      {/* Unmanaged container that holds the persistent <webview> DOM node */}
+      <div ref={containerRef} className="flex-1 w-full h-full overflow-hidden flex flex-col" />
     </div>
   );
-}
+});

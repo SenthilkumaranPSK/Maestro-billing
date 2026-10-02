@@ -1015,8 +1015,20 @@ async function sendWhatsAppText({ phone, text, billNumber }) {
     // Enter is also safe HERE in a way it is not in the attachment caption box
     // (see sendWhatsAppPdf) — the text is already complete, placed by WhatsApp
     // itself from the URL, so there is no half-written message to fire early.
-    const composerPoint = await waitInGuest(dbg, hittablePointExpr('footer [contenteditable=true]'), 8000, 'the composer');
-    await clickInGuest(dbg, composerPoint);
+    let composerPoint = null;
+    try {
+      composerPoint = await waitInGuest(dbg, hittablePointExpr('footer [contenteditable=true]'), 4000, 'the composer');
+    } catch {
+      // If hidden or backgrounded, fallback to in-guest focus()
+    }
+    if (composerPoint) {
+      await clickInGuest(dbg, composerPoint);
+    } else {
+      await evalInGuest(dbg, `(() => {
+        const box = document.querySelector('footer [contenteditable=true]');
+        if (box) box.focus();
+      })()`);
+    }
     await new Promise((r) => setTimeout(r, 200));
     await dbg.sendCommand('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13, text: '\r' });
     await dbg.sendCommand('Input.dispatchKeyEvent', { type: 'keyUp',   key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
