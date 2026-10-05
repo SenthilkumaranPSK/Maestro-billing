@@ -1010,40 +1010,101 @@ async function sendWhatsAppText({ phone, text, billNumber }) {
          })()`;
     await waitInGuest(dbg, composerHasBill, 15_000, 'the message to appear in the composer');
 
-    // Enter commits it. Deliberately NOT the send button: that means finding a
-    // element by coordinates, which is exactly what broke the attach flow.
-    // Enter is also safe HERE in a way it is not in the attachment caption box
-    // (see sendWhatsAppPdf) — the text is already complete, placed by WhatsApp
-    // itself from the URL, so there is no half-written message to fire early.
-    let composerPoint = null;
-    try {
-      composerPoint = await waitInGuest(dbg, hittablePointExpr('footer [contenteditable=true]'), 4000, 'the composer');
-    } catch {
-      // If hidden or backgrounded, fallback to in-guest focus()
-    }
-    if (composerPoint) {
-      await clickInGuest(dbg, composerPoint);
-    } else {
-      await evalInGuest(dbg, `(() => {
-        const box = document.querySelector('footer [contenteditable=true]');
-        if (box) box.focus();
-      })()`);
-    }
-    await new Promise((r) => setTimeout(r, 200));
-    await dbg.sendCommand('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13, text: '\r' });
-    await dbg.sendCommand('Input.dispatchKeyEvent', { type: 'keyUp',   key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
+    // Multi-strategy send commit loop:
+    // In modern WhatsApp Web, Enter key alone on contenteditable may not trigger send
+    // when offscreen/backgrounded. We try DOM click on the Send button, DOM KeyboardEvent,
+    // CDP click and CDP Enter key until the composer clears.
+    const sendDeadline = Date.now() + 20_000;
+    let messageSent = false;
 
-    // Confirm it actually left the composer rather than reporting a send that
-    // never happened.
-    await waitInGuest(
-      dbg,
-      `(() => {
-         const box = document.querySelector('footer [contenteditable=true]');
-         return !box || (box.innerText || '').trim().length === 0;
-       })()`,
-      15_000,
-      'the message to be sent',
-    );
+    while (Date.now() < sendDeadline) {
+      // Check if message is already sent (composer empty)
+      const isSent = await evalInGuest(
+        dbg,
+        `(() => {
+          const box = document.querySelector('footer [contenteditable=true]');
+          return !box || (box.innerText || '').trim().length === 0;
+        })()`
+      );
+      if (isSent) {
+        messageSent = true;
+        break;
+      }
+
+      // Check if invalid number dialog popped up
+      const isInvalid = await evalInGuest(
+        dbg,
+        `(() => /phone number shared via url is invalid|isn't on WhatsApp|not on WhatsApp/i.test(document.body.innerText))()`
+      );
+      if (isInvalid) {
+        throw new Error('That phone number is not registered on WhatsApp');
+      }
+
+      // Strategy 1: Find and click the WhatsApp Send button directly in DOM
+      await evalInGuest(
+        dbg,
+        `(() => {
+          const sendBtn = document.querySelector('button[aria-label="Send"]')
+            || document.querySelector('[data-testid="send"]')
+            || document.querySelector('[data-icon="send"]')?.closest('button')
+            || document.querySelector('[data-icon="wds-ic-send-filled"]')?.closest('button')
+            || document.querySelector('footer button:has(span[data-icon="send"])')
+            || document.querySelector('footer button:has(span[data-icon="wds-ic-send-filled"])')
+            || document.querySelector('footer [data-icon="send"]')
+            || document.querySelector('footer [data-icon="wds-ic-send-filled"]');
+
+          if (sendBtn) {
+            const target = sendBtn.closest('button') || sendBtn;
+            const opts = { bubbles: true, cancelable: true, view: window };
+            target.dispatchEvent(new PointerEvent('pointerdown', opts));
+            target.dispatchEvent(new MouseEvent('mousedown', opts));
+            target.dispatchEvent(new PointerEvent('pointerup', opts));
+            target.dispatchEvent(new MouseEvent('mouseup', opts));
+            target.click();
+            return true;
+          }
+          return false;
+        })()`
+      );
+
+      // Strategy 2: Focus composer & dispatch DOM KeyboardEvent (Enter)
+      await evalInGuest(
+        dbg,
+        `(() => {
+          const box = document.querySelector('footer [contenteditable=true]');
+          if (box) {
+            box.focus();
+            const ev = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true };
+            box.dispatchEvent(new KeyboardEvent('keydown', ev));
+            box.dispatchEvent(new KeyboardEvent('keypress', ev));
+            box.dispatchEvent(new KeyboardEvent('keyup', ev));
+          }
+        })()`
+      );
+
+      // Strategy 3: CDP click & Enter key
+      try {
+        const sendPoint = await evalInGuest(dbg, centreOfExpr('[data-icon="send"], [data-icon="wds-ic-send-filled"], button[aria-label="Send"], [data-testid="send"]'));
+        if (sendPoint) {
+          await clickInGuest(dbg, sendPoint);
+        }
+      } catch {
+        // ignore
+      }
+
+      try {
+        await dbg.sendCommand('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13, text: '\r' });
+        await dbg.sendCommand('Input.dispatchKeyEvent', { type: 'keyUp',   key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
+      } catch {
+        // ignore
+      }
+
+      await new Promise((r) => setTimeout(r, 600));
+    }
+
+    if (!messageSent) {
+      throw new Error('Timed out waiting for the message to be sent');
+    }
 
     return { ok: true };
   } finally {

@@ -69,7 +69,7 @@ export const WhatsAppPanel = React.memo(function WhatsAppPanel({ active }: { act
       className={
         active
           ? 'flex-1 flex flex-col overflow-hidden h-full w-full'
-          : 'fixed -top-[99999px] -left-[99999px] w-[1280px] h-[800px] opacity-0 pointer-events-none'
+          : 'fixed top-0 left-0 w-[1280px] h-[800px] opacity-0 pointer-events-none -z-50'
       }
       aria-hidden={!active}
     >
