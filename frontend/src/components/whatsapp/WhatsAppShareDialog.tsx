@@ -113,6 +113,9 @@ export function WhatsAppShareDialog({
         description: `Bill ${bill.billNumber} delivered to ${phone.trim()}.`,
         variant: 'success',
       });
+      setTimeout(() => {
+        onOpenChange(false);
+      }, 1000);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Could not send WhatsApp message';
       setErrorMessage(msg);

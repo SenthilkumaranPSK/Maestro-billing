@@ -212,7 +212,7 @@ export default function BillingPage() {
    * WhatsApp itself from the deep link, so nothing has to be clicked but Send.
    * The printed receipt is still the real document; this is the notification.
    */
-  const shareBillOnWhatsApp = async (bill: Bill, phone: string, openDialogOnError = true) => {
+  const shareBillOnWhatsApp = async (bill: Bill, phone: string, openDialogOnError = false) => {
     const text = buildWhatsAppBillText(bill, settings ?? {});
 
     if (isWhatsAppTextSendAvailable()) {
@@ -370,10 +370,15 @@ export default function BillingPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [savedBill, items, customer, createBillMutation.isPending, layout, gstInclusive, paymentMode, serviceDescription, serviceDates, billedById]);
 
-  /** "Send Bill on WhatsApp" opens the share modal or dispatches directly */
+  /** "Send Bill on WhatsApp" sends directly in background if phone is valid, or opens dialog if missing */
   const handleWhatsAppShare = () => {
     if (!savedBill) return;
-    setWhatsappModalBill(savedBill);
+    const phone = (savedBill.customer?.phone || customer.phone || '').trim();
+    if (isWhatsAppTextSendAvailable() && phone && isValidIndianPhone(phone)) {
+      void shareBillOnWhatsApp(savedBill, phone, false);
+    } else {
+      setWhatsappModalBill(savedBill);
+    }
   };
 
   const handlePrint = async () => {

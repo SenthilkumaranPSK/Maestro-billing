@@ -187,7 +187,7 @@ export default function MmBillingPage() {
    * BillingPage and lib/whatsappBillText.ts. The printed/downloadable Tax
    * Invoice is untouched and remains the real document for a wholesale buyer.
    */
-  const shareBillOnWhatsApp = async (bill: Bill, phone: string, openDialogOnError = true) => {
+  const shareBillOnWhatsApp = async (bill: Bill, phone: string, openDialogOnError = false) => {
     const text = buildWhatsAppBillText(bill, settings ?? {}, { heading: 'MM' });
 
     if (isWhatsAppTextSendAvailable()) {
@@ -329,10 +329,15 @@ export default function MmBillingPage() {
     await downloadMmA4InvoicePDF(savedBill, settings ?? {});
   };
 
-  /** "Send Bill on WhatsApp" opens the share modal or dispatches directly */
+  /** "Send Bill on WhatsApp" sends directly in background if phone is valid, or opens dialog if missing */
   const handleWhatsAppShare = () => {
     if (!savedBill) return;
-    setWhatsappModalBill(savedBill);
+    const phone = (savedBill.mmCustomer?.phone || customer.phone || '').trim();
+    if (isWhatsAppTextSendAvailable() && phone && isValidIndianPhone(phone)) {
+      void shareBillOnWhatsApp(savedBill, phone, false);
+    } else {
+      setWhatsappModalBill(savedBill);
+    }
   };
 
   const handleReset = () => {

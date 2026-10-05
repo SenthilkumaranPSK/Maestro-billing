@@ -1,5 +1,5 @@
 import { useState, useDeferredValue } from 'react';
-import { Search, FileText, Printer, ScanEye, Pencil, Ban, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Search, FileText, Printer, ScanEye, Pencil, Ban, ChevronLeft, ChevronRight, Loader2 } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
@@ -21,12 +21,14 @@ import { WhatsAppIcon } from '@/components/whatsapp/WhatsAppIcon';
 import { WhatsAppShareDialog } from '@/components/whatsapp/WhatsAppShareDialog';
 import { billsApi } from '@/api/bills';
 import { settingsApi } from '@/api/settings';
+import { isWhatsAppTextSendAvailable, sendBillTextOnWhatsApp } from '@/lib/whatsappWeb';
+import { buildWhatsAppBillText } from '@/lib/whatsappBillText';
 // pdf-lib is heavy (~400KB) — loaded on demand so the app starts fast.
 const loadPdfLib = () => import('@/lib/pdf');
 const loadA4Lib = () => import('@/lib/a4invoice');
 const loadMmA4Lib = () => import('@/lib/mmA4invoice');
 import { formatCurrency, billStatusVariant, type BillStatus, type Bill } from '@/types';
-import { formatDate } from '@/lib/utils';
+import { formatDate, isValidIndianPhone } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
 
 const statusVariant = billStatusVariant;
@@ -113,6 +115,35 @@ export default function HistoryPage() {
     } else {
       const { downloadBillPDF } = await loadPdfLib();
       await downloadBillPDF(bill, settings ?? {});
+    }
+  };
+
+  const [sendingBillId, setSendingBillId] = useState<number | null>(null);
+
+  const handleWhatsAppShare = async (bill: Bill) => {
+    const phone = bill.customer?.phone?.trim();
+    if (isWhatsAppTextSendAvailable() && phone && isValidIndianPhone(phone)) {
+      setSendingBillId(bill.id);
+      try {
+        const text = buildWhatsAppBillText(bill, settings ?? {});
+        await sendBillTextOnWhatsApp({ phone, text, billNumber: bill.billNumber });
+        toast({
+          title: 'Sent on WhatsApp!',
+          description: `Bill ${bill.billNumber} delivered to ${phone}.`,
+          variant: 'success',
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Could not send automatically';
+        toast({
+          title: 'WhatsApp sending issue',
+          description: msg,
+          variant: 'destructive',
+        });
+      } finally {
+        setSendingBillId(null);
+      }
+    } else {
+      setShareWhatsAppBill(bill);
     }
   };
 
@@ -312,9 +343,14 @@ export default function HistoryPage() {
                           size="icon"
                           className="h-7 w-7 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50"
                           title="Share on WhatsApp"
-                          onClick={() => setShareWhatsAppBill(bill)}
+                          onClick={() => handleWhatsAppShare(bill)}
+                          disabled={sendingBillId === bill.id}
                         >
-                          <WhatsAppIcon className="h-3.5 w-3.5" />
+                          {sendingBillId === bill.id ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <WhatsAppIcon className="h-3.5 w-3.5" />
+                          )}
                         </Button>
                         {bill.status !== 'CANCELLED' && (
                           <Button
