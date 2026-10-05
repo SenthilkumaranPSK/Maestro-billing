@@ -236,25 +236,9 @@ export function DayClosingModal({
       drawCenter('--- END OF DAY REPORT ---', y, false, 7.5);
 
       const bytes = await pdfDoc.save();
-      const blob = new Blob([bytes.buffer.slice(0) as ArrayBuffer], { type: 'application/pdf' });
-      const url = URL.createObjectURL(blob);
-      const iframe = document.createElement('iframe');
-      iframe.style.display = 'none';
-      iframe.src = url;
-      document.body.appendChild(iframe);
-      iframe.onload = () => {
-        let cleaned = false;
-        const cleanup = () => {
-          if (cleaned) return;
-          cleaned = true;
-          if (iframe.parentNode) document.body.removeChild(iframe);
-          URL.revokeObjectURL(url);
-          setIsPrinting(false);
-        };
-        iframe.contentWindow?.addEventListener('afterprint', cleanup);
-        iframe.contentWindow?.print();
-        setTimeout(cleanup, 60_000);
-      };
+      const { printPdfBytes } = await import('@/lib/printPdf');
+      printPdfBytes(bytes);
+      setIsPrinting(false);
     } catch {
       setIsPrinting(false);
     }

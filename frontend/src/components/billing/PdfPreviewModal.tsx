@@ -88,7 +88,9 @@ export function PdfPreviewModal({ bill, settings, layout, onClose, readOnly = fa
         const { width, height } = doc.getPage(0).getSize();
         const aspect = width / height;
         if (cancelled) return;
-        const blob = new Blob([bytes.buffer as ArrayBuffer], { type: 'application/pdf' });
+        const blob = new Blob([bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer], {
+          type: 'application/pdf',
+        });
         const objectUrl = URL.createObjectURL(blob);
         cacheRef.current.set(layout, { url: objectUrl, aspect });
         setUrl(objectUrl);
@@ -204,7 +206,17 @@ export function PdfPreviewModal({ bill, settings, layout, onClose, readOnly = fa
               Could not generate preview: {error}
             </div>
           ) : url ? (
-            <iframe src={url} title={`${bill.billNumber} preview`} className="w-full h-full border-0" />
+            <object
+              data={`${url}#toolbar=0&navpanes=0`}
+              type="application/pdf"
+              className="w-full h-full border-0 block"
+            >
+              <iframe
+                src={`${url}#toolbar=0&navpanes=0`}
+                title={`${bill.billNumber} preview`}
+                className="w-full h-full border-0 block"
+              />
+            </object>
           ) : (
             <div className="h-full flex flex-col items-center justify-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="h-6 w-6 animate-spin" />

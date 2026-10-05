@@ -603,7 +603,9 @@ export async function generateMmA4InvoicePDFBase64(bill: Bill, settings: Partial
 
 export async function downloadMmA4InvoicePDF(bill: Bill, settings: Partial<Settings>) {
   const bytes = await generateMmA4InvoicePDF(bill, settings);
-  const blob = new Blob([bytes.buffer.slice(0) as ArrayBuffer], { type: 'application/pdf' });
+  const blob = new Blob([bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer], {
+    type: 'application/pdf',
+  });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -614,22 +616,6 @@ export async function downloadMmA4InvoicePDF(bill: Bill, settings: Partial<Setti
 
 export async function printMmA4InvoicePDF(bill: Bill, settings: Partial<Settings>) {
   const bytes = await generateMmA4InvoicePDF(bill, settings);
-  const blob = new Blob([bytes.buffer.slice(0) as ArrayBuffer], { type: 'application/pdf' });
-  const url = URL.createObjectURL(blob);
-  const iframe = document.createElement('iframe');
-  iframe.style.display = 'none';
-  iframe.src = url;
-  document.body.appendChild(iframe);
-  iframe.onload = () => {
-    let cleaned = false;
-    const cleanup = () => {
-      if (cleaned) return;
-      cleaned = true;
-      if (iframe.parentNode) document.body.removeChild(iframe);
-      URL.revokeObjectURL(url);
-    };
-    iframe.contentWindow?.addEventListener('afterprint', cleanup);
-    iframe.contentWindow?.print();
-    setTimeout(cleanup, 60_000);
-  };
+  const { printPdfBytes } = await import('@/lib/printPdf');
+  printPdfBytes(bytes);
 }

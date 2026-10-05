@@ -82,14 +82,13 @@ async function main() {
         defaultSrc: ["'self'"],
         scriptSrc: ["'self'"],
         styleSrc: ["'self'", "'unsafe-inline'"],
-        imgSrc: ["'self'", 'data:'],
+        imgSrc: ["'self'", 'data:', 'blob:'],
         connectSrc: ["'self'"],
-        objectSrc: ["'none'"],
+        objectSrc: ["'self'", 'blob:', 'data:'],
         // Printing (lib/pdf.ts printBillPDF) loads the generated receipt into
-        // a hidden <iframe src="blob:..."> so window.print() can print it.
-        // frame-src isn't set here, so it fell back to default-src 'self' —
-        // which does NOT match blob: — silently blocking every print attempt.
-        frameSrc: ["'self'", 'blob:'],
+        // an offscreen <iframe src="blob:..."> so window.print() can print it.
+        // frame-src includes 'self', 'blob:', and 'data:' for PDF rendering.
+        frameSrc: ["'self'", 'blob:', 'data:'],
         // helmet's default CSP directives include this unless explicitly
         // removed — it tells the browser to silently rewrite every http://
         // sub-resource request to https://. This app is intentionally

@@ -562,6 +562,9 @@ function createWindow() {
       // The UI is our own local site — no Node access needed in the renderer.
       nodeIntegration: false,
       contextIsolation: true,
+      // Enables Chromium's built-in PDF viewer plugin for instant inline
+      // previewing and offscreen iframe printing on Windows 11 / Electron.
+      plugins: true,
       // Lets the billing UI host WhatsApp Web in a <webview> (see
       // configureWhatsAppGuest below). A <webview> is a separate,
       // out-of-process webContents with its own session — it is NOT an
