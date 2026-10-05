@@ -90,12 +90,23 @@ export const mmProductSchema = z.object({
   isActive: z.boolean().optional(),
 });
 
-// MM restock — a manual purchase entry, separate from the product's own
-// stockQty/reorderLevel fields above.
 export const mmRestockSchema = z.object({
   qty: z.number().refine((n) => n !== 0, 'Quantity cannot be zero'),
   supplierName: z.string().max(200, 'Supplier name too long').nullable().optional(),
   purchaseCost: z.number().int().nonnegative('Cost cannot be negative').nullable().optional(),
+  invoiceRef: z.string().max(100, 'Invoice/reference too long').nullable().optional(),
+  notes: z.string().max(1000, 'Notes too long').nullable().optional(),
+});
+
+export const mmBulkRestockSchema = z.object({
+  items: z.array(
+    z.object({
+      productId: z.number().int().positive('Valid product ID required'),
+      qty: z.number().refine((n) => n !== 0, 'Quantity cannot be zero'),
+      purchaseCost: z.number().int().nonnegative('Cost cannot be negative').nullable().optional(),
+    }),
+  ).min(1, 'At least one item required'),
+  supplierName: z.string().max(200, 'Supplier name too long').nullable().optional(),
   invoiceRef: z.string().max(100, 'Invoice/reference too long').nullable().optional(),
   notes: z.string().max(1000, 'Notes too long').nullable().optional(),
 });

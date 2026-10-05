@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify';
-import { mmProductSchema, mmRestockSchema, reorderSchema, parseId } from '../utils/validators';
+import { mmProductSchema, mmRestockSchema, mmBulkRestockSchema, reorderSchema, parseId } from '../utils/validators';
 import { requireAppHeader } from '../middleware/requireAppHeader';
 
 /** MM billing module's own product catalog — mirrors productRoutes exactly,
@@ -20,6 +20,37 @@ export async function mmProductRoutes(fastify: FastifyInstance) {
       orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
     });
     return reply.send({ success: true, data: products });
+  });
+
+  // Bulk restock — allows receiving multiple products in a single supplier shipment
+  fastify.post('/bulk-restock', { preHandler: requireAppHeader }, async (request, reply) => {
+    const body = mmBulkRestockSchema.parse(request.body);
+
+    const updatedProducts = await prisma.$transaction(async (tx) => {
+      const results = [];
+      for (const item of body.items) {
+        const product = await tx.mmProduct.update({
+          where: { id: item.productId },
+          data: { stockQty: { increment: item.qty } },
+        });
+        await tx.mmStockMovement.create({
+          data: {
+            mmProductId: item.productId,
+            type: 'PURCHASE',
+            qtyChange: item.qty,
+            balanceAfter: product.stockQty,
+            supplierName: body.supplierName,
+            purchaseCost: item.purchaseCost,
+            invoiceRef: body.invoiceRef,
+            notes: body.notes,
+          },
+        });
+        results.push(product);
+      }
+      return results;
+    });
+
+    return reply.send({ success: true, data: updatedProducts });
   });
 
   fastify.get('/:id', async (request, reply) => {

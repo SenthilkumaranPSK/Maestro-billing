@@ -1,14 +1,14 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Smartphone, FileBarChart2, Percent, ChevronRight, Save, FolderCog, DatabaseBackup, Moon, Sun, Lock,
-  Users, Plus, ChevronUp, ChevronDown, Trash2, ExternalLink,
+  Users, Plus, ChevronUp, ChevronDown, Trash2, ExternalLink, QrCode, HardDrive, RefreshCw, CheckCircle2,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { backupsApi } from '@/api/backups';
+import { backupsApi, type DetectedDrive } from '@/api/backups';
 import { settingsApi } from '@/api/settings';
 import { staffApi } from '@/api/staff';
 import { useToast } from '@/hooks/use-toast';
@@ -16,6 +16,7 @@ import { useTheme } from '@/hooks/use-theme';
 import { formatDateTime } from '@/lib/utils';
 import { shouldShowWhatsappOnBilling } from '@/types';
 import { isWhatsAppEmbedAvailable } from '@/lib/whatsappWeb';
+import { generateUpiQrDataUrl } from '@/lib/upiQr';
 
 export default function SettingsPage() {
   const { toast } = useToast();
@@ -29,20 +30,74 @@ export default function SettingsPage() {
   });
   const backups = backupData?.backups;
 
+  const { data: detectedDrives, refetch: refetchDrives, isFetching: isFetchingDrives } = useQuery({
+    queryKey: ['detected-drives'],
+    queryFn: backupsApi.getDrives,
+  });
+
+  const [selectedTargetDrive, setSelectedTargetDrive] = useState<string>('');
+
+  useEffect(() => {
+    if (detectedDrives && detectedDrives.length > 0 && !selectedTargetDrive) {
+      const removable = detectedDrives.find((d) => d.isRemovable) || detectedDrives[0];
+      if (removable) setSelectedTargetDrive(removable.letter);
+    }
+  }, [detectedDrives, selectedTargetDrive]);
+
+  const backupToDriveMutation = useMutation({
+    mutationFn: (driveLetter: string) => backupsApi.exportToTarget(driveLetter),
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ['backups'] });
+      toast({
+        title: 'USB Backup Successful!',
+        description: `Saved snapshot as ${data.fileName} (${(data.sizeBytes / 1024).toFixed(0)} KB)`,
+        variant: 'success',
+      });
+    },
+    onError: (err: Error) => {
+      toast({
+        title: 'USB Backup Failed',
+        description: err.message,
+        variant: 'destructive',
+      });
+    },
+  });
+
   const { data: settingsData } = useQuery({
     queryKey: ['settings'],
     queryFn: settingsApi.get,
   });
+
+  const [upiIdInput, setUpiIdInput] = useState('');
+  const [payeeNameInput, setPayeeNameInput] = useState('');
+
+  useEffect(() => {
+    if (settingsData) {
+      setUpiIdInput(settingsData.payment?.upi_id || '');
+      setPayeeNameInput(settingsData.payment?.upi_merchant_name || settingsData.studio?.studio_name || '');
+    }
+  }, [settingsData]);
+
+  const saveUpiMutation = useMutation({
+    mutationFn: async ({ upiId, payeeName }: { upiId: string; payeeName: string }) => {
+      await settingsApi.update('upi_id', upiId.trim(), 'payment');
+      if (payeeName.trim()) {
+        await settingsApi.update('upi_merchant_name', payeeName.trim(), 'payment');
+      }
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['settings'] });
+      toast({ title: 'UPI settings saved', variant: 'success' });
+    },
+    onError: (err: Error) => {
+      toast({ title: 'Could not save UPI settings', description: err.message, variant: 'destructive' });
+    },
+  });
+
   // Missing (older installs) or anything other than the literal string
   // 'false' means "show" — this has to default to today's behaviour so an
   // upgrade never silently hides a feature nobody asked to hide.
   const showWhatsappOnBilling = shouldShowWhatsappOnBilling(settingsData?.general);
-  // The only WhatsApp fact this screen can state truthfully. Whether the
-  // account is *linked* lives inside the embedded WhatsApp Web session, and
-  // the only way to read it from here would be to scrape the guest's DOM for
-  // a QR canvas — exactly the brittle coupling that breaks whenever WhatsApp
-  // reskins. So this card points at the panel instead of mirroring it; the
-  // panel shows either the QR or the chat list, which is its own answer.
   const whatsappEmbedded = isWhatsAppEmbedAvailable();
 
   const setShowWhatsappMutation = useMutation({
@@ -265,9 +320,96 @@ export default function SettingsPage() {
         </CardContent>
       </Card>
 
+      {/* UPI Payment QR Code Setup Card */}
+      <Card className="border-blue-100">
+        <CardHeader className="pb-3 flex flex-row items-center justify-between">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <QrCode className="h-4 w-4 text-blue-600" />
+            UPI Payment QR Code
+          </CardTitle>
+          {upiIdInput.trim() && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700 border border-blue-200">
+              <CheckCircle2 className="h-3 w-3 text-blue-600" />
+              Active on Receipts & Invoices
+            </span>
+          )}
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-xs text-muted-foreground">
+            Print a dynamic UPI QR code on 80mm thermal receipts and A4 invoices so customers can scan and pay instantly with GPay, PhonePe, Paytm, or BHIM.
+          </p>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-semibold text-slate-700 block mb-1">
+                UPI ID / VPA
+              </label>
+              <Input
+                value={upiIdInput}
+                onChange={(e) => setUpiIdInput(e.target.value)}
+                placeholder="e.g. yourstore@okhdfcbank"
+                className="h-8 text-xs font-mono"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-slate-700 block mb-1">
+                Merchant / Business Name
+              </label>
+              <Input
+                value={payeeNameInput}
+                onChange={(e) => setPayeeNameInput(e.target.value)}
+                placeholder="e.g. Maestro Studio"
+                className="h-8 text-xs"
+              />
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between pt-1">
+            <Button
+              size="sm"
+              onClick={() => saveUpiMutation.mutate({ upiId: upiIdInput, payeeName: payeeNameInput })}
+              disabled={saveUpiMutation.isPending}
+              className="h-8 text-xs bg-blue-600 hover:bg-blue-700 text-white"
+            >
+              {saveUpiMutation.isPending ? 'Saving…' : 'Save UPI Settings'}
+            </Button>
+            {upiIdInput.trim() && (
+              <span className="text-xs text-slate-500 italic">
+                Format: <code className="font-mono text-blue-600">{upiIdInput.trim()}</code>
+              </span>
+            )}
+          </div>
+
+          {upiIdInput.trim() && (
+            <div className="mt-3 p-3 bg-slate-50 border border-slate-200 rounded-lg flex items-center gap-4">
+              <img
+                src={generateUpiQrDataUrl({
+                  upiId: upiIdInput.trim(),
+                  name: payeeNameInput.trim() || 'Studio',
+                  amountPaisa: 10000,
+                  billNumber: 'DEMO-001',
+                  notes: 'Test UPI Scan',
+                }, 110)}
+                alt="Test UPI QR"
+                className="w-24 h-24 rounded border bg-white p-1 shadow-sm shrink-0"
+              />
+              <div className="text-xs space-y-1">
+                <span className="font-semibold text-slate-800 block">Live QR Preview & Scan Test</span>
+                <p className="text-muted-foreground text-[11px]">
+                  You can test-scan this sample QR code with your phone camera or payment app. Real receipts will automatically embed the exact bill amount and bill number.
+                </p>
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       <Card>
         <CardHeader className="pb-3 flex flex-row items-center justify-between">
-          <CardTitle className="text-sm">Database</CardTitle>
+          <CardTitle className="text-sm flex items-center gap-2">
+            <DatabaseBackup className="h-4 w-4 text-slate-700" />
+            Database & Backups
+          </CardTitle>
           <Button
             variant="outline"
             size="sm"
@@ -278,21 +420,69 @@ export default function SettingsPage() {
             {backupNowMutation.isPending ? 'Backing up…' : 'Backup Now'}
           </Button>
         </CardHeader>
-        <CardContent>
-          <p className="text-xs text-muted-foreground mb-3">
-            There's a single backup file, refreshed automatically every time the app starts and
-            every 24 hours after that — or any time with{' '}
-            <span className="font-medium text-slate-700">Backup Now</span> above. Each refresh
-            overwrites the previous one, by default on{' '}
-            <code className="bg-slate-100 px-1 rounded">D:\Billing</code> (or{' '}
-            <code className="bg-slate-100 px-1 rounded">E:\Billing</code> if D: isn't available) —
-            a separate drive from wherever the app and its live database live, on purpose. Set a
-            location of your own below if you'd rather use a specific drive or folder. Since it's
-            always overwritten, use{' '}
-            <span className="font-medium text-slate-700">Save a Copy</span> first if you want to
-            keep a snapshot from this exact moment — a USB drive, Desktop, cloud-synced folder,
-            wherever.
+        <CardContent className="space-y-4">
+          <p className="text-xs text-muted-foreground">
+            Automatic daily backups are kept on a secondary drive. You can also export instant 1-click snapshots to an external USB flash pen drive or custom directory.
           </p>
+
+          {/* USB Flash Drive Quick Backup Card */}
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50/50 p-3">
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <div className="flex items-center gap-2">
+                <HardDrive className="h-4 w-4 text-emerald-700" />
+                <span className="text-xs font-bold text-emerald-900 uppercase tracking-wide">
+                  USB Pen Drive Backup
+                </span>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => refetchDrives()}
+                disabled={isFetchingDrives}
+                className="h-6 text-[11px] px-2 text-emerald-800 hover:bg-emerald-100"
+              >
+                <RefreshCw className={`h-3 w-3 mr-1 ${isFetchingDrives ? 'animate-spin' : ''}`} />
+                Scan Drives
+              </Button>
+            </div>
+
+            {detectedDrives && detectedDrives.length > 0 ? (
+              <div className="flex items-center gap-2 mt-2">
+                <select
+                  value={selectedTargetDrive}
+                  onChange={(e) => setSelectedTargetDrive(e.target.value)}
+                  className="h-8 flex-1 rounded-md border border-emerald-300 bg-white px-2 py-1 text-xs text-slate-800 font-medium shadow-sm focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                >
+                  {detectedDrives.map((d) => (
+                    <option key={d.letter} value={d.letter}>
+                      {d.letter} {d.label ? `(${d.label})` : ''} {d.isRemovable ? '— Removable USB' : '— Local Drive'}
+                    </option>
+                  ))}
+                </select>
+                <Button
+                  size="sm"
+                  onClick={() => selectedTargetDrive && backupToDriveMutation.mutate(selectedTargetDrive)}
+                  disabled={!selectedTargetDrive || backupToDriveMutation.isPending}
+                  className="h-8 text-xs bg-emerald-700 hover:bg-emerald-800 text-white font-medium shrink-0"
+                >
+                  <Save className="h-3.5 w-3.5 mr-1" />
+                  {backupToDriveMutation.isPending ? 'Copying…' : 'Backup to USB'}
+                </Button>
+              </div>
+            ) : (
+              <div className="text-xs text-emerald-800 py-1 flex items-center justify-between">
+                <span>Plug in a USB Flash Drive to enable 1-click external backups.</span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => refetchDrives()}
+                  className="h-6 text-[11px] px-2 border-emerald-300 bg-white text-emerald-800"
+                >
+                  Detect Drives
+                </Button>
+              </div>
+            )}
+          </div>
 
           <div className="mb-3 rounded-lg border border-slate-200 px-3 py-2.5">
             <div className="flex items-center justify-between gap-3">

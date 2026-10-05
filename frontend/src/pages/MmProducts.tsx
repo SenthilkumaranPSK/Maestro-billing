@@ -13,6 +13,7 @@ import { useToast } from '@/hooks/use-toast';
 import { formatCurrency, paisaToRupee, rupeeToPaisa } from '@/types';
 import type { MmProduct, MmStockMovement } from '@/types';
 import { formatDate } from '@/lib/utils';
+import { MmBulkRestockModal } from '@/components/inventory/MmBulkRestockModal';
 
 // MM billing module's own product catalog — a fully separate page/table from
 // the studio's normal Products page, mirroring its UI exactly.
@@ -40,6 +41,7 @@ export default function MmProductsPage() {
   const [editing, setEditing] = useState<Partial<MmProduct> & { priceRupees?: number } | null>(null);
   const [isNew, setIsNew] = useState(false);
   const [showInactive, setShowInactive] = useState(false);
+  const [showBulkRestock, setShowBulkRestock] = useState(false);
   // Rearrange mode reorders the FULL active catalog, so it forces search off
   // and inactive-hidden while on — see Products.tsx for the same reasoning.
   const [rearranging, setRearranging] = useState(false);
@@ -179,9 +181,18 @@ export default function MmProductsPage() {
             </Badge>
           )}
         </div>
-        <Button onClick={() => { setEditing({ ...EMPTY, gstRate: defaultGstRate, priceRupees: paisaToRupee(EMPTY.unitPrice ?? 0) }); setIsNew(true); }}>
-          <Plus className="h-4 w-4 mr-1" /> Add MM Product
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            onClick={() => setShowBulkRestock(true)}
+            className="border-brand-300 text-brand-700 hover:bg-brand-50"
+          >
+            <PackagePlus className="h-4 w-4 mr-1.5 text-brand-600" /> Bulk Inward Restock
+          </Button>
+          <Button onClick={() => { setEditing({ ...EMPTY, gstRate: defaultGstRate, priceRupees: paisaToRupee(EMPTY.unitPrice ?? 0) }); setIsNew(true); }}>
+            <Plus className="h-4 w-4 mr-1" /> Add MM Product
+          </Button>
+        </div>
       </div>
 
       <Card>
@@ -537,6 +548,14 @@ export default function MmProductsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {showBulkRestock && (
+        <MmBulkRestockModal
+          open={showBulkRestock}
+          onOpenChange={setShowBulkRestock}
+          products={products || []}
+        />
+      )}
     </div>
   );
 }

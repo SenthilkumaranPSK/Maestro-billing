@@ -4,6 +4,21 @@ export interface User {
   role: 'admin' | 'staff';
 }
 
+export interface CustomerInsights {
+  visitCount: number;
+  lifetimeSpend: number; // paise
+  lastBillDate: string | null;
+  lastBillAmount: number | null; // paise
+  lastBillNumber: string | null;
+  recentBills: Array<{
+    id: number;
+    billNumber: string;
+    billDate: string;
+    grandTotal: number;
+    paymentMode: string;
+  }>;
+}
+
 export interface Customer {
   id: number;
   name: string;
@@ -236,6 +251,10 @@ export interface Settings {
     // Missing (older installs that predate this setting) or any other value
     // means "show" — this must default to today's behaviour, not opt-in.
     show_whatsapp_on_billing: string;
+  };
+  payment?: {
+    upi_id?: string;
+    upi_merchant_name?: string;
   };
   // MM billing module's own settings group — separate from tax above (MM's
   // default GST rate is independent of the studio's regular one).

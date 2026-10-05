@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import { Clock } from 'lucide-react';
+import { Clock, Calculator } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { WhatsAppIcon } from '@/components/whatsapp/WhatsAppIcon';
 import { getWhatsAppStatus, isWhatsAppEmbedAvailable, type WhatsAppLiveStatus } from '@/lib/whatsappWeb';
+import { DayClosingModal } from '@/components/reports/DayClosingModal';
 
 interface HeaderProps {
   title: string;
@@ -11,6 +12,7 @@ interface HeaderProps {
 export function Header({ title }: HeaderProps) {
   const [now, setNow] = useState(new Date());
   const [waStatus, setWaStatus] = useState<WhatsAppLiveStatus>('loading');
+  const [showClosingModal, setShowClosingModal] = useState(false);
   const embedAvailable = isWhatsAppEmbedAvailable();
 
   useEffect(() => {
@@ -97,24 +99,42 @@ export function Header({ title }: HeaderProps) {
   };
 
   return (
-    <header className="h-16 border-b border-slate-100 bg-white/80 backdrop-blur-sm flex items-center justify-between px-7 shrink-0">
-      {/* key={title} replays the entrance whenever the page changes */}
-      <h1
-        key={title}
-        className="text-lg font-semibold text-slate-800 tracking-tight animate-in fade-in slide-in-from-left-2 duration-300"
-      >
-        {title}
-      </h1>
-      <div className="flex items-center gap-3">
-        {getWaBadge()}
-        <div className="flex items-center gap-2 rounded-full bg-slate-50 px-3.5 py-1.5 text-sm text-slate-500">
-          <Clock className="w-3.5 h-3.5 text-slate-400" />
-          <span>{date}</span>
-          <span className="h-3 w-px bg-slate-200" />
-          <span className="font-semibold text-slate-700 tabular-nums">{time}</span>
+    <>
+      <header className="h-16 border-b border-slate-100 bg-white/80 backdrop-blur-sm flex items-center justify-between px-7 shrink-0">
+        {/* key={title} replays the entrance whenever the page changes */}
+        <h1
+          key={title}
+          className="text-lg font-semibold text-slate-800 tracking-tight animate-in fade-in slide-in-from-left-2 duration-300"
+        >
+          {title}
+        </h1>
+        <div className="flex items-center gap-2.5">
+          <button
+            type="button"
+            onClick={() => setShowClosingModal(true)}
+            className="flex items-center gap-1.5 rounded-full bg-slate-100 hover:bg-brand-50 hover:text-brand-700 text-slate-700 px-3 py-1.5 text-xs font-medium border border-slate-200 hover:border-brand-300 transition-all cursor-pointer shadow-sm"
+            title="End-of-day Cash & Revenue Closing summary"
+          >
+            <Calculator className="w-3.5 h-3.5 text-brand-600" />
+            <span>Day Closing</span>
+          </button>
+          {getWaBadge()}
+          <div className="flex items-center gap-2 rounded-full bg-slate-50 px-3.5 py-1.5 text-sm text-slate-500">
+            <Clock className="w-3.5 h-3.5 text-slate-400" />
+            <span>{date}</span>
+            <span className="h-3 w-px bg-slate-200" />
+            <span className="font-semibold text-slate-700 tabular-nums">{time}</span>
+          </div>
         </div>
-      </div>
-    </header>
+      </header>
+
+      {showClosingModal && (
+        <DayClosingModal
+          open={showClosingModal}
+          onOpenChange={setShowClosingModal}
+        />
+      )}
+    </>
   );
 }
 

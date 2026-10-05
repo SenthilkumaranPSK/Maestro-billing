@@ -18,6 +18,15 @@ export interface BackupListResult {
 
 type BackupListMeta = { onSeparateDrive: boolean; backupDir: string; isCustomBackupDir: boolean };
 
+export interface DetectedDrive {
+  letter: string;
+  label: string;
+  driveType: number;
+  isRemovable: boolean;
+  sizeBytes: number;
+  freeBytes: number;
+}
+
 export const backupsApi = {
   list: () =>
     api
@@ -28,6 +37,14 @@ export const backupsApi = {
         backupDir: r.data.meta.backupDir,
         isCustomBackupDir: r.data.meta.isCustomBackupDir,
       })),
+
+  getDrives: () =>
+    api.get<ApiResponse<DetectedDrive[]>>('/backups/drives').then((r) => r.data.data),
+
+  exportToTarget: (target: string) =>
+    api
+      .post<ApiResponse<{ filePath: string; fileName: string; sizeBytes: number }>>('/backups/export-target', { target })
+      .then((r) => r.data.data),
 
   // Sets a custom backup folder; an empty string clears it and reverts to
   // automatic D:\Billing / E:\Billing / same-drive-fallback detection.

@@ -2,6 +2,7 @@ import type { Bill, Settings } from '@/types';
 import { buildThermalLayout, thermalRowHeight, type Measure } from '@/lib/thermalLayout';
 import { normalizePaperWidth, getEscPosGeometry } from '@/lib/thermal';
 import { toGrayscale, ditherAndPack } from '@/lib/escposDither';
+import { generateQrMatrix, drawQrToCanvas } from '@/lib/upiQr';
 
 /**
  * Renders the thermal receipt onto an HTML canvas in the studio's brand font
@@ -172,6 +173,17 @@ export async function renderThermalReceiptRaster(
           drawAt(row.qty, rightX(row.qty, columns.qtyRight, false), y, false);
           drawAt(row.price, rightX(row.price, columns.priceRight, false), y, false);
           drawAt(row.amt, rightX(row.amt, columns.amtRight, false), y, false);
+          y += LINE_HEIGHT;
+        }
+        break;
+      }
+      case 'upiQr': {
+        const matrix = generateQrMatrix(row.upiUri);
+        const qrX = Math.round((printDots - row.qrSize) / 2);
+        drawQrToCanvas(ctx, matrix, qrX, y, row.qrSize);
+        y += row.qrSize;
+        if (row.amountStr) {
+          drawAt(row.amountStr, centerX(row.amountStr, true), y, true);
           y += LINE_HEIGHT;
         }
         break;

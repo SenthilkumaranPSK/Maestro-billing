@@ -67,6 +67,33 @@ export async function mmCustomerRoutes(fastify: FastifyInstance) {
     return reply.send({ success: true, data: bills });
   });
 
+  fastify.get('/:id/insights', async (request, reply) => {
+    const id = parseId((request.params as { id: string }).id);
+    if (!id) return reply.status(400).send({ success: false, error: 'Invalid customer id' });
+
+    const bills = await prisma.bill.findMany({
+      where: { mmCustomerId: id, deletedAt: null },
+      select: { id: true, billNumber: true, billDate: true, grandTotal: true, paymentMode: true },
+      orderBy: { billDate: 'desc' },
+    });
+
+    const visitCount = bills.length;
+    const lifetimeSpend = bills.reduce((sum, b) => sum + b.grandTotal, 0);
+    const lastBill = bills[0] ?? null;
+
+    return reply.send({
+      success: true,
+      data: {
+        visitCount,
+        lifetimeSpend,
+        lastBillDate: lastBill?.billDate ?? null,
+        lastBillAmount: lastBill?.grandTotal ?? null,
+        lastBillNumber: lastBill?.billNumber ?? null,
+        recentBills: bills.slice(0, 5),
+      },
+    });
+  });
+
   fastify.post('/', { preHandler: requireAppHeader }, async (request, reply) => {
     const body = mmCustomerSchema.parse(request.body);
     const customer = await prisma.mmCustomer.create({ data: body });

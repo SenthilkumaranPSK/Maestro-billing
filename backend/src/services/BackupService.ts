@@ -350,4 +350,121 @@ export class BackupService {
     const stat = fs.statSync(p);
     return [{ name: BACKUP_FILE_NAME, size: stat.size, createdAt: stat.mtime }];
   }
+
+  /**
+   * Scans system for removable USB flash drives and secondary drives.
+   */
+  static async detectDrives(): Promise<Array<{
+    letter: string;
+    label: string;
+    driveType: number;
+    isRemovable: boolean;
+    sizeBytes: number;
+    freeBytes: number;
+  }>> {
+    const results: Array<{
+      letter: string;
+      label: string;
+      driveType: number;
+      isRemovable: boolean;
+      sizeBytes: number;
+      freeBytes: number;
+    }> = [];
+
+    try {
+      const res = spawnSync(
+        'powershell',
+        ['-NoProfile', '-Command', 'Get-CimInstance Win32_LogicalDisk | Select-Object DeviceID, VolumeName, DriveType, FreeSpace, Size | ConvertTo-Json -Compress'],
+        { encoding: 'utf8', timeout: 5000 },
+      );
+      if (res.status === 0 && res.stdout.trim()) {
+        const raw = JSON.parse(res.stdout.trim());
+        const list = Array.isArray(raw) ? raw : [raw];
+        for (const item of list) {
+          if (!item.DeviceID) continue;
+          const letter = String(item.DeviceID).toUpperCase();
+          const dType = Number(item.DriveType) || 0;
+          // DriveType 2 = Removable disk (USB flash drive / SD card)
+          // DriveType 3 = Local disk (Fixed HDD/SSD)
+          const isRemovable = dType === 2;
+          const label = item.VolumeName ? String(item.VolumeName).trim() : (isRemovable ? 'USB Drive' : 'Local Disk');
+          results.push({
+            letter,
+            label,
+            driveType: dType,
+            isRemovable,
+            sizeBytes: Number(item.Size) || 0,
+            freeBytes: Number(item.FreeSpace) || 0,
+          });
+        }
+        return results;
+      }
+    } catch {
+      // Fallback below
+    }
+
+    // Fallback simple drive check
+    for (const letter of ['D:', 'E:', 'F:', 'G:', 'H:', 'U:']) {
+      try {
+        if (fs.existsSync(letter + '\\')) {
+          results.push({
+            letter,
+            label: 'Drive ' + letter,
+            driveType: 2,
+            isRemovable: true,
+            sizeBytes: 0,
+            freeBytes: 0,
+          });
+        }
+      } catch {
+        // ignore unreachable letter
+      }
+    }
+
+    return results;
+  }
+
+  /**
+   * Exports an immediate backup snapshot to a specific target drive or folder.
+   * Creates a 'Maestro_Backups' subfolder on drive roots to keep external storage tidy.
+   */
+  async backupToTarget(targetPathOrDrive: string): Promise<{
+    filePath: string;
+    fileName: string;
+    sizeBytes: number;
+  }> {
+    let destDir = targetPathOrDrive.trim();
+    // If given e.g. "E:" or "E:\", put in E:\Maestro_Backups
+    if (/^[A-Za-z]:\\?$/.test(destDir)) {
+      const rootLetter = destDir.slice(0, 2).toUpperCase();
+      destDir = path.join(`${rootLetter}\\`, 'Maestro_Backups');
+    }
+
+    assertBackupDirUsable(destDir);
+
+    const now = new Date();
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const dateStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}`;
+    const fileName = `Maestro_Backup_${dateStr}.db`;
+    const finalPath = path.join(destDir, fileName);
+    const tmpPath = `${finalPath}.tmp-${randomUUID()}`;
+
+    try {
+      await this.writeBackup(tmpPath);
+      fs.renameSync(tmpPath, finalPath);
+      const stat = fs.statSync(finalPath);
+      return {
+        filePath: finalPath,
+        fileName,
+        sizeBytes: stat.size,
+      };
+    } finally {
+      try {
+        if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+      } catch {
+        // best effort
+      }
+    }
+  }
 }
+

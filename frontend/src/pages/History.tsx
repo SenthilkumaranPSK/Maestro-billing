@@ -19,6 +19,7 @@ import { EditBillModal } from '@/components/billing/EditBillModal';
 import { LayoutToggle, guessBillLayout, type BillLayout } from '@/components/billing/LayoutToggle';
 import { WhatsAppIcon } from '@/components/whatsapp/WhatsAppIcon';
 import { WhatsAppShareDialog } from '@/components/whatsapp/WhatsAppShareDialog';
+import { DayClosingModal } from '@/components/reports/DayClosingModal';
 import { billsApi } from '@/api/bills';
 import { settingsApi } from '@/api/settings';
 import { isWhatsAppTextSendAvailable, sendBillTextOnWhatsApp } from '@/lib/whatsappWeb';
@@ -38,6 +39,7 @@ export default function HistoryPage() {
   const qc = useQueryClient();
 
   const [search, setSearch] = useState('');
+  const [showClosingModal, setShowClosingModal] = useState(false);
   // Defer the search term so fast typing doesn't fire a request per keystroke
   const deferredSearch = useDeferredValue(search);
   const [status, setStatus] = useState('ALL');
@@ -271,6 +273,15 @@ export default function HistoryPage() {
           <CardTitle className="text-sm">
             Bills ({data?.meta.total ?? 0})
           </CardTitle>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setShowClosingModal(true)}
+            className="h-8 text-xs gap-1.5 border-brand-200 text-brand-700 hover:bg-brand-50"
+          >
+            <FileText className="h-3.5 w-3.5 text-brand-600" />
+            Day Cash Closing
+          </Button>
         </CardHeader>
         <CardContent className="p-0">
           <div className="overflow-x-auto">
@@ -428,6 +439,13 @@ export default function HistoryPage() {
         bill={shareWhatsAppBill}
         settings={settings ?? {}}
       />
+
+      {showClosingModal && (
+        <DayClosingModal
+          open={showClosingModal}
+          onOpenChange={setShowClosingModal}
+        />
+      )}
     </div>
   );
 }

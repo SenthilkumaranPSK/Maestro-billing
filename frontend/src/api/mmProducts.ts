@@ -29,6 +29,13 @@ export const mmProductsApi = {
   restock: (id: number, data: { qty: number; supplierName?: string; purchaseCost?: number; invoiceRef?: string; notes?: string }) =>
     api.post<ApiResponse<MmProduct>>(`/mm-products/${id}/restock`, data).then((r) => r.data.data),
 
+  bulkRestock: (data: {
+    items: Array<{ productId: number; qty: number; purchaseCost?: number }>;
+    supplierName?: string;
+    invoiceRef?: string;
+    notes?: string;
+  }) => api.post<ApiResponse<MmProduct[]>>('/mm-products/bulk-restock', data).then((r) => r.data.data),
+
   getStockMovements: (id: number) =>
     api.get<ApiResponse<MmStockMovement[]>>(`/mm-products/${id}/stock-movements`).then((r) => r.data.data),
 };

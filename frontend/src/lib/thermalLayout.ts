@@ -2,6 +2,7 @@ import type { Bill, Settings } from '@/types';
 import { paisaToRupee } from '@/types';
 import { formatAmt, abbrUnit } from '@/lib/thermal';
 import { splitTaxP } from '@/lib/billMath';
+import { buildUpiUri } from '@/lib/upiQr';
 
 /**
  * Renderer-agnostic thermal receipt layout, built once and consumed by BOTH
@@ -58,7 +59,8 @@ export type ThermalRow =
       qty: string;
       price: string;
       amt: string;
-    };
+    }
+  | { kind: 'upiQr'; upiUri: string; qrSize: number; amountStr: string };
 
 export interface ThermalLayout {
   rows: ThermalRow[];
@@ -82,6 +84,8 @@ export function thermalRowHeight(row: ThermalRow, lineHeight: number): number {
       return lineHeight * 0.5;
     case 'itemRow':
       return row.nameLines.length * lineHeight + (row.totalsOnLastLine ? 0 : lineHeight);
+    case 'upiQr':
+      return row.qrSize + lineHeight * 1.5;
     default:
       return lineHeight;
   }
@@ -310,6 +314,23 @@ export function buildThermalLayout(
   // "—" rather than skipping the line, so the receipt always has a
   // consistent footer shape instead of silently missing a row.
   rows.push({ kind: 'line', text: `Billed By : ${bill.billedByName || '—'}`, align: 'left' });
+
+  // UPI Payment QR code (if UPI ID is configured in payment settings)
+  const upiId = settings.payment?.upi_id || '';
+  const payeeName = settings.payment?.upi_merchant_name || settings.studio?.studio_name || 'Studio';
+  if (upiId && bill.grandTotal > 0) {
+    const upiUri = buildUpiUri({
+      upiId,
+      name: payeeName,
+      amountPaisa: bill.grandTotal,
+      billNumber: bill.billNumber,
+    });
+    const qrSize = Math.round(printWidth * 0.46);
+    rows.push({ kind: 'blank' });
+    rows.push({ kind: 'line', text: 'Scan to Pay via UPI', align: 'center', bold: true });
+    rows.push({ kind: 'upiQr', upiUri, qrSize, amountStr: `Rs ${formatAmt(bill.grandTotal)}` });
+  }
+
   rows.push({ kind: 'blank' });
   rows.push({ kind: 'line', text: footer, align: 'center', bold: true });
 

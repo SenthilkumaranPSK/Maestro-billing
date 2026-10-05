@@ -19,6 +19,7 @@ import { PasswordGateModal } from '@/components/billing/PasswordGateModal';
 import { MmEditBillModal } from '@/components/billing/MmEditBillModal';
 import { WhatsAppIcon } from '@/components/whatsapp/WhatsAppIcon';
 import { WhatsAppShareDialog } from '@/components/whatsapp/WhatsAppShareDialog';
+import { DayClosingModal } from '@/components/reports/DayClosingModal';
 import { billsApi } from '@/api/bills';
 import { settingsApi } from '@/api/settings';
 import { isWhatsAppTextSendAvailable, sendBillTextOnWhatsApp } from '@/lib/whatsappWeb';
@@ -44,6 +45,7 @@ export default function MmHistoryPage() {
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [page, setPage] = useState(1);
+  const [showClosingModal, setShowClosingModal] = useState(false);
   const [selectedBill, setSelectedBill] = useState<Bill | null>(null);
   const [editingBill, setEditingBill] = useState<Bill | null>(null);
   const [previewBill, setPreviewBill] = useState<Bill | null>(null);
@@ -234,6 +236,15 @@ export default function MmHistoryPage() {
           <CardTitle className="text-sm">
             MM Bills ({data?.meta.total ?? 0})
           </CardTitle>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setShowClosingModal(true)}
+            className="h-8 text-xs gap-1.5 border-brand-200 text-brand-700 hover:bg-brand-50"
+          >
+            <FileText className="h-3.5 w-3.5 text-brand-600" />
+            Day Cash Closing
+          </Button>
         </CardHeader>
         <CardContent className="p-0">
           <div className="overflow-x-auto">
@@ -403,6 +414,13 @@ export default function MmHistoryPage() {
         settings={settings ?? {}}
         isMm
       />
+
+      {showClosingModal && (
+        <DayClosingModal
+          open={showClosingModal}
+          onOpenChange={setShowClosingModal}
+        />
+      )}
     </div>
   );
 }

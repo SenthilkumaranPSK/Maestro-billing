@@ -1,5 +1,5 @@
 import { api } from './client';
-import type { Bill, MmCustomer, ApiResponse, PaginatedResponse } from '@/types';
+import type { Bill, MmCustomer, CustomerInsights, ApiResponse, PaginatedResponse } from '@/types';
 
 /** MM billing module's own customer database — mirrors customersApi exactly,
  * against the separate /mm-customers endpoint. */
@@ -9,6 +9,9 @@ export const mmCustomersApi = {
 
   get: (id: number) =>
     api.get<ApiResponse<MmCustomer>>(`/mm-customers/${id}`).then((r) => r.data.data),
+
+  getInsights: (id: number) =>
+    api.get<ApiResponse<CustomerInsights>>(`/mm-customers/${id}/insights`).then((r) => r.data.data),
 
   create: (data: Partial<MmCustomer>) =>
     api.post<ApiResponse<MmCustomer>>('/mm-customers', data).then((r) => r.data.data),

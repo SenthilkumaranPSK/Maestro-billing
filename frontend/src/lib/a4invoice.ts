@@ -5,6 +5,7 @@ import { amountInWordsINR } from '@/lib/amountInWords';
 import { bytesToBase64 } from '@/lib/pdf';
 import { embedBrandFonts } from '@/lib/brandFont';
 import { splitTaxP } from '@/lib/billMath';
+import { buildUpiUri, generateQrMatrix } from '@/lib/upiQr';
 
 // Same caching/fallback pattern as lib/pdf.ts's thermal-receipt logo — fetch
 // and decode once per session, prefer the small pre-downscaled copy so the
@@ -588,6 +589,37 @@ export async function generateA4InvoicePDF(bill: Bill, settings: Partial<Setting
         text(label, left + 8, by, { size: 8.5, font: bold, color: BODY });
         text(`-  ${value}`, left + 105, by, { size: 8.5, color: BODY });
         by -= 12.5;
+      }
+
+      const upiId = settings.payment?.upi_id || '';
+      const payeeName = settings.payment?.upi_merchant_name || studioName;
+      if (upiId && bill.grandTotal > 0) {
+        const upiUri = buildUpiUri({
+          upiId,
+          name: payeeName,
+          amountPaisa: bill.grandTotal,
+          billNumber: bill.billNumber,
+        });
+        const qrMatrix = generateQrMatrix(upiUri);
+        const qrSize = 64;
+        const qrX = left + bankColW - qrSize - 8;
+        const qrY = y - bankBoxH + 20;
+        const n = qrMatrix.length;
+        const cellSize = qrSize / (n + 2);
+        for (let r = 0; r < n; r++) {
+          for (let c = 0; c < n; c++) {
+            if (qrMatrix[r]![c]!) {
+              page.drawRectangle({
+                x: qrX + (c + 1) * cellSize,
+                y: qrY + qrSize - (r + 2) * cellSize,
+                width: cellSize + 0.1,
+                height: cellSize + 0.1,
+                color: BODY,
+              });
+            }
+          }
+        }
+        text('UPI Scan & Pay', qrX, qrY - 8, { size: 7.5, font: bold, color: BODY, align: 'center', maxWidth: qrSize });
       }
 
       // Signature block: the studio logo sits at the TOP of this half of the

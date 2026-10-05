@@ -123,6 +123,38 @@ export async function backupRoutes(fastify: FastifyInstance) {
     }
   });
 
+  // GET /api/v1/backups/drives — list detected USB / removable & secondary drives
+  fastify.get('/drives', { preHandler: requireAppHeader }, async (_req, reply) => {
+    try {
+      const drives = await BackupService.detectDrives();
+      return reply.send({ success: true, data: drives });
+    } catch (err) {
+      if (err instanceof BackupError) {
+        return reply.status(400).send({ success: false, error: err.message });
+      }
+      throw err;
+    }
+  });
+
+  // POST /api/v1/backups/export-target — copy a fresh backup to a specific USB drive or directory
+  fastify.post<{ Body: { target: string } }>('/export-target', { preHandler: requireAppHeader }, async (request, reply) => {
+    const target = (request.body?.target ?? '').trim();
+    if (!target) {
+      return reply.status(400).send({ success: false, error: 'Target drive or folder is required' });
+    }
+    try {
+      const customDir = await getConfiguredBackupDir(fastify.prisma);
+      const svc = new BackupService(customDir);
+      const result = await svc.backupToTarget(target);
+      return reply.send({ success: true, data: result });
+    } catch (err) {
+      if (err instanceof BackupError) {
+        return reply.status(400).send({ success: false, error: err.message });
+      }
+      throw err;
+    }
+  });
+
   // NOTE: there is deliberately no restore route. Restoring is a destructive,
   // one-click way for the operator to wipe every bill created since a backup,
   // so it is kept out of the billing UI entirely — and out of the HTTP API,

@@ -3,6 +3,7 @@ import type { Bill, Settings } from '@/types';
 import { normalizePaperWidth } from '@/lib/thermal';
 import { buildThermalLayout, thermalRowHeight, type Measure } from '@/lib/thermalLayout';
 import { embedBrandFonts } from '@/lib/brandFont';
+import { generateQrMatrix } from '@/lib/upiQr';
 
 /**
  * The downloadable/WhatsApp PDF uses the SAME receipt layout DECISIONS as the
@@ -192,6 +193,32 @@ export async function generateBillPDF(
           drawAt(row.qty, marginX + rightX(row.qty, columns.qtyRight, false), y, false);
           drawAt(row.price, marginX + rightX(row.price, columns.priceRight, false), y, false);
           drawAt(row.amt, marginX + rightX(row.amt, columns.amtRight, false), y, false);
+        }
+        break;
+      }
+      case 'upiQr': {
+        const matrix = generateQrMatrix(row.upiUri);
+        const qrSize = row.qrSize;
+        const n = matrix.length;
+        const cellSize = qrSize / (n + 4);
+        const qrX = marginX + (printWidth - qrSize) / 2;
+        y -= qrSize;
+        for (let r = 0; r < n; r++) {
+          for (let c = 0; c < n; c++) {
+            if (matrix[r]![c]!) {
+              page.drawRectangle({
+                x: qrX + (c + 2) * cellSize,
+                y: y + qrSize - (r + 3) * cellSize,
+                width: cellSize + 0.1,
+                height: cellSize + 0.1,
+                color: BLACK,
+              });
+            }
+          }
+        }
+        if (row.amountStr) {
+          y -= LINE_HEIGHT;
+          drawAt(row.amountStr, marginX + centerX(row.amountStr, true), y, true);
         }
         break;
       }

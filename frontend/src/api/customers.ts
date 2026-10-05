@@ -1,5 +1,5 @@
 import { api } from './client';
-import type { Bill, Customer, ApiResponse, PaginatedResponse } from '@/types';
+import type { Bill, Customer, CustomerInsights, ApiResponse, PaginatedResponse } from '@/types';
 
 export const customersApi = {
   list: (params?: { search?: string; page?: number; limit?: number }) =>
@@ -7,6 +7,9 @@ export const customersApi = {
 
   get: (id: number) =>
     api.get<ApiResponse<Customer>>(`/customers/${id}`).then((r) => r.data.data),
+
+  getInsights: (id: number) =>
+    api.get<ApiResponse<CustomerInsights>>(`/customers/${id}/insights`).then((r) => r.data.data),
 
   create: (data: Partial<Customer>) =>
     api.post<ApiResponse<Customer>>('/customers', data).then((r) => r.data.data),
