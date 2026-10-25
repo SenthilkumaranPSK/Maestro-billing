@@ -1,94 +1,154 @@
 import { PDFDocument, PDFFont, PDFPage, rgb } from 'pdf-lib';
-import type { Bill, Settings } from '@/types';
-import { paisaToRupee } from '@/types';
-import { amountInWordsINR } from '@/lib/amountInWords';
+import { type Bill, type Settings, MM_DEFAULTS, paisaToRupee } from '@/types';
+import { numberToIndianWords } from '@/lib/amountInWords';
 import { bytesToBase64 } from '@/lib/pdf';
 import { embedBrandFonts } from '@/lib/brandFont';
-import { hexRgb, wrapText, formatDDMMYYYY, BANK_DETAILS } from '@/lib/a4invoice';
+import { wrapText } from '@/lib/a4invoice';
 import { computeHsnSummary } from '@/lib/hsnSummary';
 import { splitTaxP } from '@/lib/billMath';
 
 /**
- * MM/A4 "Tax Invoice" — a third print layout alongside the thermal receipt
- * and the retail-style A4 "Service Bill" invoice, for the occasional formal
- * GST tax invoice (goods dispatch, Buyer + separate Consignee, e-way details,
- * HSN-wise CGST/SGST breakdown). Modeled on a wholesale tax-invoice template
- * supplied by the studio (maestro1.pdf) — same studio/bank details as the A4
- * layout, reused via a4invoice.ts's exports rather than duplicated.
+ * MM/A4 "Tax Invoice" — wholesale tax invoice layout matching the official
+ * Tally GST format with MORU MORU SNACKS brand header (from invoice_text.pdf).
  *
- * No QR code: the reference template's QR encodes a government e-invoice
- * IRN. This app never registers invoices with that portal, so there is
- * nothing genuine to encode — a decorative QR on a tax document would be
- * actively misleading. irnNo (if the studio has one from elsewhere) still
- * prints as plain text.
+ * Fully customizable via MM Settings (mm_company_name, mm_brand_name,
+ * mm_tagline, mm_fssai_no, mm_address, mm_branch_office, mm_branch_fssai,
+ * mm_gstin, mm_contact, mm_bank_account_name, mm_bank_name, etc.),
+ * pre-populated with SREE MEENAKSHI ENTERPRISES / IDBI BANK defaults.
  */
+
+const STATE_CODES: Record<string, string> = {
+  '33': 'Tamil Nadu',
+  '37': 'Andhra Pradesh',
+  '29': 'Karnataka',
+  '32': 'Kerala',
+  '36': 'Telangana',
+  '27': 'Maharashtra',
+  '07': 'Delhi',
+  '09': 'Uttar Pradesh',
+  '19': 'West Bengal',
+  '24': 'Gujarat',
+  '08': 'Rajasthan',
+  '06': 'Haryana',
+  '03': 'Punjab',
+  '34': 'Puducherry',
+};
+
+function getStateInfo(gstin?: string, defaultState = 'Tamil Nadu', defaultCode = '33') {
+  if (gstin && gstin.trim().length >= 2) {
+    const code = gstin.trim().slice(0, 2);
+    if (/^\d{2}$/.test(code)) {
+      const name = STATE_CODES[code] || defaultState;
+      return { name, code };
+    }
+  }
+  return { name: defaultState, code: defaultCode };
+}
+
+function formatTallyDate(date: Date): string {
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const day = date.getDate();
+  const month = months[date.getMonth()];
+  const year = String(date.getFullYear()).slice(-2);
+  return `${day}-${month}-${year}`;
+}
 
 const PAGE_W = 595.28; // A4, pt
 const PAGE_H = 841.89;
-const MARGIN = 28;
+const MARGIN = 24;
 
 const BLACK = rgb(0.08, 0.08, 0.08);
-const BODY = hexRgb('397601');
-const ACCENT = hexRgb('b400ff');
+const THIN = 0.5;
 
-// Static — no Settings field for GST boilerplate text exists, and
-// invoice_footer already means something else (the thermal receipt's
-// "Thank You" line). Standard wording used on most Indian tax invoices.
-const TERMS_TEXT =
-  'We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct.';
-
-function formatQty(qty: number): string {
-  return Number.isInteger(qty) ? String(qty) : qty.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
+function formatAmt2(paise: number): string {
+  return paisaToRupee(paise).toLocaleString('en-IN', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
 }
 
-// The reference invoice always shows money figures with 3 decimal places
-// (e.g. "2,400.000") — cosmetic, since paise is already the smallest unit
-// this app tracks, but matches the source template's look more closely than
-// formatRupees' 0-or-2-decimal convention used by the other print layouts.
-// Scoped to this file only — a4invoice.ts's formatRupees is untouched.
-function formatAmt3(paise: number): string {
-  return paisaToRupee(paise).toLocaleString('en-IN', {
+function formatQty3(qty: number): string {
+  return qty.toLocaleString('en-IN', {
     minimumFractionDigits: 3,
     maximumFractionDigits: 3,
   });
 }
 
-interface RowLayout {
-  lines: string[];
-  height: number;
+function formatWordsINR(paise: number): string {
+  const rupees = Math.floor(paise / 100);
+  const paiseRemainder = Math.round(paise) % 100;
+  const rupeeWords = numberToIndianWords(rupees);
+  const paiseWords = paiseRemainder ? ` and ${numberToIndianWords(paiseRemainder)} Paise` : '';
+  return `INR ${rupeeWords}${paiseWords} Only`;
+}
+
+interface TextOpts {
+  size?: number;
+  font?: PDFFont;
+  color?: ReturnType<typeof rgb>;
+  align?: 'left' | 'right' | 'center';
+  maxWidth?: number;
 }
 
 export async function generateMmA4InvoicePDF(bill: Bill, settings: Partial<Settings>): Promise<Uint8Array> {
-  const studio = settings.studio;
+  const mmSettings = settings.mm || {};
+
+  // Enterprise details from settings or defaults
+  const companyName = mmSettings.mm_company_name || MM_DEFAULTS.company_name;
+  const brandName = mmSettings.mm_brand_name || MM_DEFAULTS.brand_name;
+  const tagline = mmSettings.mm_tagline || MM_DEFAULTS.tagline;
+  const fssaiNo = mmSettings.mm_fssai_no || MM_DEFAULTS.fssai_no;
+  const companyAddress = mmSettings.mm_address || MM_DEFAULTS.address;
+  const branchOffice = mmSettings.mm_branch_office || MM_DEFAULTS.branch_office;
+  const branchFssai = mmSettings.mm_branch_fssai || MM_DEFAULTS.branch_fssai;
+  const companyGstin = mmSettings.mm_gstin || MM_DEFAULTS.gstin;
+  const contactPhone = mmSettings.mm_contact || MM_DEFAULTS.contact;
+  const companyStateName = mmSettings.mm_state_name || MM_DEFAULTS.state_name;
+  const companyStateCode = mmSettings.mm_state_code || MM_DEFAULTS.state_code;
+
+  // Bank details
+  const bankAccountName = mmSettings.mm_bank_account_name || MM_DEFAULTS.bank_account_name;
+  const bankName = mmSettings.mm_bank_name || MM_DEFAULTS.bank_name;
+  const bankAccountNumber = mmSettings.mm_bank_account_number || MM_DEFAULTS.bank_account_number;
+  const bankBranch = mmSettings.mm_bank_branch || MM_DEFAULTS.bank_branch;
+  const bankIfsc = mmSettings.mm_bank_ifsc || MM_DEFAULTS.bank_ifsc;
+  const jurisdiction = mmSettings.mm_jurisdiction || MM_DEFAULTS.jurisdiction;
+
+  // Customer / Buyer details
+  const isPlaceholderCustomer = bill.mmCustomer?.phone === '0000000000';
+  const buyerName = bill.buyerName || (isPlaceholderCustomer ? 'Customer' : bill.mmCustomer?.name) || 'Customer';
+  const buyerAddress = (bill.buyerName ? bill.buyerAddress : bill.mmCustomer?.address) || '';
+  const buyerGstin = (bill.buyerName ? bill.buyerGstin : bill.mmCustomer?.gstin) || '';
+  const buyerState = getStateInfo(buyerGstin, companyStateName, companyStateCode);
+
+  // Consignee details
+  const consigneeName = bill.consigneeName || buyerName;
+  const consigneeAddress = (bill.consigneeName ? bill.consigneeAddress : buyerAddress) || '';
+  const consigneeGstin = (bill.consigneeName ? bill.consigneeGstin : buyerGstin) || '';
+  const consigneeState = getStateInfo(consigneeGstin, buyerState.name, buyerState.code);
+
+  const placeOfSupply = bill.destination || buyerState.name;
+
   const doc = await PDFDocument.create();
   const { regular, bold } = await embedBrandFonts(doc);
 
   const left = MARGIN;
   const right = PAGE_W - MARGIN;
   const contentW = right - left;
+  const midX = left + contentW * 0.5;
+  const leftW = midX - left;
+  const rightW = right - midX;
 
-  const THIN = 0.4;
-
-  interface TextOpts {
-    size?: number;
-    font?: PDFFont;
-    color?: ReturnType<typeof rgb>;
-    align?: 'left' | 'right' | 'center';
-    maxWidth?: number;
-  }
-
-  // All drawing helpers are bound to whichever page is "current" — reassigned
-  // at the top of each page's render pass in the pagination loop below.
   let page: PDFPage;
+
   const hline = (yPos: number, x1 = left, x2 = right, thickness = THIN) =>
     page.drawLine({ start: { x: x1, y: yPos }, end: { x: x2, y: yPos }, thickness, color: BLACK });
   const vline = (xPos: number, y1: number, y2: number, thickness = THIN) =>
     page.drawLine({ start: { x: xPos, y: y1 }, end: { x: xPos, y: y2 }, thickness, color: BLACK });
-  const shadeRect = (x: number, y: number, w: number, h: number, gray = 0.85) =>
-    page.drawRectangle({ x, y, width: w, height: h, color: rgb(gray, gray, gray) });
+
   const text = (str: string, x: number, yPos: number, opts: TextOpts = {}) => {
     const font = opts.font ?? regular;
-    const size = opts.size ?? 9;
+    const size = opts.size ?? 8;
     const color = opts.color ?? BLACK;
     const w = font.widthOfTextAtSize(str, size);
     let drawX = x;
@@ -100,497 +160,519 @@ export async function generateMmA4InvoicePDF(bill: Bill, settings: Partial<Setti
     page.drawText(str, { x: drawX, y: yPos, size, font, color });
   };
 
-  // ── Header block content (identical on every page) ─────────────────────
-  // MM Tax Invoice header shows "MM" rather than the full studio name
-  // (settings.studio.studio_name) that the Thermal/A4 Service Bill layouts
-  // use — a deliberate, MM-only override, not a fallback.
-  const studioName = 'MM';
-  const studioAddress = studio?.studio_address || '';
-  const studioPhone = studio?.studio_phone || '';
-  const studioGstin = studio?.studio_gstin || '';
-  const studioEmail = studio?.studio_email || '';
-
-  const addressLines = studioAddress ? wrapText(regular, studioAddress.replace(/\n/g, ', '), 9, contentW - 40) : [];
-  const gstinContactLine = [studioGstin ? `GSTIN : ${studioGstin}` : '', studioPhone ? `Contact : ${studioPhone}` : '']
-    .filter(Boolean)
-    .join('   ');
-  const emailLine = studioEmail ? `E-Mail : ${studioEmail}` : '';
-
-  // Draws the header + divider on the CURRENT page, returns the y just below it.
-  function drawHeader(): number {
+  // ── Header drawing ──────────────────────────────────────────────────────────
+  function drawBrandHeader(): number {
     let hy = PAGE_H - MARGIN;
-    text(studioName, left, hy - 18, { size: 18, font: bold, align: 'center', maxWidth: contentW });
-    hy -= 32;
-    for (const line of addressLines) {
-      text(line, left, hy, { size: 9, align: 'center', maxWidth: contentW });
-      hy -= 12;
+    text(brandName, left, hy - 12, { size: 14, font: bold, align: 'center', maxWidth: contentW });
+    text(tagline, left, hy - 23, { size: 7.5, font: regular, align: 'center', maxWidth: contentW });
+    if (fssaiNo) {
+      text(`(FSSAI : ${fssaiNo})`, left, hy - 32, { size: 7.5, font: regular, align: 'center', maxWidth: contentW });
     }
-    if (gstinContactLine) {
-      text(gstinContactLine, left, hy, { size: 9, align: 'center', maxWidth: contentW });
-      hy -= 12;
-    }
-    if (emailLine) {
-      text(emailLine, left, hy, { size: 9, align: 'center', maxWidth: contentW });
-      hy -= 12;
-    }
-    if (bill.irnNo) {
-      hy -= 4;
-      hline(hy);
-      hy -= 12;
-      text(`IRN No : ${bill.irnNo}`, left + 4, hy, { size: 8 });
-      hy -= 8;
-    }
-    hy -= 4;
-    hline(hy, left, right, 0.6);
-    return hy - 2;
+    text('TAX INVOICE', left, hy - 45, { size: 10.5, font: bold, align: 'center', maxWidth: contentW });
+    return hy - 51;
   }
 
-  // ── Buyer / Consignee / Invoice-info box content (identical every page) ──
-  // MM bills carry their customer via mmCustomer (mmCustomerId), never the
-  // main-series customer FK — reading bill.customer here always came up
-  // blank for a real MM bill.
-  // Buyer defaults to the linked mmCustomer, but bill.buyerName overrides it
-  // when the operator typed a one-off buyer manually instead of picking/
-  // creating an MmCustomer record (which mandates a phone number) — same
-  // override shape as consignee below, one level up the chain.
-  const isPlaceholderCustomer = bill.mmCustomer?.phone === '0000000000';
-  const buyerName = bill.buyerName || (isPlaceholderCustomer ? 'Customer' : bill.mmCustomer?.name) || 'Customer';
-  const buyerAddress = bill.buyerName ? bill.buyerAddress : bill.mmCustomer?.address;
-  const buyerGstin = bill.buyerName ? bill.buyerGstin : bill.mmCustomer?.gstin;
-  const consigneeName = bill.consigneeName || buyerName;
-  const consigneeAddress = bill.consigneeName ? bill.consigneeAddress : buyerAddress;
-  const consigneeGstin = bill.consigneeName ? bill.consigneeGstin : buyerGstin;
+  // ── Party & Dispatch Grid Section ──────────────────────────────────────────
+  const GRID_H = 186;
 
-  // Invoice-info column needs enough room for "label : value" on one line
-  // (e.g. "Other Reference : PO-2026-118") — 38/38 left it too narrow and
-  // the label/value collided.
-  const colA_W = contentW * 0.33;
-  const colB_W = contentW * 0.33;
-  const colA_X = left;
-  const colB_X = left + colA_W;
-  const colC_X = colB_X + colB_W;
-  const colC_W = right - colC_X;
+  function drawGridSection(topY: number): number {
+    const bottomY = topY - GRID_H;
 
-  function buildPartyLines(name: string, address: string | undefined, gstin: string | undefined, phone: string | undefined) {
-    const lines: Array<{ text: string; font: PDFFont; size: number }> = [
-      { text: name, font: bold, size: 9.5 },
-    ];
-    if (address) {
-      for (const l of wrapText(regular, address, 9, colA_W - 16)) lines.push({ text: l, font: regular, size: 9 });
+    // Outer grid division lines
+    vline(midX, bottomY, topY);
+
+    // ── Left Half: Seller (Marketed By), Consignee, Buyer ──
+    const sellerH = 76;
+    const consigneeH = 55;
+    const sellerBottom = topY - sellerH;
+    const consigneeBottom = sellerBottom - consigneeH;
+
+    hline(sellerBottom, left, midX);
+    hline(consigneeBottom, left, midX);
+
+    // Sub-box 1: Seller
+    let sy = topY - 8.5;
+    text(companyName, left + 6, sy, { size: 8.5, font: bold, maxWidth: leftW - 12 });
+    sy -= 9.5;
+
+    // Split address by explicit newlines or commas
+    const rawAddrLines = companyAddress
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const sellerAddrLines = rawAddrLines.length > 0 ? rawAddrLines : wrapText(regular, companyAddress, 7, leftW - 12);
+
+    for (const line of sellerAddrLines.slice(0, 4)) {
+      text(line, left + 6, sy, { size: 6.8, font: regular, maxWidth: leftW - 12 });
+      sy -= 8;
     }
-    if (gstin) lines.push({ text: `GSTIN : ${gstin}`, font: regular, size: 9 });
-    if (phone) lines.push({ text: `Ph : ${phone}`, font: regular, size: 9 });
-    return lines;
+    text(`GSTIN/UIN: ${companyGstin}`, left + 6, sy, { size: 7, font: bold });
+    sy -= 8;
+    text(`State Name : ${companyStateName}, Code : ${companyStateCode}`, left + 6, sy, { size: 6.8, font: regular });
+    sy -= 8;
+    const contactLine = [contactPhone ? `Contact : ${contactPhone}` : '', branchFssai ? `(FSSAI : ${branchFssai})` : '']
+      .filter(Boolean)
+      .join('   ');
+    if (contactLine) {
+      text(contactLine, left + 6, sy, { size: 6.8, font: regular });
+    }
+
+    // Sub-box 2: Consignee (Ship to)
+    let cy = sellerBottom - 8.5;
+    text('Consignee (Ship to)', left + 6, cy, { size: 7.5, font: bold });
+    cy -= 9.5;
+    text(consigneeName, left + 6, cy, { size: 8, font: bold, maxWidth: leftW - 12 });
+    cy -= 9;
+    const consigneeAddrLines = consigneeAddress ? wrapText(regular, consigneeAddress.replace(/\n/g, ', '), 7, leftW - 12) : [];
+    for (const line of consigneeAddrLines.slice(0, 2)) {
+      text(line, left + 6, cy, { size: 6.8, font: regular, maxWidth: leftW - 12 });
+      cy -= 8;
+    }
+    text(`GSTIN/UIN : ${consigneeGstin || '—'}`, left + 6, cy, { size: 6.8, font: regular });
+    cy -= 8;
+    text(`State Name : ${consigneeState.name}, Code : ${consigneeState.code}`, left + 6, cy, { size: 6.8, font: regular });
+
+    // Sub-box 3: Buyer (Bill to)
+    let by = consigneeBottom - 8.5;
+    text('Buyer (Bill to)', left + 6, by, { size: 7.5, font: bold });
+    by -= 9.5;
+    text(buyerName, left + 6, by, { size: 8, font: bold, maxWidth: leftW - 12 });
+    by -= 9;
+    const buyerAddrLines = buyerAddress ? wrapText(regular, buyerAddress.replace(/\n/g, ', '), 7, leftW - 12) : [];
+    for (const line of buyerAddrLines.slice(0, 2)) {
+      text(line, left + 6, by, { size: 6.8, font: regular, maxWidth: leftW - 12 });
+      by -= 8;
+    }
+    text(`GSTIN/UIN : ${buyerGstin || '—'}`, left + 6, by, { size: 6.8, font: regular });
+    by -= 8;
+    text(`State Name : ${buyerState.name}, Code : ${buyerState.code}`, left + 6, by, { size: 6.8, font: regular });
+    by -= 8;
+    text(`Place of Supply : ${placeOfSupply}`, left + 6, by, { size: 6.8, font: regular });
+
+    // ── Right Half: 7-Row Order & Dispatch Grid ──
+    const col1W = rightW * 0.5;
+    const col2X = midX + col1W;
+    const ROW_H = 25;
+
+    // Vertical line between col 1 & 2 for rows 1 to 6 (not row 7)
+    vline(col2X, topY - ROW_H * 6, topY);
+
+    // Row 1: Invoice No. | Dated
+    let ry = topY;
+    text('Invoice No.', midX + 6, ry - 8, { size: 6.5, font: regular });
+    text(bill.billNumber, midX + 6, ry - 18, { size: 8.5, font: bold, maxWidth: col1W - 12 });
+    text('Dated', col2X + 6, ry - 8, { size: 6.5, font: regular });
+    text(formatTallyDate(new Date(bill.billDate)), col2X + 6, ry - 18, { size: 8.5, font: bold, maxWidth: col1W - 12 });
+    ry -= ROW_H;
+    hline(ry, midX, right);
+
+    // Row 2: Delivery Note | Mode/Terms of Payment
+    text('Delivery Note', midX + 6, ry - 8, { size: 6.5, font: regular });
+    text('Mode/Terms of Payment', col2X + 6, ry - 8, { size: 6.5, font: regular });
+    text(bill.paymentMode || '', col2X + 6, ry - 18, { size: 8, font: bold, maxWidth: col1W - 12 });
+    ry -= ROW_H;
+    hline(ry, midX, right);
+
+    // Row 3: Reference No. & Date. | Other References
+    text('Reference No. & Date.', midX + 6, ry - 8, { size: 6.5, font: regular });
+    text(bill.otherReference || '', midX + 6, ry - 18, { size: 7.5, font: regular, maxWidth: col1W - 12 });
+    text('Other References', col2X + 6, ry - 8, { size: 6.5, font: regular });
+    text(bill.irnNo ? `IRN: ${bill.irnNo.slice(0, 20)}...` : '', col2X + 6, ry - 18, { size: 6.5, font: regular, maxWidth: col1W - 12 });
+    ry -= ROW_H;
+    hline(ry, midX, right);
+
+    // Row 4: Buyer's Order No. | Dated
+    text("Buyer's Order No.", midX + 6, ry - 8, { size: 6.5, font: regular });
+    text('Dated', col2X + 6, ry - 8, { size: 6.5, font: regular });
+    ry -= ROW_H;
+    hline(ry, midX, right);
+
+    // Row 5: Dispatch Doc No. | Delivery Note Date
+    text('Dispatch Doc No.', midX + 6, ry - 8, { size: 6.5, font: regular });
+    text(bill.ewayBillNo ? `EWAY: ${bill.ewayBillNo}` : '', midX + 6, ry - 18, { size: 7.5, font: regular, maxWidth: col1W - 12 });
+    text('Delivery Note Date', col2X + 6, ry - 8, { size: 6.5, font: regular });
+    ry -= ROW_H;
+    hline(ry, midX, right);
+
+    // Row 6: Dispatched through | Destination
+    text('Dispatched through', midX + 6, ry - 8, { size: 6.5, font: regular });
+    const dispatchDetails = [bill.despatchedThrough, bill.vehicleNo].filter(Boolean).join(' / ');
+    text(dispatchDetails, midX + 6, ry - 18, { size: 7.5, font: regular, maxWidth: col1W - 12 });
+    text('Destination', col2X + 6, ry - 8, { size: 6.5, font: regular });
+    text(bill.destination || '', col2X + 6, ry - 18, { size: 7.5, font: regular, maxWidth: col1W - 12 });
+    ry -= ROW_H;
+    hline(ry, midX, right);
+
+    // Row 7: Terms of Delivery (spans full right width down to bottomY)
+    text('Terms of Delivery', midX + 6, ry - 8, { size: 6.5, font: regular });
+    if (bill.notes) {
+      text(bill.notes, midX + 6, ry - 18, { size: 7, font: regular, maxWidth: rightW - 12 });
+    }
+
+    // Grid divider closing bottom
+    hline(bottomY, left, right);
+    return bottomY;
   }
-  const buyerLines = buildPartyLines(buyerName, buyerAddress, buyerGstin, bill.mmCustomer?.phone);
-  const consigneeLines = buildPartyLines(consigneeName, consigneeAddress, consigneeGstin, undefined);
 
-  const invoiceInfoRows: Array<[string, string]> = [
-    ['Invoice No', bill.billNumber],
-    ['Dated', formatDDMMYYYY(new Date(bill.billDate))],
-    ...(bill.vehicleNo ? [['Vehicle No', bill.vehicleNo] as [string, string]] : []),
-    ...(bill.despatchedThrough ? [['Despatched Through', bill.despatchedThrough] as [string, string]] : []),
-    ...(bill.destination ? [['Destination', bill.destination] as [string, string]] : []),
-    ...(bill.otherReference ? [['Other Reference', bill.otherReference] as [string, string]] : []),
-  ];
-
-  const LINE_GAP = 13;
-  const partyBoxH = (labelH: number) => 16 + labelH * LINE_GAP + 6;
-  // "TAX INVOICE" sits in its own mini-box (closed by one extra hline) above
-  // a single-line label:value grid — one row per field, not the old
-  // stacked label-then-bold-value pair.
-  const TAXINV_BOX_H = 20;
-  const INFO_ROW_H = 14;
-  const invoiceBoxH = TAXINV_BOX_H + 12 + invoiceInfoRows.length * INFO_ROW_H + 8;
-  // E-Way Bill No is bottom-anchored in the Consignee column instead of just
-  // another invoice-info row — reserve extra room there when it's present.
-  const consigneeExtra = bill.ewayBillNo ? 18 : 0;
-  const infoBoxH = Math.max(
-    partyBoxH(buyerLines.length + 1),
-    partyBoxH(consigneeLines.length + 1) + consigneeExtra,
-    invoiceBoxH,
-  );
-
-  function drawPartyBox(topY: number): number {
-    const boxTop = topY;
-    const boxBottom = boxTop - infoBoxH;
-    hline(boxBottom);
-    vline(colB_X, boxBottom, boxTop);
-    vline(colC_X, boxBottom, boxTop);
-
-    let by = boxTop - 14;
-    text('Buyer :-', colA_X + 8, by, { size: 9, font: bold });
-    let cy = boxTop - 14;
-    text('Consignee :-', colB_X + 8, cy, { size: 9, font: bold });
-    by -= LINE_GAP;
-    cy -= LINE_GAP;
-    for (const ln of buyerLines) {
-      text(ln.text, colA_X + 8, by, { size: ln.size, font: ln.font, color: BODY, maxWidth: colA_W - 16 });
-      by -= LINE_GAP;
-    }
-    for (const ln of consigneeLines) {
-      text(ln.text, colB_X + 8, cy, { size: ln.size, font: ln.font, color: BODY, maxWidth: colB_W - 16 });
-      cy -= LINE_GAP;
-    }
-    if (bill.ewayBillNo) {
-      text(`E-Way Bill No : ${bill.ewayBillNo}`, colB_X + 8, boxBottom + 8, { size: 8 });
-    }
-
-    text('TAX INVOICE', colC_X + 8, boxTop - 14, { size: 10.5, font: bold, align: 'center', maxWidth: colC_W - 16 });
-    hline(boxTop - TAXINV_BOX_H, colC_X, right);
-    let iy = boxTop - TAXINV_BOX_H - 12;
-    for (const [label, value] of invoiceInfoRows) {
-      text(label, colC_X + 8, iy, { size: 8, color: BODY });
-      text(`: ${value}`, right - 8, iy, { size: 8.5, font: bold, align: 'right' });
-      iy -= INFO_ROW_H;
-    }
-    return boxBottom;
-  }
-
-  // ── Item table columns ───────────────────────────────────────────────────
+  // ── Items Table Setup ───────────────────────────────────────────────────────
   const cols = [
-    { key: 'sno', label: 'S.No', x: 0, w: contentW * 0.05 },
-    { key: 'particulars', label: 'Particulars', x: 0, w: contentW * 0.37 },
-    { key: 'hsn', label: 'HSN', x: 0, w: contentW * 0.1 },
-    { key: 'qty', label: 'Quantity', x: 0, w: contentW * 0.14 },
-    { key: 'rate', label: 'Rate', x: 0, w: contentW * 0.12 },
-    { key: 'per', label: 'Per', x: 0, w: contentW * 0.08 },
-    { key: 'amount', label: 'Amount', x: 0, w: contentW * 0.14 },
+    { key: 'sno', label: 'Sl\nNo.', x: left, w: 26, align: 'center' as const },
+    { key: 'desc', label: 'Description of Goods', x: left + 26, w: 200, align: 'left' as const },
+    { key: 'hsn', label: 'HSN/SAC', x: left + 226, w: 55, align: 'center' as const },
+    { key: 'qty', label: 'Quantity', x: left + 281, w: 75, align: 'right' as const },
+    { key: 'rate', label: 'Rate', x: left + 356, w: 56, align: 'right' as const },
+    { key: 'per', label: 'per', x: left + 412, w: 38, align: 'center' as const },
+    { key: 'amt', label: 'Amount', x: left + 450, w: right - (left + 450), align: 'right' as const },
   ];
-  {
-    let cx = left;
-    for (const c of cols) {
-      c.x = cx;
-      cx += c.w;
-    }
-  }
-  const sameUnit = bill.items.length > 0 && bill.items.every((i) => i.unit === bill.items[0]!.unit);
-  const totalQty = bill.items.reduce((s, i) => s + i.qty, 0);
 
-  const TABLE_HEADER_H = 24;
+  const TABLE_HEADER_H = 20;
+
   function drawTableHeader(topY: number): number {
     const headerBottom = topY - TABLE_HEADER_H;
-    shadeRect(left, headerBottom, contentW, TABLE_HEADER_H);
-    const baseline = topY - TABLE_HEADER_H / 2 - 3;
-    text(cols[0]!.label, cols[0]!.x, baseline, { size: 8.5, font: bold, align: 'center', maxWidth: cols[0]!.w });
-    text(cols[1]!.label, cols[1]!.x + 6, baseline, { size: 8.5, font: bold });
-    for (const c of cols.slice(2)) {
-      text(c.label, c.x, baseline, { size: 8.5, font: bold, align: 'center', maxWidth: c.w });
-    }
-    hline(headerBottom);
+    const baseline = topY - 13;
+
+    text('Sl No.', cols[0].x, baseline, { size: 7.5, font: bold, align: 'center', maxWidth: cols[0].w });
+    text('Description of Goods', cols[1].x + 4, baseline, { size: 7.5, font: bold });
+    text('HSN/SAC', cols[2].x, baseline, { size: 7.5, font: bold, align: 'center', maxWidth: cols[2].w });
+    text('Quantity', cols[3].x, baseline, { size: 7.5, font: bold, align: 'center', maxWidth: cols[3].w });
+    text('Rate', cols[4].x, baseline, { size: 7.5, font: bold, align: 'center', maxWidth: cols[4].w });
+    text('per', cols[5].x, baseline, { size: 7.5, font: bold, align: 'center', maxWidth: cols[5].w });
+    text('Amount', cols[6].x, baseline, { size: 7.5, font: bold, align: 'center', maxWidth: cols[6].w });
+
+    hline(headerBottom, left, right);
     return headerBottom;
   }
 
-  const ROW_LINE_H = 10.5;
-  const ROW_PAD = 16;
-  const rowLayouts: RowLayout[] = bill.items.map((item) => {
-    const lines = wrapText(regular, item.productName, 8.5, cols[1]!.w - 12);
-    return { lines, height: Math.max(30, lines.length * ROW_LINE_H + ROW_PAD) };
-  });
-
-  // ── Summary block (totals / words / bank / HSN summary / terms /
-  //    signature) — rendered only on the last page, but its height is
-  //    computed once up front so pagination is consistent across pages. ──
+  // ── Summary Block Calculations ─────────────────────────────────────────────
   const hsnGroups = computeHsnSummary(bill);
   const gstRates = [...new Set(bill.items.filter((i) => i.gstRate > 0).map((i) => i.gstRate))];
   const halfRate = gstRates.length === 1 ? gstRates[0]! / 2 : undefined;
   const fullRate = gstRates.length === 1 ? gstRates[0]! : undefined;
 
-  const TOTAL_ROW_H = 20;
-  // "Amount in words" wraps to a variable number of lines depending on the
-  // actual grand total (a multi-lakh/crore figure needs more lines than a
-  // small one) — computed once here from the real bill, not a fixed guess,
-  // so a large amount can't overflow into the GST-summary column beside it.
-  const wordsW = contentW * 0.6 - 16;
-  const wordsLines = wrapText(regular, amountInWordsINR(bill.grandTotal), 9, wordsW);
-  const leftContentH = 26 + wordsLines.length * 12 + 4 + 12 + 4 * 11 + 6; // words + bank-detail block
-  const rightContentH = 14 + 13 + 15 + 13 + 10; // CGST + SGST + divider gap + Total Value row + padding
-  const WORDS_BANK_H = Math.max(leftContentH, rightContentH);
-  const HSN_ROW_H = 13;
-  // Matches exactly what the HSN-summary render loop below consumes: a 12pt
-  // offset before the header row, then one HSN_ROW_H per header + group +
-  // total row. Always reserved now — the table always renders.
-  const hsnTableH = 12 + (hsnGroups.length + 2) * HSN_ROW_H;
-  const TERMS_H = 30;
-  const SIGNATURE_H = 50;
-  const summaryBlockH = TOTAL_ROW_H + WORDS_BANK_H + hsnTableH + TERMS_H + SIGNATURE_H;
+  const sameUnit = bill.items.length > 0 && bill.items.every((i) => i.unit === bill.items[0]!.unit);
+  const totalQty = bill.items.reduce((s, i) => s + i.qty, 0);
 
-  // ── Paginate items ───────────────────────────────────────────────────────
-  const bottomLimit = MARGIN;
-  // Every page's item table stops at the same fixed line, reserving room for
-  // the summary block whether or not this particular page turns out to be
-  // the last one — the table border still stretches down to it either way
-  // (blank ruled space on a continuation page, same "stretch to fill" look
-  // the A4 layout already uses), and the summary content itself only
-  // actually gets drawn when isLast.
-  const reservedBottomY = bottomLimit + summaryBlockH;
-  const pages: RowLayout[][] = [];
-  let current: RowLayout[] = [];
+  const TOTAL_ROW_H = 18;
+  const WORDS_EOE_H = 24;
+  const HSN_TABLE_H = 18 + hsnGroups.length * 13 + 14 + 16 + 2;
+  const BANK_SIG_H = 78;
+  const SUMMARY_BLOCK_H = TOTAL_ROW_H + WORDS_EOE_H + HSN_TABLE_H + BANK_SIG_H;
+
+  const bottomLimit = MARGIN + 22; // Leave room for jurisdiction and computer-generated footer
+  const reservedBottomY = bottomLimit + SUMMARY_BLOCK_H;
+
+  interface ItemLayout {
+    itemIndex: number;
+    nameLines: string[];
+    height: number;
+    baseAmt: number;
+    baseUnitPrice: number;
+  }
+
+  const itemLayouts: ItemLayout[] = bill.items.map((item, idx) => {
+    const lines = wrapText(bold, item.productName, 8, cols[1].w - 8);
+    const baseAmt = item.totalAmount - item.gstAmount;
+    const baseUnitPrice = item.qty ? Math.round(baseAmt / item.qty) : item.unitPrice;
+    const height = Math.max(18, lines.length * 10 + 6);
+    return { itemIndex: idx, nameLines: lines, height, baseAmt, baseUnitPrice };
+  });
+
+  // Calculate inline tax lines height (if single page / last page)
+  const inlineTaxCount = bill.gstAmount > 0 ? (bill.isInterState ? 1 : 2) : 0;
+  const INLINE_TAX_H = inlineTaxCount * 14;
+
+  // Pagination
+  const availableItemsH = PAGE_H - MARGIN - 51 - GRID_H - TABLE_HEADER_H - reservedBottomY;
+  const pages: ItemLayout[][] = [];
+  let current: ItemLayout[] = [];
   let currentH = 0;
 
-  function drawHeaderHeight(): number {
-    // Mirrors drawHeader()'s vertical consumption without touching `page`.
-    let h = 32 + addressLines.length * 12 + (gstinContactLine ? 12 : 0) + (emailLine ? 12 : 0);
-    if (bill.irnNo) h += 24;
-    h += 6;
-    return h;
-  }
-  // Computed against the header/party-box's (identical on every page) actual
-  // height, so every page reserves the same item-table space regardless of
-  // whether it turns out to be first, middle, or last.
-  const availableItemsH = PAGE_H - MARGIN - drawHeaderHeight() - infoBoxH - TABLE_HEADER_H - reservedBottomY;
-
-  for (const rl of rowLayouts) {
-    if (current.length > 0 && currentH + rl.height > availableItemsH) {
+  for (const il of itemLayouts) {
+    if (current.length > 0 && currentH + il.height > availableItemsH - INLINE_TAX_H) {
       pages.push(current);
       current = [];
       currentH = 0;
     }
-    current.push(rl);
-    currentH += rl.height;
+    current.push(il);
+    currentH += il.height;
   }
-  pages.push(current); // always at least one page, even with 0 items (shouldn't happen — bills require >=1 item)
+  pages.push(current);
 
-  // ── Render pages ─────────────────────────────────────────────────────────
-  let itemIndex = 0;
-  pages.forEach((pageRows, pageIdx) => {
+  // ── Render Pages ───────────────────────────────────────────────────────────
+  pages.forEach((pageItems, pageIdx) => {
     const isLast = pageIdx === pages.length - 1;
     page = doc.addPage([PAGE_W, PAGE_H]);
 
-    let y = drawHeader();
-    y = drawPartyBox(y);
-    let ty = drawTableHeader(y);
+    const headerBottomY = drawBrandHeader();
+    const gridBottomY = drawGridSection(headerBottomY);
+    const tableHeaderBottom = drawTableHeader(gridBottomY);
 
-    for (const rl of pageRows) {
-      const item = bill.items[itemIndex]!;
+    let ty = tableHeaderBottom;
+
+    // Render line items
+    for (const il of pageItems) {
+      const item = bill.items[il.itemIndex]!;
       const rowTop = ty;
-      const rowMid = rowTop - rl.height / 2 - 3;
-      text(String(itemIndex + 1), cols[0]!.x, rowMid, { size: 8.5, color: BODY, align: 'center', maxWidth: cols[0]!.w });
-      let ly = rowTop - ROW_PAD / 2 - 8;
-      for (const line of rl.lines) {
-        text(line, cols[1]!.x + 6, ly, { size: 8.5, color: BODY });
-        ly -= ROW_LINE_H;
+
+      text(String(il.itemIndex + 1), cols[0].x, rowTop - 11, { size: 7.5, font: regular, align: 'center', maxWidth: cols[0].w });
+
+      let ly = rowTop - 11;
+      for (const line of il.nameLines) {
+        text(line, cols[1].x + 4, ly, { size: 8, font: bold });
+        ly -= 10;
       }
-      text(item.hsnSac ?? '-', cols[2]!.x, rowMid, { size: 8.5, color: BODY, align: 'center', maxWidth: cols[2]!.w });
-      const baseAmt = item.totalAmount - item.gstAmount;
-      const baseUnitPrice = item.qty ? baseAmt / item.qty : item.unitPrice;
-      text(`${formatQty(item.qty)} ${item.unit}`, cols[3]!.x, rowMid, { size: 8.5, color: BODY, align: 'center', maxWidth: cols[3]!.w });
-      text(formatAmt3(baseUnitPrice), cols[4]!.x, rowMid, { size: 8.5, color: BODY, align: 'center', maxWidth: cols[4]!.w });
-      text(item.unit, cols[5]!.x, rowMid, { size: 8.5, color: BODY, align: 'center', maxWidth: cols[5]!.w });
-      text(formatAmt3(baseAmt), cols[6]!.x, rowMid, { size: 8.5, color: BODY, align: 'right', maxWidth: cols[6]!.w - 6 });
-      ty -= rl.height;
-      itemIndex++;
+
+      text(item.hsnSac || '—', cols[2].x, rowTop - 11, { size: 7.5, font: regular, align: 'center', maxWidth: cols[2].w });
+      text(`${formatQty3(item.qty)} ${item.unit || 'KGS'}`, cols[3].x, rowTop - 11, {
+        size: 7.5,
+        font: regular,
+        align: 'right',
+        maxWidth: cols[3].w - 4,
+      });
+      text(formatAmt2(il.baseUnitPrice), cols[4].x, rowTop - 11, { size: 7.5, font: regular, align: 'right', maxWidth: cols[4].w - 4 });
+      text(item.unit || 'KGS', cols[5].x, rowTop - 11, { size: 7.5, font: regular, align: 'center', maxWidth: cols[5].w });
+      text(formatAmt2(il.baseAmt), cols[6].x, rowTop - 11, { size: 7.5, font: regular, align: 'right', maxWidth: cols[6].w - 4 });
+
+      ty -= il.height;
     }
 
-    // On the last page the table stretches down to the reserved summary
-    // line regardless of how far the actual rows reached (blank ruled space
-    // below them, same "stretch to fill" look the A4 layout already uses).
-    // A continuation page instead stops right after its own last row (plus a
-    // small gap for "Continue...") — reservedBottomY can sit very close to
-    // where a nearly-full page's last row ends, and stretching to it there
-    // used to print "Continue..." right on top of that row's own text.
-    const tableBottom = isLast ? reservedBottomY : Math.min(ty - 22, reservedBottomY);
-    // `tableBottom` is the TOP of the Total row (its own band runs from here
-    // down to tableBottom - TOTAL_ROW_H, drawn further below) — a column
-    // boundary bounded at plain `tableBottom` therefore stops right where
-    // the Total row begins, not where it actually ends. That's exactly what
-    // we want for S.No/Particulars/HSN (merged into one "Total" cell, no
-    // divider through that band at all), but Quantity/Rate/Per/Amount need
-    // their own dividers to keep running through the Total row's own height
-    // down to totalRowBottom, or those cells show no border at all — which
-    // is the bug a rendered PDF caught (reported: "lines not finishing").
-    const totalRowBottom = tableBottom - TOTAL_ROW_H;
-    vline(left, tableBottom, y);
-    vline(right, tableBottom, y);
-    for (const c of cols.slice(1)) {
-      const mergeIntoTotal = isLast && (c.key === 'particulars' || c.key === 'hsn');
-      const lowerBound = isLast ? (mergeIntoTotal ? tableBottom : totalRowBottom) : tableBottom;
-      vline(c.x, lowerBound, y);
+    // Render inline Output CGST / SGST rows under the items on the last page
+    if (isLast && bill.gstAmount > 0) {
+      ty -= 4;
+      if (bill.isInterState) {
+        const rateStr = fullRate !== undefined ? `${fullRate}%` : `${hsnGroups[0]?.igstRate ?? 0}%`;
+        text(`OUTPUT IGST ${rateStr}`, cols[1].x + 20, ty - 10, { size: 8, font: bold });
+        text(fullRate !== undefined ? String(fullRate) : String(hsnGroups[0]?.igstRate ?? 0), cols[4].x, ty - 10, {
+          size: 7.5,
+          font: regular,
+          align: 'right',
+          maxWidth: cols[4].w - 4,
+        });
+        text('%', cols[5].x, ty - 10, { size: 7.5, font: regular, align: 'center', maxWidth: cols[5].w });
+        text(formatAmt2(bill.gstAmount), cols[6].x, ty - 10, { size: 7.5, font: regular, align: 'right', maxWidth: cols[6].w - 4 });
+        ty -= 14;
+      } else {
+        const { cgstP, sgstP } = splitTaxP(bill.gstAmount, false);
+        const rateStr = halfRate !== undefined ? `${halfRate}%` : `${hsnGroups[0]?.cgstRate ?? 0}%`;
+        const rateVal = halfRate !== undefined ? String(halfRate) : String(hsnGroups[0]?.cgstRate ?? 0);
+
+        text(`OUTPUT CGST ${rateStr}`, cols[1].x + 20, ty - 10, { size: 8, font: bold });
+        text(rateVal, cols[4].x, ty - 10, { size: 7.5, font: regular, align: 'right', maxWidth: cols[4].w - 4 });
+        text('%', cols[5].x, ty - 10, { size: 7.5, font: regular, align: 'center', maxWidth: cols[5].w });
+        text(formatAmt2(cgstP), cols[6].x, ty - 10, { size: 7.5, font: regular, align: 'right', maxWidth: cols[6].w - 4 });
+        ty -= 14;
+
+        text(`OUTPUT SGST ${rateStr}`, cols[1].x + 20, ty - 10, { size: 8, font: bold });
+        text(rateVal, cols[4].x, ty - 10, { size: 7.5, font: regular, align: 'right', maxWidth: cols[4].w - 4 });
+        text('%', cols[5].x, ty - 10, { size: 7.5, font: regular, align: 'center', maxWidth: cols[5].w });
+        text(formatAmt2(sgstP), cols[6].x, ty - 10, { size: 7.5, font: regular, align: 'right', maxWidth: cols[6].w - 4 });
+        ty -= 14;
+      }
     }
-    hline(tableBottom);
+
+    const tableBottom = isLast ? reservedBottomY : Math.min(ty - 20, reservedBottomY);
+    const totalRowBottom = tableBottom - TOTAL_ROW_H;
+
+    // Draw vertical column dividers down through the table body
+    for (const c of cols.slice(1)) {
+      // In the Total row, Sl No / Description / HSN/SAC are merged into one cell
+      const mergeIntoTotal = isLast && (c.key === 'desc' || c.key === 'hsn');
+      const lowerY = isLast ? (mergeIntoTotal ? tableBottom : totalRowBottom) : tableBottom;
+      vline(c.x, lowerY, gridBottomY);
+    }
+
+    hline(tableBottom, left, right);
 
     if (!isLast) {
-      text('Continue...', left, ty - 14, { size: 9, font: bold, align: 'center', maxWidth: contentW });
+      text('(Continued on next page...)', left, ty - 14, { size: 8, font: bold, align: 'center', maxWidth: contentW });
     } else {
-      // ── Total row ──────────────────────────────────────────────────────
+      // ── Total Row ──
       let sy = tableBottom;
-      const totalBaseline = sy - TOTAL_ROW_H / 2 - 3;
-      text('Total', cols[1]!.x + 6, totalBaseline, { size: 9, font: bold });
-      if (sameUnit) {
-        text(`${formatQty(totalQty)} ${bill.items[0]!.unit}`, cols[3]!.x, totalBaseline, { size: 9, font: bold, align: 'center', maxWidth: cols[3]!.w });
-      }
-      text(formatAmt3(bill.items.reduce((s, i) => s + (i.totalAmount - i.gstAmount), 0)), cols[6]!.x, totalBaseline, {
+      const totalBaseline = sy - 12;
+      text('Total', cols[1].x + 4, totalBaseline, { size: 8.5, font: bold });
+      text(`${formatQty3(totalQty)} ${sameUnit ? bill.items[0]!.unit : ''}`, cols[3].x, totalBaseline, {
+        size: 8.5,
+        font: bold,
+        align: 'right',
+        maxWidth: cols[3].w - 4,
+      });
+      text(`Rs.  ${formatAmt2(bill.grandTotal)}`, cols[6].x, totalBaseline, {
         size: 9,
         font: bold,
         align: 'right',
-        maxWidth: cols[6]!.w - 6,
+        maxWidth: cols[6].w - 4,
       });
+
       sy -= TOTAL_ROW_H;
-      hline(sy);
+      hline(sy, left, right);
 
-      // ── Amount in words + Bank details (left) / GST summary (right) ────
-      const leftW = contentW * 0.6;
-      const rightX = left + leftW;
-      vline(rightX, sy - WORDS_BANK_H, sy);
+      // ── Amount Chargeable (in words) & E. & O.E ──
+      text('Amount Chargeable (in words)', left + 6, sy - 8, { size: 6.5, font: regular });
+      text(formatWordsINR(bill.grandTotal), left + 6, sy - 18, { size: 8, font: bold, maxWidth: contentW - 80 });
+      text('E. & O.E', right - 8, sy - 10, { size: 7.5, font: bold, align: 'right' });
 
-      let wy = sy - 14;
-      text('Amount In Words', left + 8, wy, { size: 8.5, font: bold });
-      wy -= 12;
-      for (const line of wordsLines) {
-        text(line, left + 8, wy, { size: 9, color: BODY });
-        wy -= 12;
-      }
-      wy -= 4;
-      text('Bank Detail', left + 8, wy, { size: 8.5, font: bold });
-      wy -= 12;
-      const bankLines: Array<[string, string]> = [
-        ['A/C Name', BANK_DETAILS.accountName],
-        ['A/C Number', BANK_DETAILS.accountNumber],
-        ['Bank Name', BANK_DETAILS.bankName],
-        ['Branch & IFSC', `${BANK_DETAILS.branch}, ${BANK_DETAILS.ifsc}`],
-      ];
-      for (const [label, value] of bankLines) {
-        text(`${label} : ${value}`, left + 8, wy, { size: 8, color: BODY });
-        wy -= 11;
-      }
+      sy -= WORDS_EOE_H;
+      hline(sy, left, right);
 
-      let ry = sy - 14;
-      const gstAmountTotal = bill.gstAmount;
-      if (bill.isInterState) {
-        text(fullRate !== undefined ? `Output IGST @ ${fullRate}%` : 'Output IGST', rightX + 8, ry, { size: 8.5 });
-        text(formatAmt3(gstAmountTotal), right - 8, ry, { size: 8.5, align: 'right' });
-        ry -= 13;
+      // ── HSN/SAC Tax Summary Table ──
+      // Column boundaries matching exact grouped headers
+      const isInter = bill.isInterState;
+      const hsnX = left; // 24
+      const taxValX = left + 80; // 104
+      const cgstX = left + 175; // 199
+      const cgstAmtX = cgstX + 45; // 244
+      const sgstX = cgstAmtX + 75; // 319
+      const sgstAmtX = sgstX + 45; // 364
+      const totTaxX = sgstAmtX + 75; // 439
+
+      const hsnTopY = sy;
+      const subHeaderY = sy - 9;
+
+      if (isInter) {
+        const igstAmtX = cgstX + 60;
+        text('HSN/SAC', hsnX, sy - 12, { size: 7.5, font: bold, align: 'center', maxWidth: 80 });
+        text('Taxable Value', taxValX, sy - 12, { size: 7.5, font: bold, align: 'right', maxWidth: 91 });
+        text('IGST', cgstX, sy - 7, { size: 7.5, font: bold, align: 'center', maxWidth: 240 });
+        hline(subHeaderY, cgstX, totTaxX);
+        text('Rate', cgstX, sy - 16, { size: 6.5, font: bold, align: 'center', maxWidth: 60 });
+        text('Amount', igstAmtX, sy - 16, { size: 6.5, font: bold, align: 'right', maxWidth: 176 });
+        text('Total Tax Amount', totTaxX, sy - 12, { size: 7.5, font: bold, align: 'right', maxWidth: right - totTaxX - 4 });
       } else {
-        const { cgstP, sgstP } = splitTaxP(gstAmountTotal, false);
-        text(halfRate !== undefined ? `Output CGST @ ${halfRate}%` : 'Output CGST', rightX + 8, ry, { size: 8.5 });
-        text(formatAmt3(cgstP), right - 8, ry, { size: 8.5, align: 'right' });
-        ry -= 13;
-        text(halfRate !== undefined ? `Output SGST @ ${halfRate}%` : 'Output SGST', rightX + 8, ry, { size: 8.5 });
-        text(formatAmt3(sgstP), right - 8, ry, { size: 8.5, align: 'right' });
-        ry -= 13;
+        text('HSN/SAC', hsnX, sy - 12, { size: 7.5, font: bold, align: 'center', maxWidth: 80 });
+        text('Taxable Value', taxValX, sy - 12, { size: 7.5, font: bold, align: 'right', maxWidth: 91 });
+        text('CGST', cgstX, sy - 7, { size: 7.5, font: bold, align: 'center', maxWidth: 120 });
+        text('SGST/UTGST', sgstX, sy - 7, { size: 7.5, font: bold, align: 'center', maxWidth: 120 });
+        hline(subHeaderY, cgstX, totTaxX);
+        text('Rate', cgstX, sy - 16, { size: 6.5, font: bold, align: 'center', maxWidth: 45 });
+        text('Amount', cgstAmtX, sy - 16, { size: 6.5, font: bold, align: 'right', maxWidth: 71 });
+        text('Rate', sgstX, sy - 16, { size: 6.5, font: bold, align: 'center', maxWidth: 45 });
+        text('Amount', sgstAmtX, sy - 16, { size: 6.5, font: bold, align: 'right', maxWidth: 71 });
+        text('Total Tax Amount', totTaxX, sy - 12, { size: 7.5, font: bold, align: 'right', maxWidth: right - totTaxX - 4 });
       }
-      ry -= 15;
-      hline(ry, rightX, right);
-      ry -= 13;
-      shadeRect(rightX, ry - 5, right - rightX, 18);
-      text('Total Value', rightX + 8, ry, { size: 9.5, font: bold });
-      text(formatAmt3(bill.grandTotal), right - 8, ry, { size: 9.5, font: bold, align: 'right' });
 
-      sy -= WORDS_BANK_H;
-      hline(sy);
+      sy -= 20;
+      hline(sy, left, right);
 
-      // ── HSN/SAC-wise tax summary ──────────────────────────────────────────
-      {
-        // Shortened labels — the reference's full "SGST/UTGST Rate/Amount"
-        // wording doesn't fit a 10-14%-wide column at readable size.
-        // Two column sets sharing the same contentW budget: intra-state
-        // keeps the CGST+SGST pair, inter-state shows a single wider IGST
-        // pair instead — same row count either way (computeHsnSummary always
-        // fills all three rate/amount fields, just with the inactive pair
-        // zeroed), so pagination height (hsnTableH) is unaffected.
-        const hsnCols = bill.isInterState
-          ? [
-              { label: 'HSN/SAC', x: left, w: contentW * 0.16 },
-              { label: 'Taxable Value', x: 0, w: contentW * 0.22 },
-              { label: 'IGST Rate', x: 0, w: contentW * 0.14 },
-              { label: 'IGST Amt', x: 0, w: contentW * 0.22 },
-              { label: 'Total Tax Amt', x: 0, w: contentW * 0.26 },
-            ]
-          : [
-              { label: 'HSN/SAC', x: left, w: contentW * 0.16 },
-              { label: 'Taxable Value', x: 0, w: contentW * 0.18 },
-              { label: 'CGST Rate', x: 0, w: contentW * 0.1 },
-              { label: 'CGST Amt', x: 0, w: contentW * 0.14 },
-              { label: 'SGST Rate', x: 0, w: contentW * 0.1 },
-              { label: 'SGST Amt', x: 0, w: contentW * 0.14 },
-              { label: 'Total Tax Amt', x: 0, w: contentW * 0.18 },
-            ];
-        {
-          let cx = left;
-          for (const c of hsnCols) {
-            c.x = cx;
-            cx += c.w;
-          }
-        }
-        const hsnTop = sy;
-        let hy = sy - 12;
-        for (const c of hsnCols) text(c.label, c.x, hy, { size: 7.5, font: bold, align: 'center', maxWidth: c.w });
-        hy -= HSN_ROW_H;
-        hline(hy, left, right);
-        const lastCol = hsnCols.length - 1;
-        for (const g of hsnGroups) {
-          text(g.hsnSac, hsnCols[0]!.x, hy - 10, { size: 8, align: 'center', maxWidth: hsnCols[0]!.w });
-          text(formatAmt3(g.taxableValue), hsnCols[1]!.x, hy - 10, { size: 8, align: 'center', maxWidth: hsnCols[1]!.w });
-          if (bill.isInterState) {
-            text(`${g.igstRate}%`, hsnCols[2]!.x, hy - 10, { size: 8, align: 'center', maxWidth: hsnCols[2]!.w });
-            text(formatAmt3(g.igstAmount), hsnCols[3]!.x, hy - 10, { size: 8, align: 'center', maxWidth: hsnCols[3]!.w });
-            text(formatAmt3(g.igstAmount), hsnCols[4]!.x, hy - 10, { size: 8, align: 'center', maxWidth: hsnCols[4]!.w });
-          } else {
-            text(`${g.cgstRate}%`, hsnCols[2]!.x, hy - 10, { size: 8, align: 'center', maxWidth: hsnCols[2]!.w });
-            text(formatAmt3(g.cgstAmount), hsnCols[3]!.x, hy - 10, { size: 8, align: 'center', maxWidth: hsnCols[3]!.w });
-            text(`${g.sgstRate}%`, hsnCols[4]!.x, hy - 10, { size: 8, align: 'center', maxWidth: hsnCols[4]!.w });
-            text(formatAmt3(g.sgstAmount), hsnCols[5]!.x, hy - 10, { size: 8, align: 'center', maxWidth: hsnCols[5]!.w });
-            text(formatAmt3(g.cgstAmount + g.sgstAmount), hsnCols[lastCol]!.x, hy - 10, { size: 8, align: 'center', maxWidth: hsnCols[lastCol]!.w });
-          }
-          hy -= HSN_ROW_H;
-        }
-        hline(hy, left, right);
-        const totalTaxable = hsnGroups.reduce((s, g) => s + g.taxableValue, 0);
-        const totalCgst = hsnGroups.reduce((s, g) => s + g.cgstAmount, 0);
-        const totalSgst = hsnGroups.reduce((s, g) => s + g.sgstAmount, 0);
-        const totalIgst = hsnGroups.reduce((s, g) => s + g.igstAmount, 0);
-        text('Total', hsnCols[0]!.x, hy - 10, { size: 8, font: bold, align: 'center', maxWidth: hsnCols[0]!.w });
-        text(formatAmt3(totalTaxable), hsnCols[1]!.x, hy - 10, { size: 8, font: bold, align: 'center', maxWidth: hsnCols[1]!.w });
-        if (bill.isInterState) {
-          text(formatAmt3(totalIgst), hsnCols[3]!.x, hy - 10, { size: 8, font: bold, align: 'center', maxWidth: hsnCols[3]!.w });
-          text(formatAmt3(totalIgst), hsnCols[4]!.x, hy - 10, { size: 8, font: bold, align: 'center', maxWidth: hsnCols[4]!.w });
+      // Data rows per HSN
+      for (const g of hsnGroups) {
+        text(g.hsnSac || '—', hsnX, sy - 9.5, { size: 7.5, font: regular, align: 'center', maxWidth: 80 });
+        text(formatAmt2(g.taxableValue), taxValX, sy - 9.5, { size: 7.5, font: regular, align: 'right', maxWidth: 91 });
+        if (isInter) {
+          const igstAmtX = cgstX + 60;
+          text(`${g.igstRate}%`, cgstX, sy - 9.5, { size: 7.5, font: regular, align: 'center', maxWidth: 60 });
+          text(formatAmt2(g.igstAmount), igstAmtX, sy - 9.5, { size: 7.5, font: regular, align: 'right', maxWidth: 176 });
+          text(formatAmt2(g.igstAmount), totTaxX, sy - 9.5, { size: 7.5, font: regular, align: 'right', maxWidth: right - totTaxX - 4 });
         } else {
-          text(formatAmt3(totalCgst), hsnCols[3]!.x, hy - 10, { size: 8, font: bold, align: 'center', maxWidth: hsnCols[3]!.w });
-          text(formatAmt3(totalSgst), hsnCols[5]!.x, hy - 10, { size: 8, font: bold, align: 'center', maxWidth: hsnCols[5]!.w });
-          text(formatAmt3(totalCgst + totalSgst), hsnCols[lastCol]!.x, hy - 10, { size: 8, font: bold, align: 'center', maxWidth: hsnCols[lastCol]!.w });
+          text(`${g.cgstRate}%`, cgstX, sy - 9.5, { size: 7.5, font: regular, align: 'center', maxWidth: 45 });
+          text(formatAmt2(g.cgstAmount), cgstAmtX, sy - 9.5, { size: 7.5, font: regular, align: 'right', maxWidth: 71 });
+          text(`${g.sgstRate}%`, sgstX, sy - 9.5, { size: 7.5, font: regular, align: 'center', maxWidth: 45 });
+          text(formatAmt2(g.sgstAmount), sgstAmtX, sy - 9.5, { size: 7.5, font: regular, align: 'right', maxWidth: 71 });
+          text(formatAmt2(g.cgstAmount + g.sgstAmount), totTaxX, sy - 9.5, {
+            size: 7.5,
+            font: regular,
+            align: 'right',
+            maxWidth: right - totTaxX - 4,
+          });
         }
-        hy -= HSN_ROW_H;
-        sy = hy;
-        hline(sy, left, right);
-        vline(left, sy, hsnTop);
-        vline(right, sy, hsnTop);
-        for (const c of hsnCols.slice(1)) vline(c.x, sy, hsnTop);
+        sy -= 13;
       }
 
-      // ── Terms & signature ────────────────────────────────────────────────
-      let termsY = sy - 12;
-      text('Terms & Conditions', left + 8, termsY, { size: 8, font: bold });
-      termsY -= 11;
-      for (const line of wrapText(regular, TERMS_TEXT, 7.5, contentW - 16)) {
-        text(line, left + 8, termsY, { size: 7.5, color: BODY });
-        termsY -= 10;
+      hline(sy, left, right);
+
+      // HSN Totals
+      const totalTaxable = hsnGroups.reduce((s, g) => s + g.taxableValue, 0);
+      const totalCgst = hsnGroups.reduce((s, g) => s + g.cgstAmount, 0);
+      const totalSgst = hsnGroups.reduce((s, g) => s + g.sgstAmount, 0);
+      const totalIgst = hsnGroups.reduce((s, g) => s + g.igstAmount, 0);
+      const totalTax = totalCgst + totalSgst + totalIgst;
+
+      text('Total', hsnX, sy - 10, { size: 8, font: bold, align: 'center', maxWidth: 80 });
+      text(formatAmt2(totalTaxable), taxValX, sy - 10, { size: 8, font: bold, align: 'right', maxWidth: 91 });
+
+      if (isInter) {
+        const igstAmtX = cgstX + 60;
+        text(formatAmt2(totalIgst), igstAmtX, sy - 10, { size: 8, font: bold, align: 'right', maxWidth: 176 });
+        text(formatAmt2(totalIgst), totTaxX, sy - 10, { size: 8, font: bold, align: 'right', maxWidth: right - totTaxX - 4 });
+      } else {
+        text(formatAmt2(totalCgst), cgstAmtX, sy - 10, { size: 8, font: bold, align: 'right', maxWidth: 71 });
+        text(formatAmt2(totalSgst), sgstAmtX, sy - 10, { size: 8, font: bold, align: 'right', maxWidth: 71 });
+        text(formatAmt2(totalTax), totTaxX, sy - 10, { size: 8, font: bold, align: 'right', maxWidth: right - totTaxX - 4 });
       }
 
-      // "For [proprietor]" rather than "For [studio name]" on this layout,
-      // per the studio's request — reuses the same bank-account proprietor
-      // name already shown lower in this footer (BANK_DETAILS), not the
-      // header's "MM".
-      const sigY = sy - TERMS_H;
-      text(`For ${BANK_DETAILS.accountName}`, right - 8, sigY, { size: 9, font: bold, align: 'right' });
-      text('Verified By', left + 8, MARGIN + 12, { size: 9 });
-      text('Authorised Signatory', right - 8, MARGIN + 12, { size: 9, font: bold, color: ACCENT, align: 'right' });
+      sy -= 14;
+      hline(sy, left, right);
+
+      // Draw HSN vertical dividers
+      vline(taxValX, sy, hsnTopY);
+      vline(cgstX, sy, hsnTopY);
+      if (isInter) {
+        const igstAmtX = cgstX + 60;
+        vline(igstAmtX, sy, subHeaderY);
+      } else {
+        vline(cgstAmtX, sy, subHeaderY);
+        vline(sgstX, sy, hsnTopY);
+        vline(sgstAmtX, sy, subHeaderY);
+      }
+      vline(totTaxX, sy, hsnTopY);
+
+      // Tax Amount in Words
+      text(`Tax Amount (in words) : ${formatWordsINR(totalTax)}`, left + 6, sy - 11, { size: 7.5, font: bold });
+      sy -= 16;
+      hline(sy, left, right);
+
+      // ── Bank Details, Declaration & Signatory ──
+      const bankTopY = sy;
+      vline(midX, bottomLimit, bankTopY);
+
+      // Left Half: Bank Details & Declaration
+      let bky = bankTopY - 9;
+      text("Company's Bank Details", left + 6, bky, { size: 7.5, font: bold });
+      bky -= 9.5;
+      text(`A/c Holder's Name : ${bankAccountName}`, left + 6, bky, { size: 7, font: bold, maxWidth: leftW - 12 });
+      bky -= 8.5;
+      text(`Bank Name : ${bankName}`, left + 6, bky, { size: 7, font: regular });
+      bky -= 8.5;
+      text(`A/c No. : ${bankAccountNumber}`, left + 6, bky, { size: 7, font: bold });
+      bky -= 8.5;
+      text(`Branch & IFS Code : ${bankBranch} & ${bankIfsc}`, left + 6, bky, { size: 7, font: regular });
+
+      const declTopY = bankTopY - 48;
+      hline(declTopY, left, midX);
+      text('Declaration', left + 6, declTopY - 8, { size: 7, font: bold });
+      text('We declare that this invoice shows the actual price of the goods', left + 6, declTopY - 17, { size: 6.5, font: regular });
+      text('described and that all particulars are true and correct.', left + 6, declTopY - 25, { size: 6.5, font: regular });
+
+      // Right Half: for SREE MEENAKSHI ENTERPRISES & Authorised Signatory
+      text(`for ${companyName}`, right - 10, bankTopY - 11, { size: 8, font: bold, align: 'right' });
+      text('Authorised Signatory', right - 10, bottomLimit + 8, { size: 7.5, font: regular, align: 'right' });
     }
 
-    // ── Outer border for this page ───────────────────────────────────────
-    // Full-length on the last page (frames the reserved summary block too,
-    // even though it was blank space during pagination). A continuation
-    // page has nothing below the item table at all, so its border ends
-    // right there instead of framing a large dead rectangle down to
-    // reservedBottomY.
+    // Outer Rectangle Border
     const borderBottom = isLast ? bottomLimit : tableBottom;
     page.drawRectangle({
       x: left,
       y: borderBottom,
       width: contentW,
-      height: PAGE_H - MARGIN - borderBottom,
+      height: gridBottomY + GRID_H - borderBottom,
       borderColor: BLACK,
-      borderWidth: 0.4,
+      borderWidth: 0.6,
     });
+
+    // Outer Footers
+    if (isLast) {
+      text(`SUBJECT TO ${jurisdiction.toUpperCase()} JURISDICTION`, left, bottomLimit - 9, {
+        size: 7,
+        font: bold,
+        align: 'center',
+        maxWidth: contentW,
+      });
+      text('This is a Computer Generated Invoice', left, bottomLimit - 17, {
+        size: 6.5,
+        font: regular,
+        align: 'center',
+        maxWidth: contentW,
+      });
+    }
   });
 
   return doc.save();

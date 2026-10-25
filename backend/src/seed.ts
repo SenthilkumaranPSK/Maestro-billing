@@ -33,9 +33,26 @@ async function main() {
     { key: 'currency_code', value: 'INR', group: 'general' },
     { key: 'show_whatsapp_on_billing', value: 'true', group: 'general' },
     // MM billing module's own settings — separate from the main tax group,
-    // since MM's default GST rate (5%) is independent of the studio's
-    // regular default_gst_rate (18%) above.
+    // since MM's default GST rate (5%) and business/bank identity are
+    // independent of the studio's regular details above.
     { key: 'mm_default_gst_rate', value: '5', group: 'mm' },
+    { key: 'mm_company_name', value: 'SREE MEENAKSHI ENTERPRISES', group: 'mm' },
+    { key: 'mm_brand_name', value: 'MORU MORU SNACKS', group: 'mm' },
+    { key: 'mm_tagline', value: '- Fully Automated 100% Hygiene Products. - The Mastero Food Products -', group: 'mm' },
+    { key: 'mm_fssai_no', value: '22426581000542', group: 'mm' },
+    { key: 'mm_address', value: '21, Pachapatty Krishna Nagar 8th cross\nAmmapet Salem - 636003.', group: 'mm' },
+    { key: 'mm_branch_office', value: '35-A, Thiyagi Nataraj St No 1\nAmmapet Salem.', group: 'mm' },
+    { key: 'mm_branch_fssai', value: '22426582000581', group: 'mm' },
+    { key: 'mm_gstin', value: '33BAKPM3311D1Z9', group: 'mm' },
+    { key: 'mm_contact', value: '9698676151', group: 'mm' },
+    { key: 'mm_state_name', value: 'Tamil Nadu', group: 'mm' },
+    { key: 'mm_state_code', value: '33', group: 'mm' },
+    { key: 'mm_bank_account_name', value: 'SREE MEENAKSHI ENTERPRISES', group: 'mm' },
+    { key: 'mm_bank_name', value: 'IDBI BANK', group: 'mm' },
+    { key: 'mm_bank_account_number', value: '1907102000007535', group: 'mm' },
+    { key: 'mm_bank_branch', value: 'AMMAPET', group: 'mm' },
+    { key: 'mm_bank_ifsc', value: 'IBKL0001907', group: 'mm' },
+    { key: 'mm_jurisdiction', value: 'SALEM', group: 'mm' },
     // Gate on editing a saved bill (both MAIN and MM) — a soft deterrent
     // against casual/accidental edits, not real auth (this app has none,
     // deliberately). Changeable in Settings → Security.

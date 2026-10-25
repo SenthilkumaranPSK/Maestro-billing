@@ -257,15 +257,53 @@ export interface Settings {
     upi_merchant_name?: string;
   };
   // MM billing module's own settings group — separate from tax above (MM's
-  // default GST rate is independent of the studio's regular one).
-  mm: {
-    mm_default_gst_rate: string;
+  // default GST rate and enterprise/bank details are independent of the studio's).
+  mm?: {
+    mm_default_gst_rate?: string;
+    mm_company_name?: string;
+    mm_brand_name?: string;
+    mm_tagline?: string;
+    mm_fssai_no?: string;
+    mm_address?: string;
+    mm_branch_office?: string;
+    mm_branch_fssai?: string;
+    mm_gstin?: string;
+    mm_contact?: string;
+    mm_state_name?: string;
+    mm_state_code?: string;
+    mm_bank_account_name?: string;
+    mm_bank_name?: string;
+    mm_bank_account_number?: string;
+    mm_bank_branch?: string;
+    mm_bank_ifsc?: string;
+    mm_jurisdiction?: string;
   };
   // Gate on editing a saved bill (both MAIN and MM) — see PasswordGateModal.
   security: {
     bill_edit_password: string;
   };
 }
+
+// Default wholesale identity and bank details for MM module (Tally Tax Invoice layout)
+export const MM_DEFAULTS = {
+  company_name: 'SREE MEENAKSHI ENTERPRISES',
+  brand_name: 'MORU MORU SNACKS',
+  tagline: '- Fully Automated 100% Hygiene Products. - The Mastero Food Products -',
+  fssai_no: '22426581000542',
+  address: '# 21-PACHAPATTI\nKRISHNA NAGAR 8th CROSS\nAMMAPET\nSALEM-636 003.\nTAMILNADU',
+  branch_office: '35-A, Thiyagi Nataraj St No 1, Ammapet Salem.',
+  branch_fssai: '22426582000581',
+  gstin: '33BAKPM3311D1Z9',
+  contact: '9698676151',
+  state_name: 'Tamil Nadu',
+  state_code: '33',
+  bank_account_name: 'SREE MEENAKSHI ENTERPRISES',
+  bank_name: 'IDBI BANK',
+  bank_account_number: '1907102000007535',
+  bank_branch: 'AMMAPET',
+  bank_ifsc: 'IBKL0001907',
+  jurisdiction: 'SALEM',
+};
 
 // Single source of truth for the show_whatsapp_on_billing convention — only
 // the literal string 'false' hides it; missing (older installs) or any

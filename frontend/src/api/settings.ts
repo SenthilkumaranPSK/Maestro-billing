@@ -7,4 +7,7 @@ export const settingsApi = {
 
   update: (key: string, value: string, group?: string) =>
     api.put<ApiResponse<unknown>>('/settings', { key, value, group }).then((r) => r.data.data),
+
+  bulkUpdate: (items: Array<{ key: string; value: string; group?: string }>) =>
+    api.put<ApiResponse<unknown>>('/settings/bulk', items).then((r) => r.data.data),
 };
