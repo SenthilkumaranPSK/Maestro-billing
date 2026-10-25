@@ -45,11 +45,26 @@ function getStateInfo(gstin?: string, defaultState = 'Tamil Nadu', defaultCode =
   return { name: defaultState, code: defaultCode };
 }
 
-function formatTallyDate(date: Date): string {
+function formatTallyDate(date: Date | string | undefined | null): string {
+  if (!date) return '';
+  if (typeof date === 'string') {
+    const trimmed = date.trim();
+    if (!trimmed) return '';
+    const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(trimmed);
+    if (match) {
+      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      const y = match[1];
+      const m = parseInt(match[2], 10) - 1;
+      const d = parseInt(match[3], 10);
+      return `${d}-${months[m] || match[2]}-${y.slice(-2)}`;
+    }
+  }
+  const d = typeof date === 'string' ? new Date(date) : date;
+  if (isNaN(d.getTime())) return String(date);
   const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  const day = date.getDate();
-  const month = months[date.getMonth()];
-  const year = String(date.getFullYear()).slice(-2);
+  const day = d.getDate();
+  const month = months[d.getMonth()];
+  const year = String(d.getFullYear()).slice(-2);
   return `${day}-${month}-${year}`;
 }
 
@@ -277,51 +292,78 @@ export async function generateMmA4InvoicePDF(
     text('Invoice No.', midX + 6, ry - 8, { size: 6.5, font: regular });
     text(bill.billNumber, midX + 6, ry - 18, { size: 8.5, font: bold, maxWidth: col1W - 12 });
     text('Dated', col2X + 6, ry - 8, { size: 6.5, font: regular });
-    text(formatTallyDate(new Date(bill.billDate)), col2X + 6, ry - 18, { size: 8.5, font: bold, maxWidth: col1W - 12 });
+    text(formatTallyDate(bill.billDate), col2X + 6, ry - 18, { size: 8.5, font: bold, maxWidth: col1W - 12 });
     ry -= ROW_H;
     hline(ry, midX, right);
 
     // Row 2: Delivery Note | Mode/Terms of Payment
     text('Delivery Note', midX + 6, ry - 8, { size: 6.5, font: regular });
+    if (bill.deliveryNote) {
+      text(bill.deliveryNote, midX + 6, ry - 18, { size: 7.5, font: regular, maxWidth: col1W - 12 });
+    }
     text('Mode/Terms of Payment', col2X + 6, ry - 8, { size: 6.5, font: regular });
-    text(bill.paymentMode || '', col2X + 6, ry - 18, { size: 8, font: bold, maxWidth: col1W - 12 });
+    const paymentDisplay = bill.termsOfPayment || bill.paymentMode || '';
+    if (paymentDisplay) {
+      text(paymentDisplay, col2X + 6, ry - 18, { size: 8, font: bold, maxWidth: col1W - 12 });
+    }
     ry -= ROW_H;
     hline(ry, midX, right);
 
     // Row 3: Reference No. & Date. | Other References
     text('Reference No. & Date.', midX + 6, ry - 8, { size: 6.5, font: regular });
-    text(bill.otherReference || '', midX + 6, ry - 18, { size: 7.5, font: regular, maxWidth: col1W - 12 });
+    if (bill.otherReference) {
+      text(bill.otherReference, midX + 6, ry - 18, { size: 7.5, font: regular, maxWidth: col1W - 12 });
+    }
     text('Other References', col2X + 6, ry - 8, { size: 6.5, font: regular });
-    text(bill.irnNo ? `IRN: ${bill.irnNo.slice(0, 20)}...` : '', col2X + 6, ry - 18, { size: 6.5, font: regular, maxWidth: col1W - 12 });
+    if (bill.irnNo) {
+      text(bill.irnNo.length > 25 ? `IRN: ${bill.irnNo.slice(0, 22)}...` : `IRN: ${bill.irnNo}`, col2X + 6, ry - 18, { size: 6.5, font: regular, maxWidth: col1W - 12 });
+    }
     ry -= ROW_H;
     hline(ry, midX, right);
 
     // Row 4: Buyer's Order No. | Dated
     text("Buyer's Order No.", midX + 6, ry - 8, { size: 6.5, font: regular });
+    if (bill.buyersOrderNo) {
+      text(bill.buyersOrderNo, midX + 6, ry - 18, { size: 7.5, font: regular, maxWidth: col1W - 12 });
+    }
     text('Dated', col2X + 6, ry - 8, { size: 6.5, font: regular });
+    if (bill.buyersOrderDate) {
+      text(formatTallyDate(bill.buyersOrderDate), col2X + 6, ry - 18, { size: 7.5, font: regular, maxWidth: col1W - 12 });
+    }
     ry -= ROW_H;
     hline(ry, midX, right);
 
     // Row 5: Dispatch Doc No. | Delivery Note Date
     text('Dispatch Doc No.', midX + 6, ry - 8, { size: 6.5, font: regular });
-    text(bill.ewayBillNo ? `EWAY: ${bill.ewayBillNo}` : '', midX + 6, ry - 18, { size: 7.5, font: regular, maxWidth: col1W - 12 });
+    const dispatchDocDisplay = bill.dispatchDocNo || (bill.ewayBillNo ? `EWAY: ${bill.ewayBillNo}` : '');
+    if (dispatchDocDisplay) {
+      text(dispatchDocDisplay, midX + 6, ry - 18, { size: 7.5, font: regular, maxWidth: col1W - 12 });
+    }
     text('Delivery Note Date', col2X + 6, ry - 8, { size: 6.5, font: regular });
+    if (bill.deliveryNoteDate) {
+      text(formatTallyDate(bill.deliveryNoteDate), col2X + 6, ry - 18, { size: 7.5, font: regular, maxWidth: col1W - 12 });
+    }
     ry -= ROW_H;
     hline(ry, midX, right);
 
     // Row 6: Dispatched through | Destination
     text('Dispatched through', midX + 6, ry - 8, { size: 6.5, font: regular });
     const dispatchDetails = [bill.despatchedThrough, bill.vehicleNo].filter(Boolean).join(' / ');
-    text(dispatchDetails, midX + 6, ry - 18, { size: 7.5, font: regular, maxWidth: col1W - 12 });
+    if (dispatchDetails) {
+      text(dispatchDetails, midX + 6, ry - 18, { size: 7.5, font: regular, maxWidth: col1W - 12 });
+    }
     text('Destination', col2X + 6, ry - 8, { size: 6.5, font: regular });
-    text(bill.destination || '', col2X + 6, ry - 18, { size: 7.5, font: regular, maxWidth: col1W - 12 });
+    if (bill.destination) {
+      text(bill.destination, col2X + 6, ry - 18, { size: 7.5, font: regular, maxWidth: col1W - 12 });
+    }
     ry -= ROW_H;
     hline(ry, midX, right);
 
     // Row 7: Terms of Delivery (spans full right width down to bottomY)
     text('Terms of Delivery', midX + 6, ry - 8, { size: 6.5, font: regular });
-    if (bill.notes) {
-      text(bill.notes, midX + 6, ry - 18, { size: 7, font: regular, maxWidth: rightW - 12 });
+    const termsDisplay = bill.termsOfDelivery || bill.notes || '';
+    if (termsDisplay) {
+      text(termsDisplay, midX + 6, ry - 18, { size: 7, font: regular, maxWidth: rightW - 12 });
     }
 
     // Grid divider closing bottom

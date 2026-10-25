@@ -45,6 +45,13 @@ export interface CreateBillPayload {
   buyerName?: string;
   buyerAddress?: string;
   buyerGstin?: string;
+  deliveryNote?: string;
+  termsOfPayment?: string;
+  buyersOrderNo?: string;
+  buyersOrderDate?: string;
+  dispatchDocNo?: string;
+  deliveryNoteDate?: string;
+  termsOfDelivery?: string;
   // "Billed By" (cashier) — see backend schema.prisma Bill.billedById/billedByName.
   billedById?: number;
   billedByName?: string;

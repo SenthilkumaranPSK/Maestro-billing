@@ -187,6 +187,13 @@ export const createBillSchema = z.object({
   buyerName: z.string().max(200, 'Buyer name too long').optional(),
   buyerAddress: z.string().max(500, 'Buyer address too long').optional(),
   buyerGstin: z.string().max(15, 'Buyer GSTIN must be 15 characters or fewer').optional(),
+  deliveryNote: z.string().max(200, 'Delivery Note too long').nullable().optional(),
+  termsOfPayment: z.string().max(200, 'Terms of Payment too long').nullable().optional(),
+  buyersOrderNo: z.string().max(100, "Buyer's Order No too long").nullable().optional(),
+  buyersOrderDate: z.string().max(50, "Buyer's Order Date too long").nullable().optional(),
+  dispatchDocNo: z.string().max(100, 'Dispatch Doc No too long').nullable().optional(),
+  deliveryNoteDate: z.string().max(50, 'Delivery Note Date too long').nullable().optional(),
+  termsOfDelivery: z.string().max(500, 'Terms of Delivery too long').nullable().optional(),
   // "Billed By" — nullable too (same reasoning as notes above): an edit
   // round-trips through GET first, where Prisma returns an unset nullable
   // column as null, not undefined.

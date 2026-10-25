@@ -242,6 +242,13 @@ model Bill {
   destination        String?
   otherReference     String?   @map("other_reference")
   ewayBillNo         String?   @map("eway_bill_no")
+  deliveryNote       String?   @map("delivery_note")
+  termsOfPayment     String?   @map("terms_of_payment")
+  buyersOrderNo      String?   @map("buyers_order_no")
+  buyersOrderDate    String?   @map("buyers_order_date")
+  dispatchDocNo      String?   @map("dispatch_doc_no")
+  deliveryNoteDate   String?   @map("delivery_note_date")
+  termsOfDelivery    String?   @map("terms_of_delivery")
   // Invoice Reference Number from the government e-invoice portal — entered
   // manually if the studio generates one there; this app never calls that
   // API itself, so there is no QR code to go with it (a fake one would be

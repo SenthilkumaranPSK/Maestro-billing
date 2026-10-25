@@ -198,6 +198,13 @@ export interface Bill {
   buyerName?: string;
   buyerAddress?: string;
   buyerGstin?: string;
+  deliveryNote?: string;
+  termsOfPayment?: string;
+  buyersOrderNo?: string;
+  buyersOrderDate?: string;
+  dispatchDocNo?: string;
+  deliveryNoteDate?: string;
+  termsOfDelivery?: string;
   // "Billed By" (cashier) — MAIN billing only so far. See lib/staff.ts for
   // the staff list and backend schema.prisma Bill.billedById/billedByName.
   billedById?: number;

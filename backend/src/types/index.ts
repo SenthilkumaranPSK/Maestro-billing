@@ -44,6 +44,13 @@ export interface CreateBillInput {
   destination?: string;
   otherReference?: string;
   ewayBillNo?: string;
+  deliveryNote?: string | null;
+  termsOfPayment?: string | null;
+  buyersOrderNo?: string | null;
+  buyersOrderDate?: string | null;
+  dispatchDocNo?: string | null;
+  deliveryNoteDate?: string | null;
+  termsOfDelivery?: string | null;
   irnNo?: string;
   consigneeName?: string;
   consigneeAddress?: string;

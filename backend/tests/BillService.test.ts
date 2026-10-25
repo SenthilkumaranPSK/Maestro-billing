@@ -279,3 +279,45 @@ test('updateBill: isInterState round-trips through an edit', async () => {
   });
   assert.equal(updated.isInterState, true);
 });
+
+test('createBill & updateBill: order and dispatch fields round-trip cleanly', async () => {
+  const bill = await service.createBill({
+    billDate: '2026-10-25T10:00:00.000Z',
+    items: [{ productName: 'Mixture', unit: 'Kgs', qty: 10, unitPrice: 20000, gstRate: 5 }],
+    deliveryNote: 'DN-101',
+    termsOfPayment: '30 Days Credit',
+    buyersOrderNo: 'PO-999',
+    buyersOrderDate: '2026-10-24',
+    dispatchDocNo: 'LR-555',
+    deliveryNoteDate: '2026-10-25',
+    termsOfDelivery: 'Godown Delivery',
+    series: 'MM',
+  });
+  assert.equal(bill.deliveryNote, 'DN-101');
+  assert.equal(bill.termsOfPayment, '30 Days Credit');
+  assert.equal(bill.buyersOrderNo, 'PO-999');
+  assert.equal(bill.buyersOrderDate, '2026-10-24');
+  assert.equal(bill.dispatchDocNo, 'LR-555');
+  assert.equal(bill.deliveryNoteDate, '2026-10-25');
+  assert.equal(bill.termsOfDelivery, 'Godown Delivery');
+
+  const updated = await service.updateBill(bill.id, {
+    billDate: '2026-10-25T10:00:00.000Z',
+    items: [{ productName: 'Mixture', unit: 'Kgs', qty: 10, unitPrice: 20000, gstRate: 5 }],
+    deliveryNote: 'DN-102',
+    termsOfPayment: 'Immediate',
+    buyersOrderNo: 'PO-1000',
+    buyersOrderDate: '2026-10-25',
+    dispatchDocNo: 'LR-556',
+    deliveryNoteDate: '2026-10-26',
+    termsOfDelivery: 'Door Delivery',
+    series: 'MM',
+  });
+  assert.equal(updated.deliveryNote, 'DN-102');
+  assert.equal(updated.termsOfPayment, 'Immediate');
+  assert.equal(updated.buyersOrderNo, 'PO-1000');
+  assert.equal(updated.buyersOrderDate, '2026-10-25');
+  assert.equal(updated.dispatchDocNo, 'LR-556');
+  assert.equal(updated.deliveryNoteDate, '2026-10-26');
+  assert.equal(updated.termsOfDelivery, 'Door Delivery');
+});

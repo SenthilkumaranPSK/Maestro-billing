@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Plus, Printer, FileText, ScanEye, Save, RotateCcw, CalendarDays, Zap, Copy } from 'lucide-react';
+import { Plus, Printer, FileText, ScanEye, Save, RotateCcw, CalendarDays, Zap, Copy, FileSpreadsheet } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -82,6 +82,18 @@ export default function MmBillingPage() {
   // Internal record only — never printed on the Tax Invoice (same rule as
   // paymentMode above). See schema.prisma Bill.notes.
   const [notes, setNotes] = useState('');
+
+  // Editable Bill Date (defaults to today YYYY-MM-DD)
+  const [billDate, setBillDate] = useState(() => new Date().toISOString().slice(0, 10));
+
+  // Tally Order & Dispatch Details
+  const [termsOfPayment, setTermsOfPayment] = useState('');
+  const [deliveryNote, setDeliveryNote] = useState('');
+  const [deliveryNoteDate, setDeliveryNoteDate] = useState('');
+  const [buyersOrderNo, setBuyersOrderNo] = useState('');
+  const [buyersOrderDate, setBuyersOrderDate] = useState('');
+  const [dispatchDocNo, setDispatchDocNo] = useState('');
+  const [termsOfDelivery, setTermsOfDelivery] = useState('');
 
   // Tax Invoice Details — same fields as the main Billing page's MM/A4 mode,
   // always shown here since MM bills always need them.
@@ -197,11 +209,20 @@ export default function MmBillingPage() {
         buyerName: buyerManualEntry ? buyerName : undefined,
         buyerAddress: buyerManualEntry ? buyerAddress : undefined,
         buyerGstin: buyerManualEntry ? buyerGstin : undefined,
+        billDate,
+        deliveryNote,
+        termsOfPayment,
+        buyersOrderNo,
+        buyersOrderDate,
+        dispatchDocNo,
+        deliveryNoteDate,
+        termsOfDelivery,
       }),
     [
       nextNumber, items, gstInclusive, isInterState, customer, roundOffP, vehicleNo, despatchedThrough, destination,
       otherReference, ewayBillNo, irnNo, consigneeName, consigneeAddress, consigneeGstin,
       buyerManualEntry, buyerName, buyerAddress, buyerGstin,
+      billDate, deliveryNote, termsOfPayment, buyersOrderNo, buyersOrderDate, dispatchDocNo, deliveryNoteDate, termsOfDelivery,
     ],
   );
 
@@ -313,7 +334,7 @@ export default function MmBillingPage() {
 
     createBillMutation.mutate({
       mmCustomerId,
-      billDate: new Date().toISOString(),
+      billDate: billDate ? (billDate.includes('T') ? billDate : `${billDate}T12:00:00.000Z`) : new Date().toISOString(),
       items: validItems.map((i) => ({
         // MM items never link back to a Product row — see LineItemRow's
         // catalog='mm' note (productId is a FK into Product only). They
@@ -344,6 +365,13 @@ export default function MmBillingPage() {
       buyerName: buyerManualEntry ? buyerName.trim() || undefined : undefined,
       buyerAddress: buyerManualEntry ? buyerAddress.trim() || undefined : undefined,
       buyerGstin: buyerManualEntry ? buyerGstin.trim() || undefined : undefined,
+      deliveryNote: deliveryNote.trim() || undefined,
+      termsOfPayment: termsOfPayment.trim() || undefined,
+      buyersOrderNo: buyersOrderNo.trim() || undefined,
+      buyersOrderDate: buyersOrderDate.trim() || undefined,
+      dispatchDocNo: dispatchDocNo.trim() || undefined,
+      deliveryNoteDate: deliveryNoteDate.trim() || undefined,
+      termsOfDelivery: termsOfDelivery.trim() || undefined,
       series: 'MM',
     });
   };
@@ -402,6 +430,14 @@ export default function MmBillingPage() {
     setBuyerName('');
     setBuyerAddress('');
     setBuyerGstin('');
+    setBillDate(new Date().toISOString().slice(0, 10));
+    setTermsOfPayment('');
+    setDeliveryNote('');
+    setDeliveryNoteDate('');
+    setBuyersOrderNo('');
+    setBuyersOrderDate('');
+    setDispatchDocNo('');
+    setTermsOfDelivery('');
     qc.invalidateQueries({ queryKey: ['bills', 'next-number', 'MM'] });
     qc.refetchQueries({ queryKey: ['bills', 'next-number', 'MM'] });
   };
@@ -484,11 +520,15 @@ export default function MmBillingPage() {
           </div>
           <div className="col-span-3">
             <Label className="text-xs text-muted-foreground mb-1.5 flex items-center gap-1">
-              <CalendarDays className="w-3.5 h-3.5" /> Date
+              <CalendarDays className="w-3.5 h-3.5 text-brand-600" /> Invoice Date
             </Label>
-            <p className="h-10 flex items-center px-3 rounded-lg border border-slate-200 bg-slate-50 text-sm font-medium text-slate-700">
-              {new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
-            </p>
+            <Input
+              type="date"
+              value={billDate}
+              disabled={!!savedBill}
+              onChange={(e) => setBillDate(e.target.value)}
+              className="h-10 bg-white font-medium text-slate-800"
+            />
           </div>
           <div className="col-span-3">
             <Label className="text-xs text-muted-foreground mb-1.5 block">Payment Mode</Label>
@@ -525,34 +565,184 @@ export default function MmBillingPage() {
         </div>
       )}
 
-      {/* ── Tax Invoice Details — always shown for MM bills ─────────────── */}
-      <Card className="border-slate-200">
-        <CardContent className="pt-3 pb-3 space-y-3">
-          <p className="text-xs font-medium text-slate-500 uppercase tracking-wide">Tax Invoice Details</p>
-          <div className="grid grid-cols-12 gap-3">
-            <div className="col-span-3">
-              <Label className="text-xs text-muted-foreground mb-1.5 block">Vehicle No</Label>
-              <Input value={vehicleNo} disabled={!!savedBill} onChange={(e) => setVehicleNo(e.target.value)} />
+      {/* ── Tax Invoice Order & Dispatch Details — matching Tally GST format ─────────────── */}
+      <Card className="border-slate-200 shadow-xs">
+        <CardContent className="pt-3.5 pb-3.5 space-y-3.5">
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-semibold text-slate-700 uppercase tracking-wide flex items-center gap-1.5">
+              <FileSpreadsheet className="w-3.5 h-3.5 text-brand-600" />
+              Tax Invoice Order &amp; Dispatch Details
+            </p>
+            <span className="text-[11px] text-muted-foreground">
+              Official Tally 7-row layout (leave blank to omit)
+            </span>
+          </div>
+
+          {/* Section 1: Buyer's Order & Terms of Payment */}
+          <div className="rounded-md border border-slate-200/80 bg-slate-50/60 p-3 space-y-2.5">
+            <p className="text-[11px] font-semibold text-slate-600 uppercase tracking-wider">
+              1. Buyer's Order &amp; Terms of Payment
+            </p>
+            <div className="grid grid-cols-12 gap-3">
+              <div className="col-span-3">
+                <Label className="text-xs text-muted-foreground mb-1 block">Buyer's Order No.</Label>
+                <Input
+                  value={buyersOrderNo}
+                  disabled={!!savedBill}
+                  placeholder="e.g. PO-8924"
+                  onChange={(e) => setBuyersOrderNo(e.target.value)}
+                />
+              </div>
+              <div className="col-span-3">
+                <Label className="text-xs text-muted-foreground mb-1 block">Buyer's Order Date</Label>
+                <Input
+                  type="date"
+                  value={buyersOrderDate}
+                  disabled={!!savedBill}
+                  onChange={(e) => setBuyersOrderDate(e.target.value)}
+                  className="bg-white"
+                />
+              </div>
+              <div className="col-span-6">
+                <div className="flex items-center justify-between mb-1">
+                  <Label className="text-xs text-muted-foreground block">Terms of Payment / Credit</Label>
+                  {!savedBill && (
+                    <div className="flex gap-1 text-[10px]">
+                      {[
+                        { label: 'Immediate', val: 'Immediate' },
+                        { label: '15 Days', val: '15 Days Credit' },
+                        { label: '30 Days', val: '30 Days Credit' },
+                        { label: 'COD', val: 'Cash on Delivery' },
+                      ].map((chip) => (
+                        <button
+                          key={chip.label}
+                          type="button"
+                          onClick={() => setTermsOfPayment(chip.val)}
+                          className="px-1.5 py-0.5 rounded bg-slate-200 hover:bg-slate-300 text-slate-700 font-medium transition-colors"
+                        >
+                          {chip.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <Input
+                  value={termsOfPayment}
+                  disabled={!!savedBill}
+                  placeholder="e.g. 30 Days Credit / Immediate"
+                  onChange={(e) => setTermsOfPayment(e.target.value)}
+                />
+              </div>
             </div>
-            <div className="col-span-3">
-              <Label className="text-xs text-muted-foreground mb-1.5 block">Despatched Through</Label>
-              <Input value={despatchedThrough} disabled={!!savedBill} onChange={(e) => setDespatchedThrough(e.target.value)} />
+          </div>
+
+          {/* Section 2: Delivery Note & Dispatch Documents */}
+          <div className="rounded-md border border-slate-200/80 bg-slate-50/60 p-3 space-y-2.5">
+            <p className="text-[11px] font-semibold text-slate-600 uppercase tracking-wider">
+              2. Delivery Note &amp; Dispatch Documents
+            </p>
+            <div className="grid grid-cols-12 gap-3">
+              <div className="col-span-3">
+                <Label className="text-xs text-muted-foreground mb-1 block">Delivery Note</Label>
+                <Input
+                  value={deliveryNote}
+                  disabled={!!savedBill}
+                  placeholder="e.g. DN-01"
+                  onChange={(e) => setDeliveryNote(e.target.value)}
+                />
+              </div>
+              <div className="col-span-3">
+                <Label className="text-xs text-muted-foreground mb-1 block">Delivery Note Date</Label>
+                <Input
+                  type="date"
+                  value={deliveryNoteDate}
+                  disabled={!!savedBill}
+                  onChange={(e) => setDeliveryNoteDate(e.target.value)}
+                  className="bg-white"
+                />
+              </div>
+              <div className="col-span-3">
+                <Label className="text-xs text-muted-foreground mb-1 block">Dispatch Doc No.</Label>
+                <Input
+                  value={dispatchDocNo}
+                  disabled={!!savedBill}
+                  placeholder="e.g. LR / RR No."
+                  onChange={(e) => setDispatchDocNo(e.target.value)}
+                />
+              </div>
+              <div className="col-span-3">
+                <Label className="text-xs text-muted-foreground mb-1 block">E-Way Bill No</Label>
+                <Input
+                  value={ewayBillNo}
+                  disabled={!!savedBill}
+                  placeholder="12-digit E-Way Bill"
+                  onChange={(e) => setEwayBillNo(e.target.value)}
+                />
+              </div>
+
+              <div className="col-span-4">
+                <Label className="text-xs text-muted-foreground mb-1 block">Dispatched Through</Label>
+                <Input
+                  value={despatchedThrough}
+                  disabled={!!savedBill}
+                  placeholder="e.g. VRL Logistics / By Hand"
+                  onChange={(e) => setDespatchedThrough(e.target.value)}
+                />
+              </div>
+              <div className="col-span-4">
+                <Label className="text-xs text-muted-foreground mb-1 block">Vehicle No</Label>
+                <Input
+                  value={vehicleNo}
+                  disabled={!!savedBill}
+                  placeholder="e.g. TN-01-AB-1234"
+                  onChange={(e) => setVehicleNo(e.target.value)}
+                />
+              </div>
+              <div className="col-span-4">
+                <Label className="text-xs text-muted-foreground mb-1 block">Destination</Label>
+                <Input
+                  value={destination}
+                  disabled={!!savedBill}
+                  placeholder="e.g. Madurai / Chennai"
+                  onChange={(e) => setDestination(e.target.value)}
+                />
+              </div>
             </div>
-            <div className="col-span-3">
-              <Label className="text-xs text-muted-foreground mb-1.5 block">Destination</Label>
-              <Input value={destination} disabled={!!savedBill} onChange={(e) => setDestination(e.target.value)} />
-            </div>
-            <div className="col-span-3">
-              <Label className="text-xs text-muted-foreground mb-1.5 block">E-Way Bill No</Label>
-              <Input value={ewayBillNo} disabled={!!savedBill} onChange={(e) => setEwayBillNo(e.target.value)} />
-            </div>
-            <div className="col-span-6">
-              <Label className="text-xs text-muted-foreground mb-1.5 block">Other Reference</Label>
-              <Input value={otherReference} disabled={!!savedBill} onChange={(e) => setOtherReference(e.target.value)} />
-            </div>
-            <div className="col-span-6">
-              <Label className="text-xs text-muted-foreground mb-1.5 block">IRN No</Label>
-              <Input value={irnNo} disabled={!!savedBill} onChange={(e) => setIrnNo(e.target.value)} placeholder="Paste from the govt. e-invoice portal, if any" />
+          </div>
+
+          {/* Section 3: References & Delivery Terms */}
+          <div className="rounded-md border border-slate-200/80 bg-slate-50/60 p-3 space-y-2.5">
+            <p className="text-[11px] font-semibold text-slate-600 uppercase tracking-wider">
+              3. References &amp; Terms of Delivery
+            </p>
+            <div className="grid grid-cols-12 gap-3">
+              <div className="col-span-6">
+                <Label className="text-xs text-muted-foreground mb-1 block">Terms of Delivery</Label>
+                <Input
+                  value={termsOfDelivery}
+                  disabled={!!savedBill}
+                  placeholder="e.g. Delivery at Buyer's Godown / Freight Paid"
+                  onChange={(e) => setTermsOfDelivery(e.target.value)}
+                />
+              </div>
+              <div className="col-span-3">
+                <Label className="text-xs text-muted-foreground mb-1 block">Other Reference &amp; Date</Label>
+                <Input
+                  value={otherReference}
+                  disabled={!!savedBill}
+                  placeholder="e.g. Ref / Quotation No."
+                  onChange={(e) => setOtherReference(e.target.value)}
+                />
+              </div>
+              <div className="col-span-3">
+                <Label className="text-xs text-muted-foreground mb-1 block">IRN No (Govt E-Invoice)</Label>
+                <Input
+                  value={irnNo}
+                  disabled={!!savedBill}
+                  placeholder="Paste IRN hash if applicable"
+                  onChange={(e) => setIrnNo(e.target.value)}
+                />
+              </div>
             </div>
           </div>
 
