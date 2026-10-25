@@ -288,6 +288,7 @@ export interface Settings {
   // Gate on editing a saved bill (both MAIN and MM) — see PasswordGateModal.
   security: {
     bill_edit_password: string;
+    bill_edit_protection_enabled?: string;
   };
 }
 

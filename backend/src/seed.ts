@@ -50,6 +50,7 @@ async function main() {
     { key: 'mm_bank_ifsc', value: 'IBKL0001907', group: 'mm' },
     { key: 'mm_jurisdiction', value: 'SALEM', group: 'mm' },
     { key: 'bill_edit_password', value: '1234567890', group: 'security' },
+    { key: 'bill_edit_protection_enabled', value: 'true', group: 'security' },
   ];
 
   for (const s of defaults) {

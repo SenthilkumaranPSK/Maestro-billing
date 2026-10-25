@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Save, FileBarChart2, Percent, ChevronRight, Moon, Sun, Building2, Landmark, Lock, Database, HardDrive, RefreshCw } from 'lucide-react';
+import { Save, FileBarChart2, Percent, ChevronRight, Moon, Sun, Building2, Landmark, Lock, Database, HardDrive, RefreshCw, Eye, EyeOff, FolderCog, Download, CheckCircle2 } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
@@ -76,13 +76,56 @@ export default function MmSettingsPage() {
     if (mm?.mm_bank_ifsc) setBankIfsc(mm.mm_bank_ifsc);
   }, [settings?.mm]);
 
-  // Security
+  // Security & Protection
   const [password, setPassword] = useState('');
+  const [protectionEnabled, setProtectionEnabled] = useState(true);
+  const [showPassword, setShowPassword] = useState(false);
+
   useEffect(() => {
-    if (settings?.security?.bill_edit_password) {
-      setPassword(settings.security.bill_edit_password);
+    if (settings?.security) {
+      if (settings.security.bill_edit_password) {
+        setPassword(settings.security.bill_edit_password);
+      }
+      if (settings.security.bill_edit_protection_enabled !== undefined) {
+        setProtectionEnabled(settings.security.bill_edit_protection_enabled !== 'false');
+      }
     }
   }, [settings?.security]);
+
+  // Database Backup Management
+  const { data: backupData } = useQuery({
+    queryKey: ['backups'],
+    queryFn: backupsApi.list,
+  });
+  const [editingLocation, setEditingLocation] = useState(false);
+  const [locationInput, setLocationInput] = useState('');
+
+  const setLocationMutation = useMutation({
+    mutationFn: (newPath: string) => backupsApi.setLocation(newPath),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['backups'] });
+      setEditingLocation(false);
+      toast({ title: 'Backup location updated', variant: 'success' });
+    },
+    onError: (err: Error) => {
+      toast({ title: 'Could not set backup location', description: err.message, variant: 'destructive' });
+    },
+  });
+
+  const createBackupMutation = useMutation({
+    mutationFn: backupsApi.create,
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ['backups'] });
+      toast({
+        title: 'Safe Backup Created!',
+        description: `Snapshot ${data.name} saved to Documents.`,
+        variant: 'success',
+      });
+    },
+    onError: (err: Error) => {
+      toast({ title: 'Backup failed', description: err.message, variant: 'destructive' });
+    },
+  });
 
   // Backups
   const { data: detectedDrives, refetch: refetchDrives } = useQuery({
@@ -134,6 +177,11 @@ export default function MmSettingsPage() {
         { key: 'mm_bank_branch', value: bankBranch.trim(), group: 'mm' },
         { key: 'mm_bank_ifsc', value: bankIfsc.trim(), group: 'mm' },
       ];
+      payload.push({
+        key: 'bill_edit_protection_enabled',
+        value: protectionEnabled ? 'true' : 'false',
+        group: 'security',
+      });
       if (password.trim()) {
         payload.push({ key: 'bill_edit_password', value: password.trim(), group: 'security' });
       }
@@ -352,25 +400,190 @@ export default function MmSettingsPage() {
 
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm flex items-center gap-2">
-              <Lock className="h-4 w-4 text-brand-600" />
-              Bill Edit Protection
-            </CardTitle>
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-sm flex items-center gap-2">
+                <Lock className="h-4 w-4 text-brand-600" />
+                Bill Edit Protection
+              </CardTitle>
+              <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${protectionEnabled ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'}`}>
+                {protectionEnabled ? 'Enabled' : 'Disabled'}
+              </span>
+            </div>
           </CardHeader>
-          <CardContent>
+          <CardContent className="space-y-3">
+            <label className="flex items-center justify-between gap-3 text-xs cursor-pointer rounded-lg border border-slate-200 p-2.5 bg-slate-50/50 hover:bg-slate-50 transition-colors">
+              <div>
+                <span className="font-semibold text-slate-800 block">Require Security PIN for Edits &amp; Cancels</span>
+                <span className="text-muted-foreground block text-[11px]">
+                  Blocks editing or cancelling saved invoices until PIN is verified.
+                </span>
+              </div>
+              <input
+                type="checkbox"
+                className="h-4 w-4 rounded border-slate-300 text-brand-600 accent-brand-600 shrink-0 cursor-pointer"
+                checked={protectionEnabled}
+                onChange={(e) => setProtectionEnabled(e.target.checked)}
+              />
+            </label>
+
             <div className="space-y-1.5">
               <Label className="text-xs font-semibold">Security PIN / Password</Label>
-              <Input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="PIN to edit or cancel saved bills"
-              />
-              <p className="text-[11px] text-muted-foreground">Required when editing or modifying saved invoices.</p>
+              <div className="relative">
+                <Input
+                  type={showPassword ? 'text' : 'password'}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="PIN to edit or cancel saved bills"
+                  className="pr-9 font-medium"
+                  disabled={!protectionEnabled}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                  tabIndex={-1}
+                  disabled={!protectionEnabled}
+                >
+                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                Default PIN: <code className="bg-slate-100 px-1 py-0.5 rounded font-mono text-slate-700">1234567890</code>. Click Save Changes below to apply.
+              </p>
             </div>
           </CardContent>
         </Card>
       </div>
+
+      {/* Dedicated Database Backup & Storage Card */}
+      <Card className="border-brand-200/80 bg-brand-50/20 shadow-xs">
+        <CardHeader className="pb-2 flex flex-row items-center justify-between">
+          <div>
+            <CardTitle className="text-sm flex items-center gap-2">
+              <Database className="h-4 w-4 text-brand-700" />
+              Database Backup &amp; Storage
+            </CardTitle>
+            <CardDescription className="text-xs text-muted-foreground">
+              Default location: C: drive User Documents. Safely stores live database snapshots.
+            </CardDescription>
+          </div>
+          <Button
+            size="sm"
+            onClick={() => createBackupMutation.mutate()}
+            disabled={createBackupMutation.isPending}
+            className="h-8 text-xs bg-brand-700 hover:bg-brand-800 text-white font-medium"
+          >
+            <Save className="h-3.5 w-3.5 mr-1.5" />
+            {createBackupMutation.isPending ? 'Backing up…' : 'Backup Now'}
+          </Button>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {/* Folder Location Box */}
+          <div className="rounded-lg border border-slate-200 bg-white p-3 space-y-2">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0 flex items-center gap-2">
+                <FolderCog className="h-4 w-4 text-brand-600 shrink-0" />
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold text-slate-800">
+                    Active Backup Folder{' '}
+                    {backupData?.isCustomBackupDir ? (
+                      <span className="font-normal text-amber-700 font-medium">(Custom Folder)</span>
+                    ) : (
+                      <span className="font-normal text-emerald-700 font-medium">(Default Documents)</span>
+                    )}
+                  </p>
+                  <p className="text-xs text-muted-foreground font-mono truncate" title={backupData?.backupDir}>
+                    {backupData?.backupDir ?? 'Resolving…'}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-1.5 shrink-0">
+                {backupData?.isCustomBackupDir && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 text-xs"
+                    onClick={() => setLocationMutation.mutate('')}
+                    disabled={setLocationMutation.isPending}
+                  >
+                    Use Default Documents
+                  </Button>
+                )}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-xs"
+                  onClick={() => {
+                    setLocationInput(backupData?.backupDir || '');
+                    setEditingLocation(!editingLocation);
+                  }}
+                >
+                  {editingLocation ? 'Close' : 'Change Location'}
+                </Button>
+              </div>
+            </div>
+
+            {editingLocation && (
+              <div className="flex items-center gap-2 pt-2 border-t border-slate-100">
+                <Input
+                  value={locationInput}
+                  onChange={(e) => setLocationInput(e.target.value)}
+                  placeholder="e.g. C:\Users\Username\Documents\My Backups or D:\Billing"
+                  className="h-8 text-xs font-mono"
+                  autoFocus
+                />
+                <Button
+                  size="sm"
+                  className="h-8 text-xs"
+                  onClick={() => setLocationMutation.mutate(locationInput.trim())}
+                  disabled={!locationInput.trim() || setLocationMutation.isPending}
+                >
+                  Save
+                </Button>
+                <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={() => setEditingLocation(false)}>
+                  Cancel
+                </Button>
+              </div>
+            )}
+          </div>
+
+          {/* Latest Backup Status */}
+          {backupData?.backups && backupData.backups.length > 0 ? (
+            <div className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+                <div>
+                  <span className="font-medium text-slate-800">{backupData.backups[0]!.name}</span>
+                  <span className="text-muted-foreground ml-2">
+                    ({(backupData.backups[0]!.size / 1024).toFixed(0)} KB) · Updated{' '}
+                    {new Date(backupData.backups[0]!.createdAt).toLocaleString('en-IN', {
+                      day: '2-digit',
+                      month: 'short',
+                      year: 'numeric',
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
+                  </span>
+                </div>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 text-xs text-brand-700 hover:text-brand-800"
+                onClick={() => backupsApi.download(backupData.backups[0]!.name)}
+                title="Download copy or save as"
+              >
+                <Download className="h-3.5 w-3.5 mr-1" />
+                Save As…
+              </Button>
+            </div>
+          ) : (
+            <div className="text-xs text-muted-foreground bg-white border border-dashed rounded-lg p-3 text-center">
+              No backup created yet. Click <strong>Backup Now</strong> to generate your first safety snapshot in Documents.
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {/* 1-Click External / USB Pen Drive Backup */}
       <Card className="border-emerald-200 bg-emerald-50/40">

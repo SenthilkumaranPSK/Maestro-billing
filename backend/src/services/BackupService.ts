@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
 import { spawnSync } from 'child_process';
 import { randomUUID } from 'crypto';
 import { PrismaClient } from '@prisma/client';
@@ -22,7 +23,7 @@ const BACKUP_DIR_SETTING_KEY = 'backup_dir';
 // "YYYY-MM" month folders) are left on disk untouched — just no longer
 // added to, or shown in list() — resolveBackupPath() can still find one by
 // its exact name for a manual restore of an older snapshot.
-export const BACKUP_FILE_NAME = 'Studio_Backup.db';
+export const BACKUP_FILE_NAME = 'MM_Billing_Backup.db';
 
 // Backups deliberately live off the same drive as the app/database, so a
 // failing C: drive (or a botched install/uninstall) can't take the database
@@ -142,10 +143,14 @@ export class BackupService {
     // otherwise this resolution depends on which drives happen to exist on
     // whatever machine it runs on.
     if (process.env.BACKUP_DIR) return process.env.BACKUP_DIR;
-    for (const dir of PREFERRED_BACKUP_DIRS) {
-      if (fs.existsSync(dir.slice(0, 3))) return dir; // e.g. "D:\"
-    }
-    return path.resolve(path.dirname(dbPath), 'backups');
+
+    // Default location is C: drive user's Documents folder
+    const userProfile =
+      process.env.USERPROFILE ||
+      (process.platform === 'win32'
+        ? `C:\\Users\\${process.env.USERNAME || 'User'}`
+        : os.homedir());
+    return path.join(userProfile, 'Documents', 'MM Billing Backups');
   }
 
   /**
@@ -287,6 +292,10 @@ export class BackupService {
       .map((segment) => path.basename(segment));
     const src = path.join(this.backupDir, ...segments);
     if (!fs.existsSync(src)) {
+      if (fileName === BACKUP_FILE_NAME) {
+        const legacy = path.join(this.backupDir, 'Studio_Backup.db');
+        if (fs.existsSync(legacy)) return legacy;
+      }
       throw new BackupError(`Backup file not found: ${fileName}`);
     }
     return src;
@@ -345,10 +354,19 @@ export class BackupService {
    * but resolveBackupPath()/restore() can still find one by its exact name.
    */
   list(): Array<{ name: string; size: number; createdAt: Date }> {
-    const p = path.join(this.backupDir, BACKUP_FILE_NAME);
-    if (!fs.existsSync(p)) return [];
+    let p = path.join(this.backupDir, BACKUP_FILE_NAME);
+    let name = BACKUP_FILE_NAME;
+    if (!fs.existsSync(p)) {
+      const legacyP = path.join(this.backupDir, 'Studio_Backup.db');
+      if (fs.existsSync(legacyP)) {
+        p = legacyP;
+        name = 'Studio_Backup.db';
+      } else {
+        return [];
+      }
+    }
     const stat = fs.statSync(p);
-    return [{ name: BACKUP_FILE_NAME, size: stat.size, createdAt: stat.mtime }];
+    return [{ name, size: stat.size, createdAt: stat.mtime }];
   }
 
   /**

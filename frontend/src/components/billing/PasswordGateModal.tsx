@@ -8,6 +8,8 @@ import { settingsApi } from '@/api/settings';
 interface PasswordGateModalProps {
   onConfirm: () => void;
   onCancel: () => void;
+  title?: string;
+  description?: string;
 }
 
 // Mirrors the seeded default in backend/src/seed.ts — used only if the
@@ -22,7 +24,7 @@ const DEFAULT_EDIT_PASSWORD = '1234567890';
  * anywhere, deliberately (single trusted operator), so this isn't either;
  * it's checked client-side only, same trust model as the rest of the app.
  */
-export function PasswordGateModal({ onConfirm, onCancel }: PasswordGateModalProps) {
+export function PasswordGateModal({ onConfirm, onCancel, title, description }: PasswordGateModalProps) {
   const [value, setValue] = useState('');
   const [error, setError] = useState(false);
   const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: settingsApi.get });
@@ -51,14 +53,14 @@ export function PasswordGateModal({ onConfirm, onCancel }: PasswordGateModalProp
         <div className="flex items-center justify-between">
           <h3 className="font-bold text-base flex items-center gap-2">
             <Lock className="h-4 w-4" />
-            Password Required
+            {title || 'Security PIN Required'}
           </h3>
           <Button type="button" variant="ghost" size="icon" onClick={onCancel}>
             <X className="h-4 w-4" />
           </Button>
         </div>
         <p className="text-sm text-muted-foreground">
-          Editing a saved bill needs the bill-edit password (set in Settings → Security).
+          {description || 'Modifying or editing a saved bill requires the Security PIN (set in Settings).'}
         </p>
         <Input
           type="password"
