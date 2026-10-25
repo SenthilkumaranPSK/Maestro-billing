@@ -90,7 +90,18 @@ interface TextOpts {
   maxWidth?: number;
 }
 
-export async function generateMmA4InvoicePDF(bill: Bill, settings: Partial<Settings>): Promise<Uint8Array> {
+export type MmCopyType = 'ORIGINAL' | 'DUPLICATE' | 'TRIPLICATE' | 'ALL';
+
+export interface MmA4InvoiceOptions {
+  copyType?: MmCopyType;
+  previousDueP?: number;
+}
+
+export async function generateMmA4InvoicePDF(
+  bill: Bill,
+  settings: Partial<Settings>,
+  options: MmA4InvoiceOptions = {}
+): Promise<Uint8Array> {
   const mmSettings = settings.mm || {};
 
   // Enterprise details from settings or defaults
@@ -161,15 +172,19 @@ export async function generateMmA4InvoicePDF(bill: Bill, settings: Partial<Setti
   };
 
   // ── Header drawing ──────────────────────────────────────────────────────────
-  function drawBrandHeader(): number {
+  function drawBrandHeader(copyTitleText?: string): number {
     let hy = PAGE_H - MARGIN;
-    text(brandName, left, hy - 12, { size: 14, font: bold, align: 'center', maxWidth: contentW });
-    text(tagline, left, hy - 23, { size: 7.5, font: regular, align: 'center', maxWidth: contentW });
+    text(brandName, left, hy - 11, { size: 13, font: bold, align: 'center', maxWidth: contentW });
+    text(tagline, left, hy - 21, { size: 7.5, font: regular, align: 'center', maxWidth: contentW });
     if (fssaiNo) {
-      text(`(FSSAI : ${fssaiNo})`, left, hy - 32, { size: 7.5, font: regular, align: 'center', maxWidth: contentW });
+      text(`(FSSAI : ${fssaiNo})`, left, hy - 30, { size: 7.5, font: regular, align: 'center', maxWidth: contentW });
     }
-    text('TAX INVOICE', left, hy - 45, { size: 10.5, font: bold, align: 'center', maxWidth: contentW });
-    return hy - 51;
+    text('TAX INVOICE', left, hy - 42, { size: 10, font: bold, align: 'center', maxWidth: contentW });
+    if (copyTitleText) {
+      text(`(${copyTitleText.toUpperCase()})`, left, hy - 50, { size: 7, font: bold, align: 'center', maxWidth: contentW });
+      return hy - 55;
+    }
+    return hy - 48;
   }
 
   // ── Party & Dispatch Grid Section ──────────────────────────────────────────
@@ -355,8 +370,9 @@ export async function generateMmA4InvoicePDF(bill: Bill, settings: Partial<Setti
   const TOTAL_ROW_H = 18;
   const WORDS_EOE_H = 24;
   const HSN_TABLE_H = 18 + hsnGroups.length * 13 + 14 + 16 + 2;
+  const LEDGER_DUE_H = options.previousDueP && options.previousDueP > 0 ? 14 : 0;
   const BANK_SIG_H = 78;
-  const SUMMARY_BLOCK_H = TOTAL_ROW_H + WORDS_EOE_H + HSN_TABLE_H + BANK_SIG_H;
+  const SUMMARY_BLOCK_H = TOTAL_ROW_H + WORDS_EOE_H + HSN_TABLE_H + LEDGER_DUE_H + BANK_SIG_H;
 
   const bottomLimit = MARGIN + 22; // Leave room for jurisdiction and computer-generated footer
   const reservedBottomY = bottomLimit + SUMMARY_BLOCK_H;
@@ -398,14 +414,26 @@ export async function generateMmA4InvoicePDF(bill: Bill, settings: Partial<Setti
   }
   pages.push(current);
 
-  // ── Render Pages ───────────────────────────────────────────────────────────
-  pages.forEach((pageItems, pageIdx) => {
-    const isLast = pageIdx === pages.length - 1;
-    page = doc.addPage([PAGE_W, PAGE_H]);
+  // ── Render Pages for each requested copy ──────────────────────────────────
+  const copiesToRender: string[] = [];
+  if (options.copyType === 'ALL') {
+    copiesToRender.push('Original for Recipient', 'Duplicate for Transporter', 'Triplicate for Supplier');
+  } else if (options.copyType === 'DUPLICATE') {
+    copiesToRender.push('Duplicate for Transporter');
+  } else if (options.copyType === 'TRIPLICATE') {
+    copiesToRender.push('Triplicate for Supplier');
+  } else {
+    copiesToRender.push('Original for Recipient');
+  }
 
-    const headerBottomY = drawBrandHeader();
-    const gridBottomY = drawGridSection(headerBottomY);
-    const tableHeaderBottom = drawTableHeader(gridBottomY);
+  copiesToRender.forEach((copyTitle) => {
+    pages.forEach((pageItems, pageIdx) => {
+      const isLast = pageIdx === pages.length - 1;
+      page = doc.addPage([PAGE_W, PAGE_H]);
+
+      const headerBottomY = drawBrandHeader(copyTitle);
+      const gridBottomY = drawGridSection(headerBottomY);
+      const tableHeaderBottom = drawTableHeader(gridBottomY);
 
     let ty = tableHeaderBottom;
 
@@ -620,6 +648,19 @@ export async function generateMmA4InvoicePDF(bill: Bill, settings: Partial<Setti
       sy -= 16;
       hline(sy, left, right);
 
+      // Ledger Outstanding Balance (if any)
+      if (options.previousDueP && options.previousDueP > 0) {
+        const netPayable = bill.grandTotal + options.previousDueP;
+        text(
+          `Ledger Balance  ::  Previous Due: ${formatAmt2(options.previousDueP)}    |    Current Bill: ${formatAmt2(bill.grandTotal)}    |    Total Net Payable: ${formatAmt2(netPayable)}`,
+          left + 6,
+          sy - 9.5,
+          { size: 7, font: bold, color: rgb(0.1, 0.1, 0.1) }
+        );
+        sy -= 14;
+        hline(sy, left, right);
+      }
+
       // ── Bank Details, Declaration & Signatory ──
       const bankTopY = sy;
       vline(midX, bottomLimit, bankTopY);
@@ -674,30 +715,44 @@ export async function generateMmA4InvoicePDF(bill: Bill, settings: Partial<Setti
       });
     }
   });
+  });
 
   return doc.save();
 }
 
-export async function generateMmA4InvoicePDFBase64(bill: Bill, settings: Partial<Settings>): Promise<string> {
-  const bytes = await generateMmA4InvoicePDF(bill, settings);
+export async function generateMmA4InvoicePDFBase64(
+  bill: Bill,
+  settings: Partial<Settings>,
+  options: MmA4InvoiceOptions = {}
+): Promise<string> {
+  const bytes = await generateMmA4InvoicePDF(bill, settings, options);
   return bytesToBase64(bytes);
 }
 
-export async function downloadMmA4InvoicePDF(bill: Bill, settings: Partial<Settings>) {
-  const bytes = await generateMmA4InvoicePDF(bill, settings);
+export async function downloadMmA4InvoicePDF(
+  bill: Bill,
+  settings: Partial<Settings>,
+  options: MmA4InvoiceOptions = {}
+) {
+  const bytes = await generateMmA4InvoicePDF(bill, settings, options);
   const blob = new Blob([bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer], {
     type: 'application/pdf',
   });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `${bill.billNumber}-tax-invoice.pdf`;
+  const copySuffix = options.copyType ? `-${options.copyType.toLowerCase()}` : '';
+  a.download = `${bill.billNumber}-tax-invoice${copySuffix}.pdf`;
   a.click();
   URL.revokeObjectURL(url);
 }
 
-export async function printMmA4InvoicePDF(bill: Bill, settings: Partial<Settings>) {
-  const bytes = await generateMmA4InvoicePDF(bill, settings);
+export async function printMmA4InvoicePDF(
+  bill: Bill,
+  settings: Partial<Settings>,
+  options: MmA4InvoiceOptions = {}
+) {
+  const bytes = await generateMmA4InvoicePDF(bill, settings, options);
   const { printPdfBytes } = await import('@/lib/printPdf');
   printPdfBytes(bytes);
 }

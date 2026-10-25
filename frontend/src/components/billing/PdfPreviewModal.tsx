@@ -18,6 +18,8 @@ interface PdfPreviewModalProps {
    * the database yet — Preview is look-only until the bill is actually saved.
    */
   readOnly?: boolean;
+  copyType?: 'ORIGINAL' | 'DUPLICATE' | 'TRIPLICATE' | 'ALL';
+  previousDueP?: number;
 }
 
 /**
@@ -27,23 +29,23 @@ interface PdfPreviewModalProps {
  * functions as Print/Download, never the print/download helpers themselves,
  * which have their own side effects (an OS print dialog or a file save).
  */
-export function PdfPreviewModal({ bill, settings, layout, onClose, readOnly = false }: PdfPreviewModalProps) {
+export function PdfPreviewModal({
+  bill,
+  settings,
+  layout,
+  onClose,
+  readOnly = false,
+  copyType = 'ORIGINAL',
+  previousDueP,
+}: PdfPreviewModalProps) {
   const { closing, requestClose } = useClosingTransition(onClose);
   const { toast } = useToast();
   const [url, setUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // First page's width/height (PDF points) — used to size the preview box to
-  // match the actual page shape instead of a fixed 90vh for every layout,
-  // which left a lot of blank space below short pages (a few-item thermal
-  // receipt in particular).
+  const [selectedCopy, setSelectedCopy] = useState<'ORIGINAL' | 'DUPLICATE' | 'TRIPLICATE' | 'ALL'>(copyType);
   const [pageAspect, setPageAspect] = useState<number | null>(null);
-  // One generated PDF per layout, kept for as long as this modal instance is
-  // open — so comparing Thermal → A4 → MM-A4 back and forth via LayoutToggle
-  // reuses what's already been built instead of silently regenerating every
-  // click. Keyed only by layout because `bill` itself is stable for the
-  // modal's lifetime (a saved Bill never mutates; a pre-save draft is
-  // memoized by the caller) — a genuine `bill` change below still wipes it.
-  const cacheRef = useRef<Map<BillLayout, { url: string; aspect: number }>>(new Map());
+
+  const cacheRef = useRef<Map<string, { url: string; aspect: number }>>(new Map());
   const billRef = useRef(bill);
 
   useEffect(() => {
@@ -53,7 +55,8 @@ export function PdfPreviewModal({ bill, settings, layout, onClose, readOnly = fa
       billRef.current = bill;
     }
 
-    const cached = cacheRef.current.get(layout);
+    const cacheKey = `${layout}_${selectedCopy}_${previousDueP ?? 0}`;
+    const cached = cacheRef.current.get(cacheKey);
     if (cached) {
       setUrl(cached.url);
       setPageAspect(cached.aspect);
@@ -70,7 +73,10 @@ export function PdfPreviewModal({ bill, settings, layout, onClose, readOnly = fa
         let bytes: Uint8Array;
         if (layout === 'mm_a4') {
           const { generateMmA4InvoicePDF } = await import('@/lib/mmA4invoice');
-          bytes = await generateMmA4InvoicePDF(bill, settings);
+          bytes = await generateMmA4InvoicePDF(bill, settings, {
+            copyType: selectedCopy,
+            previousDueP,
+          });
         } else if (layout === 'a4') {
           const { generateA4InvoicePDF } = await import('@/lib/a4invoice');
           bytes = await generateA4InvoicePDF(bill, settings);
@@ -79,10 +85,6 @@ export function PdfPreviewModal({ bill, settings, layout, onClose, readOnly = fa
           bytes = await generateBillPDF(bill, settings);
         }
         if (cancelled) return;
-        // First page's own width/height decide the preview box's shape below
-        // (instead of a fixed 90vh for every layout) — pdf-lib is already
-        // loaded as part of generating bytes above, so this is just reading
-        // back what was just written, no extra network/bundle cost.
         const { PDFDocument } = await import('pdf-lib');
         const doc = await PDFDocument.load(bytes);
         const { width, height } = doc.getPage(0).getSize();
@@ -92,7 +94,7 @@ export function PdfPreviewModal({ bill, settings, layout, onClose, readOnly = fa
           type: 'application/pdf',
         });
         const objectUrl = URL.createObjectURL(blob);
-        cacheRef.current.set(layout, { url: objectUrl, aspect });
+        cacheRef.current.set(cacheKey, { url: objectUrl, aspect });
         setUrl(objectUrl);
         setPageAspect(aspect);
       } catch (err) {
@@ -102,7 +104,7 @@ export function PdfPreviewModal({ bill, settings, layout, onClose, readOnly = fa
     return () => {
       cancelled = true;
     };
-  }, [bill, layout, settings]);
+  }, [bill, layout, settings, selectedCopy, previousDueP]);
 
   // Revoke every cached object URL once the modal itself closes — not on
   // every layout switch, since the whole point of the cache is to survive those.
@@ -127,7 +129,10 @@ export function PdfPreviewModal({ bill, settings, layout, onClose, readOnly = fa
       await printA4InvoicePDF(bill, settings);
     } else if (layout === 'mm_a4') {
       const { printMmA4InvoicePDF } = await import('@/lib/mmA4invoice');
-      await printMmA4InvoicePDF(bill, settings);
+      await printMmA4InvoicePDF(bill, settings, {
+        copyType: selectedCopy,
+        previousDueP,
+      });
     } else {
       const { printThermalReceipt } = await import('@/lib/printThermal');
       const route = await printThermalReceipt(bill, settings);
@@ -144,7 +149,10 @@ export function PdfPreviewModal({ bill, settings, layout, onClose, readOnly = fa
       await downloadA4InvoicePDF(bill, settings);
     } else if (layout === 'mm_a4') {
       const { downloadMmA4InvoicePDF } = await import('@/lib/mmA4invoice');
-      await downloadMmA4InvoicePDF(bill, settings);
+      await downloadMmA4InvoicePDF(bill, settings, {
+        copyType: selectedCopy,
+        previousDueP,
+      });
     } else {
       const { downloadBillPDF } = await import('@/lib/pdf');
       await downloadBillPDF(bill, settings);
@@ -166,7 +174,7 @@ export function PdfPreviewModal({ bill, settings, layout, onClose, readOnly = fa
       }}
     >
       <div className={`bg-white rounded-xl shadow-soft-lg w-full ${widthClass} max-h-[90vh] flex flex-col duration-200 ${closing ? 'animate-out fade-out-0 zoom-out-95' : 'animate-in fade-in-0 zoom-in-95'}`}>
-        <div className="flex items-center justify-between px-5 py-3 border-b shrink-0">
+        <div className="flex items-center justify-between px-5 py-3 border-b shrink-0 gap-3">
           <div className="flex items-center gap-2">
             <h3 className="font-bold text-base">Preview — {bill.billNumber}</h3>
             {readOnly && (
@@ -175,6 +183,34 @@ export function PdfPreviewModal({ bill, settings, layout, onClose, readOnly = fa
               </span>
             )}
           </div>
+
+          {/* 3-Copy Selector for MM Wholesale Tax Invoices */}
+          {layout === 'mm_a4' && (
+            <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-lg border text-xs">
+              {(
+                [
+                  { id: 'ORIGINAL', label: 'Original' },
+                  { id: 'DUPLICATE', label: 'Duplicate' },
+                  { id: 'TRIPLICATE', label: 'Triplicate' },
+                  { id: 'ALL', label: 'All 3 Copies' },
+                ] as const
+              ).map((cp) => (
+                <button
+                  key={cp.id}
+                  type="button"
+                  onClick={() => setSelectedCopy(cp.id)}
+                  className={`px-2 py-1 rounded font-medium transition-all ${
+                    selectedCopy === cp.id
+                      ? 'bg-white text-emerald-800 shadow-2xs font-semibold'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  {cp.label}
+                </button>
+              ))}
+            </div>
+          )}
+
           <div className="flex items-center space-x-2">
             {!readOnly && (
               <>

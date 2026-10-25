@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Plus, Pencil, Trash2, PackagePlus, History, AlertTriangle, ArrowUpDown, ChevronUp, ChevronDown, Check } from 'lucide-react';
+import { Plus, Pencil, Trash2, PackagePlus, History, AlertTriangle, ArrowUpDown, ChevronUp, ChevronDown, Check, X, Zap } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -50,6 +50,12 @@ export default function MmProductsPage() {
   // notes), not just a number bump. Separate dialog from the full Edit form.
   const [restockProduct, setRestockProduct] = useState<MmProduct | null>(null);
   const [restockForm, setRestockForm] = useState({ qty: '', supplierName: '', purchaseCost: '', invoiceRef: '', notes: '' });
+
+  // Quick inline stock adding & batch sheet
+  const [quickStockId, setQuickStockId] = useState<number | null>(null);
+  const [quickStockQty, setQuickStockQty] = useState('');
+  const [showQuickSheet, setShowQuickSheet] = useState(false);
+  const [quickSheetEntries, setQuickSheetEntries] = useState<Record<number, string>>({});
 
   // Stock Ledger — full movement history for one product.
   const [ledgerProduct, setLedgerProduct] = useState<MmProduct | null>(null);
@@ -116,12 +122,49 @@ export default function MmProductsPage() {
     onSuccess: (updated) => {
       qc.invalidateQueries({ queryKey: ['mm-products'] });
       setRestockProduct(null);
-      toast({ title: 'Stock received', description: `${updated.name} is now ${updated.stockQty} ${updated.unit}.`, variant: 'success' });
+      setQuickStockId(null);
+      setQuickStockQty('');
+      toast({ title: 'Stock updated', description: `${updated.name} stock is now ${updated.stockQty} ${updated.unit}.`, variant: 'success' });
     },
     onError: (err: Error) => {
-      toast({ title: 'Could not record restock', description: err.message, variant: 'destructive' });
+      toast({ title: 'Could not update stock', description: err.message, variant: 'destructive' });
     },
   });
+
+  const bulkRestockMutation = useMutation({
+    mutationFn: (data: Parameters<typeof mmProductsApi.bulkRestock>[0]) => mmProductsApi.bulkRestock(data),
+    onSuccess: (updated) => {
+      qc.invalidateQueries({ queryKey: ['mm-products'] });
+      setShowQuickSheet(false);
+      setQuickSheetEntries({});
+      toast({ title: 'Stock updated!', description: `Successfully updated stock for ${updated.length} items.`, variant: 'success' });
+    },
+    onError: (err: Error) => {
+      toast({ title: 'Could not update stock', description: err.message, variant: 'destructive' });
+    },
+  });
+
+  const submitQuickStock = (productId: number) => {
+    const qty = parseFloat(quickStockQty);
+    if (!quickStockQty.trim() || isNaN(qty) || qty === 0) {
+      toast({ title: 'Enter a valid quantity', variant: 'destructive' });
+      return;
+    }
+    restockMutation.mutate({ id: productId, data: { qty } });
+  };
+
+  const handleQuickSheetSave = () => {
+    const items = Object.entries(quickSheetEntries)
+      .map(([id, q]) => ({ productId: Number(id), qty: parseFloat(q) }))
+      .filter((item) => !isNaN(item.qty) && item.qty !== 0);
+
+    if (items.length === 0) {
+      toast({ title: 'No stock entered', description: 'Enter quantity to add for at least one item.', variant: 'destructive' });
+      return;
+    }
+
+    bulkRestockMutation.mutate({ items });
+  };
 
   const openRestock = (p: MmProduct) => {
     setRestockProduct(p);
@@ -183,11 +226,20 @@ export default function MmProductsPage() {
         </div>
         <div className="flex items-center gap-2">
           <Button
+            onClick={() => {
+              setQuickSheetEntries({});
+              setShowQuickSheet(true);
+            }}
+            className="bg-emerald-600 hover:bg-emerald-700 text-white font-medium shadow-sm"
+          >
+            <Zap className="h-4 w-4 mr-1.5" /> Quick Stock Entry
+          </Button>
+          <Button
             variant="outline"
             onClick={() => setShowBulkRestock(true)}
-            className="border-brand-300 text-brand-700 hover:bg-brand-50"
+            className="border-slate-300 text-slate-700 hover:bg-slate-50 text-xs"
           >
-            <PackagePlus className="h-4 w-4 mr-1.5 text-brand-600" /> Bulk Inward Restock
+            <PackagePlus className="h-3.5 w-3.5 mr-1 text-slate-500" /> Supplier Inward
           </Button>
           <Button onClick={() => { setEditing({ ...EMPTY, gstRate: defaultGstRate, priceRupees: paisaToRupee(EMPTY.unitPrice ?? 0) }); setIsNew(true); }}>
             <Plus className="h-4 w-4 mr-1" /> Add MM Product
@@ -245,18 +297,85 @@ export default function MmProductsPage() {
                     <td className="py-3 px-4 text-sm">{p.gstRate}%</td>
                     <td className="py-3 px-4 text-sm text-muted-foreground font-mono">{p.hsnSac ?? '—'}</td>
                     <td className="py-3 px-4 text-sm">
-                      <div>
-                        <span className={`font-semibold tabular-nums ${p.stockQty <= 0 ? 'text-red-600' : 'text-slate-700'}`}>
-                          {p.stockQty} {p.unit}
-                        </span>
-                        {isLowStock(p) && (
-                          <div className="mt-0.5">
-                            <Badge variant="destructive" className="gap-1">
-                              <AlertTriangle className="h-3 w-3" /> Low Stock
-                            </Badge>
+                      {quickStockId === p.id ? (
+                        <div className="space-y-1.5 bg-emerald-50/90 p-2 rounded-lg border border-emerald-300 shadow-sm min-w-[210px]">
+                          <div className="text-[11px] font-semibold text-emerald-900 flex justify-between items-center">
+                            <span>Add Stock:</span>
+                            <span className="text-slate-500 font-normal">Now: {p.stockQty} {p.unit}</span>
                           </div>
-                        )}
-                      </div>
+                          <div className="flex items-center gap-1">
+                            <span className="text-sm font-bold text-emerald-800">+</span>
+                            <input
+                              type="number"
+                              autoFocus
+                              step="any"
+                              placeholder="Qty"
+                              value={quickStockQty}
+                              onChange={(e) => setQuickStockQty(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') submitQuickStock(p.id);
+                                if (e.key === 'Escape') setQuickStockId(null);
+                              }}
+                              className="w-16 h-7 text-xs px-2 rounded border border-emerald-300 bg-white font-semibold tabular-nums focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                            />
+                            <span className="text-xs font-medium text-slate-600">{p.unit}</span>
+                            <Button
+                              size="sm"
+                              className="h-7 px-2 bg-emerald-600 hover:bg-emerald-700 text-white ml-auto text-xs"
+                              onClick={() => submitQuickStock(p.id)}
+                              disabled={restockMutation.isPending}
+                            >
+                              <Check className="h-3.5 w-3.5 mr-0.5" /> Save
+                            </Button>
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="h-7 w-7 text-slate-400 hover:text-slate-600"
+                              onClick={() => setQuickStockId(null)}
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </Button>
+                          </div>
+                          <div className="flex gap-1 pt-0.5">
+                            {['5', '10', '25', '50'].map((preset) => (
+                              <button
+                                key={preset}
+                                type="button"
+                                onClick={() => setQuickStockQty(preset)}
+                                className="text-[10px] bg-white border border-emerald-200 hover:bg-emerald-100 text-emerald-800 font-semibold px-1.5 py-0.5 rounded transition-colors"
+                              >
+                                +{preset}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            <span className={`font-semibold tabular-nums ${p.stockQty <= 0 ? 'text-red-600' : 'text-slate-700'}`}>
+                              {p.stockQty} {p.unit}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setQuickStockId(p.id);
+                                setQuickStockQty('10');
+                              }}
+                              className="text-[11px] bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded font-medium flex items-center gap-1 transition-all"
+                              title="Quick add stock"
+                            >
+                              <Plus className="h-3 w-3" /> Add
+                            </button>
+                          </div>
+                          {isLowStock(p) && (
+                            <div>
+                              <Badge variant="destructive" className="gap-1 text-[10px] py-0 px-1.5">
+                                <AlertTriangle className="h-2.5 w-2.5" /> Low Stock
+                              </Badge>
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </td>
                     <td className="py-3 px-4">
                       <Badge variant={p.isActive ? 'success' : 'secondary'}>{p.isActive ? 'Active' : 'Inactive'}</Badge>
@@ -418,76 +537,206 @@ export default function MmProductsPage() {
       <Dialog open={!!restockProduct} onOpenChange={(o) => !o && setRestockProduct(null)}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Restock — {restockProduct?.name}</DialogTitle>
+            <DialogTitle>Add Stock — {restockProduct?.name}</DialogTitle>
           </DialogHeader>
           {restockProduct && (
-            <div className="space-y-3">
-              <p className="text-sm text-muted-foreground">
-                Current stock: <span className="font-semibold text-slate-700">{restockProduct.stockQty} {restockProduct.unit}</span>
-              </p>
-              <div className="space-y-1.5">
-                <Label>Quantity Received ({restockProduct.unit}) *</Label>
-                <Input
-                  type="number"
-                  autoFocus
-                  step={0.01}
-                  placeholder="e.g. 100"
-                  value={restockForm.qty}
-                  onChange={(e) => setRestockForm({ ...restockForm, qty: e.target.value })}
-                />
+            <div className="space-y-4">
+              <div className="bg-slate-50 p-3 rounded-lg border border-slate-200 flex justify-between items-center text-sm">
+                <span className="text-slate-600">Current Stock:</span>
+                <span className="font-bold text-slate-800 text-base">{restockProduct.stockQty} {restockProduct.unit}</span>
               </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1.5">
-                  <Label>Supplier</Label>
-                  <Input
-                    placeholder="Optional"
-                    value={restockForm.supplierName}
-                    onChange={(e) => setRestockForm({ ...restockForm, supplierName: e.target.value })}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label>Purchase Cost (₹)</Label>
+
+              <div className="space-y-2">
+                <Label className="text-sm font-semibold">Quantity to Add ({restockProduct.unit}) *</Label>
+                <div className="flex items-center gap-2">
                   <Input
                     type="number"
-                    min={0}
-                    step={0.01}
-                    placeholder="Optional"
-                    value={restockForm.purchaseCost}
-                    onChange={(e) => setRestockForm({ ...restockForm, purchaseCost: e.target.value })}
+                    autoFocus
+                    step="any"
+                    placeholder="e.g. 50"
+                    className="text-lg font-bold h-11"
+                    value={restockForm.qty}
+                    onChange={(e) => setRestockForm({ ...restockForm, qty: e.target.value })}
                   />
+                  <span className="text-sm font-semibold text-slate-500">{restockProduct.unit}</span>
+                </div>
+                <div className="flex items-center gap-1.5 pt-1">
+                  <span className="text-xs text-muted-foreground mr-1">Quick add:</span>
+                  {[5, 10, 25, 50, 100].map((num) => (
+                    <button
+                      key={num}
+                      type="button"
+                      onClick={() => {
+                        const current = parseFloat(restockForm.qty) || 0;
+                        setRestockForm({ ...restockForm, qty: String(current + num) });
+                      }}
+                      className="text-xs bg-slate-100 hover:bg-emerald-100 hover:text-emerald-800 text-slate-700 font-semibold px-2.5 py-1 rounded transition-colors"
+                    >
+                      +{num}
+                    </button>
+                  ))}
                 </div>
               </div>
-              <div className="space-y-1.5">
-                <Label>Invoice / Reference No.</Label>
-                <Input
-                  placeholder="Optional"
-                  value={restockForm.invoiceRef}
-                  onChange={(e) => setRestockForm({ ...restockForm, invoiceRef: e.target.value })}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label>Notes</Label>
-                <Input
-                  placeholder="Optional"
-                  value={restockForm.notes}
-                  onChange={(e) => setRestockForm({ ...restockForm, notes: e.target.value })}
-                />
-              </div>
+
               {restockForm.qty.trim() && !isNaN(parseFloat(restockForm.qty)) && (
-                <p className="text-sm">
-                  New stock will be{' '}
-                  <span className="font-semibold text-brand-700">
+                <div className="bg-emerald-50 border border-emerald-200 p-2.5 rounded-md flex justify-between items-center text-sm text-emerald-900 font-medium">
+                  <span>New Total Stock:</span>
+                  <span className="font-bold text-base text-emerald-700">
                     {restockProduct.stockQty + parseFloat(restockForm.qty)} {restockProduct.unit}
                   </span>
-                </p>
+                </div>
               )}
+
+              {/* Collapsible optional supplier & invoice fields */}
+              <details className="text-xs text-slate-500 group border-t border-slate-100 pt-2">
+                <summary className="cursor-pointer font-medium text-slate-600 hover:text-slate-900 py-1 flex items-center justify-between select-none">
+                  <span>+ Optional: Supplier / Invoice details</span>
+                  <span className="text-[10px] text-muted-foreground group-open:rotate-180 transition-transform">▼</span>
+                </summary>
+                <div className="pt-2 space-y-3">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <Label className="text-xs">Supplier</Label>
+                      <Input
+                        placeholder="Optional"
+                        value={restockForm.supplierName}
+                        onChange={(e) => setRestockForm({ ...restockForm, supplierName: e.target.value })}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs">Cost (₹)</Label>
+                      <Input
+                        type="number"
+                        min={0}
+                        step={0.01}
+                        placeholder="Optional"
+                        value={restockForm.purchaseCost}
+                        onChange={(e) => setRestockForm({ ...restockForm, purchaseCost: e.target.value })}
+                      />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <Label className="text-xs">Invoice Ref</Label>
+                      <Input
+                        placeholder="Optional"
+                        value={restockForm.invoiceRef}
+                        onChange={(e) => setRestockForm({ ...restockForm, invoiceRef: e.target.value })}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs">Notes</Label>
+                      <Input
+                        placeholder="Optional"
+                        value={restockForm.notes}
+                        onChange={(e) => setRestockForm({ ...restockForm, notes: e.target.value })}
+                      />
+                    </div>
+                  </div>
+                </div>
+              </details>
             </div>
           )}
-          <DialogFooter>
+          <DialogFooter className="gap-2">
             <Button variant="outline" onClick={() => setRestockProduct(null)}>Cancel</Button>
-            <Button onClick={handleRestock} disabled={restockMutation.isPending}>
-              <PackagePlus className="h-4 w-4 mr-1.5" />
-              {restockMutation.isPending ? 'Recording…' : 'Record Restock'}
+            <Button
+              className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold"
+              onClick={handleRestock}
+              disabled={restockMutation.isPending}
+            >
+              <Check className="h-4 w-4 mr-1.5" />
+              {restockMutation.isPending ? 'Saving…' : 'Add to Stock'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Quick Multi-Stock Sheet */}
+      <Dialog open={showQuickSheet} onOpenChange={setShowQuickSheet}>
+        <DialogContent className="max-w-2xl max-h-[85vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Zap className="h-5 w-5 text-amber-500" />
+              Quick Stock Update (Batch)
+            </DialogTitle>
+          </DialogHeader>
+          <p className="text-xs text-muted-foreground -mt-1">
+            Enter the quantity to add for each snack. Leave blank for items with no new stock.
+          </p>
+          <div className="overflow-y-auto flex-1 -mx-6 px-6 border-y border-slate-100 my-2">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b text-slate-500 text-xs">
+                  <th className="text-left py-2.5 font-semibold">Product</th>
+                  <th className="text-right py-2.5 font-semibold">Current Stock</th>
+                  <th className="text-center py-2.5 font-semibold w-52">Add Stock (+)</th>
+                  <th className="text-right py-2.5 font-semibold">New Stock</th>
+                </tr>
+              </thead>
+              <tbody>
+                {products?.filter(p => p.isActive).map((p) => {
+                  const addQty = parseFloat(quickSheetEntries[p.id] || '0') || 0;
+                  const newQty = p.stockQty + addQty;
+                  return (
+                    <tr key={p.id} className="border-b last:border-b-0 hover:bg-slate-50">
+                      <td className="py-2.5 font-medium">{p.name}</td>
+                      <td className="py-2.5 text-right tabular-nums text-slate-600">
+                        {p.stockQty} {p.unit}
+                      </td>
+                      <td className="py-2.5 text-center">
+                        <div className="flex items-center justify-center gap-1.5">
+                          <span className="font-bold text-emerald-700">+</span>
+                          <Input
+                            type="number"
+                            step="any"
+                            placeholder="0"
+                            className="w-20 h-8 text-center text-xs font-semibold tabular-nums"
+                            value={quickSheetEntries[p.id] || ''}
+                            onChange={(e) =>
+                              setQuickSheetEntries({ ...quickSheetEntries, [p.id]: e.target.value })
+                            }
+                          />
+                          <span className="text-xs text-muted-foreground mr-1">{p.unit}</span>
+                          <div className="flex gap-1">
+                            {[10, 25, 50].map((chip) => (
+                              <button
+                                key={chip}
+                                type="button"
+                                onClick={() => {
+                                  const cur = parseFloat(quickSheetEntries[p.id] || '0') || 0;
+                                  setQuickSheetEntries({
+                                    ...quickSheetEntries,
+                                    [p.id]: String(cur + chip),
+                                  });
+                                }}
+                                className="text-[10px] bg-slate-100 hover:bg-emerald-100 hover:text-emerald-800 text-slate-700 px-1.5 py-0.5 rounded font-semibold transition-colors"
+                              >
+                                +{chip}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </td>
+                      <td className="py-2.5 text-right tabular-nums font-bold text-slate-800">
+                        <span className={addQty > 0 ? 'text-emerald-700' : ''}>
+                          {newQty} {p.unit}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setShowQuickSheet(false)}>Cancel</Button>
+            <Button
+              className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold"
+              onClick={handleQuickSheetSave}
+              disabled={bulkRestockMutation.isPending}
+            >
+              <Check className="h-4 w-4 mr-1.5" />
+              {bulkRestockMutation.isPending ? 'Saving...' : 'Save All Stock'}
             </Button>
           </DialogFooter>
         </DialogContent>
