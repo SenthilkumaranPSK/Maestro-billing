@@ -250,7 +250,9 @@ const DEFAULT_DB_DIR = path.join(app.getPath('userData'), 'data', 'database');
 
 function readDbLocationPointer() {
   try {
-    const { dbDir } = JSON.parse(fs.readFileSync(DB_LOCATION_POINTER, 'utf8'));
+    let raw = fs.readFileSync(DB_LOCATION_POINTER, 'utf8');
+    if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
+    const { dbDir } = JSON.parse(raw);
     return typeof dbDir === 'string' && dbDir ? dbDir : null;
   } catch {
     return null; // no pointer yet — this is the first run
@@ -453,10 +455,12 @@ function ensureDbDirAccessible(dbDir) {
 }
 
 function prepareDataDir() {
+
   const dataRoot = path.join(app.getPath('userData'), 'data');
   fs.mkdirSync(dataRoot, { recursive: true });
 
   let dbDir = readDbLocationPointer();
+
   if (!dbDir) {
     dbDir = chooseDbDirOnFirstRun();
     writeDbLocationPointer(dbDir);
@@ -490,6 +494,7 @@ function prepareDataDir() {
 }
 
 function startBackend(share) {
+
   const { dataRoot, dbFile } = prepareDataDir();
 
   process.env.NODE_ENV = 'production';
@@ -510,6 +515,7 @@ function startBackend(share) {
   process.env.APP_VERSION = app.getVersion();
 
   // Runs Fastify inside this (Node-capable) Electron main process.
+
   require(path.join(APP_ROOT, 'backend', 'dist', 'server.js'));
 }
 
@@ -1650,6 +1656,7 @@ function buildMenu() {
 }
 
 app.whenReady().then(() => {
+
   buildMenu();
   // Registered once, here — not per boot. startWithConfig can be re-entered
   // (Retry from the unreachable dialog, cancelling out of setup, switching
