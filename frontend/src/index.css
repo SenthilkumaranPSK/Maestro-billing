@@ -1,0 +1,284 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Studio brand font — AvantGarde Bk BT ("Book" for body text, "Demi" for
+   headings/emphasis). Matches the weight used in the thermal/A4 PDFs
+   (lib/pdf.ts, lib/a4invoice.ts) so the on-screen UI and printed bills look
+   like the same typeface. */
+@font-face {
+  font-family: 'AvantGarde';
+  src: url('/fonts/AvantGarde-Book.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'AvantGarde';
+  src: url('/fonts/AvantGarde-Demi.ttf') format('truetype');
+  font-weight: 600 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 222.2 84% 4.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 84% 4.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 84% 4.9%;
+    --primary: 72 100% 44%;
+    --primary-foreground: 0 0% 8%;
+    --secondary: 72 30% 94%;
+    --secondary-foreground: 0 0% 10%;
+    --muted: 0 0% 96%;
+    --muted-foreground: 0 0% 45%;
+    --accent: 72 60% 90%;
+    --accent-foreground: 0 0% 10%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 0 0% 89%;
+    --input: 0 0% 89%;
+    --ring: 72 100% 44%;
+    --radius: 0.75rem;
+
+    --brand-50: 72 100% 96%;
+    --brand-100: 72 90% 91%;
+    --brand-200: 73 88% 83%;
+    --brand-300: 74 92% 70%;
+    --brand-400: 74 96% 56%;
+    --brand-500: 72 100% 44%;
+    --brand-600: 76 100% 34%;
+    --brand-700: 77 100% 27%;
+    --brand-800: 78 90% 22%;
+    --brand-900: 80 85% 17%;
+  }
+
+  /* Whole-app dark theme — toggled via the `dark` class on <html> (see
+     hooks/use-theme.ts and Settings' Appearance card). Card sits lighter
+     than the page background, muted/secondary/accent sit lighter still — a
+     gentle elevation ramp, same relationship light mode has (card lighter
+     than page) just inverted in absolute lightness. The brand ramp is
+     inverted too: brand-50 (a near-white fill in light mode, e.g. the
+     "bg-brand-50 text-brand-700" badge pattern used all over the app) needs
+     to become a dark, muted fill with brand-700 becoming light enough to
+     read on it — a straight swap of the light-mode roles of 50↔900. */
+  .dark {
+    --background: 222 45% 7%;
+    --foreground: 210 30% 95%;
+    --card: 222 35% 11%;
+    --card-foreground: 210 30% 95%;
+    --popover: 222 35% 11%;
+    --popover-foreground: 210 30% 95%;
+    --primary: 72 100% 50%;
+    --primary-foreground: 0 0% 8%;
+    --secondary: 222 25% 16%;
+    --secondary-foreground: 210 30% 95%;
+    --muted: 222 25% 17%;
+    --muted-foreground: 215 15% 65%;
+    --accent: 222 25% 18%;
+    --accent-foreground: 210 30% 95%;
+    --destructive: 0 62% 42%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 222 20% 20%;
+    --input: 222 20% 20%;
+    --ring: 72 100% 50%;
+
+    --brand-50: 78 35% 14%;
+    --brand-100: 77 40% 18%;
+    --brand-200: 76 45% 24%;
+    --brand-300: 75 55% 34%;
+    --brand-400: 74 85% 48%;
+    --brand-500: 72 100% 50%;
+    --brand-600: 74 100% 58%;
+    --brand-700: 76 90% 74%;
+    --brand-800: 78 85% 84%;
+    --brand-900: 80 80% 92%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: 'AvantGarde', ui-sans-serif, system-ui, sans-serif;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+  ::selection {
+    background-color: hsl(var(--brand-300) / 0.5);
+  }
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@layer utilities {
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Entrance animation for page/card content. */
+  .animate-fade-up {
+    animation: fade-up 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  /* Children fade-up one after another (cards in a grid, list rows).
+     Delays are capped: children beyond the 8th share the last slot so a
+     long list never keeps the user waiting. */
+  .stagger-children > * {
+    animation: fade-up 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+  .stagger-children > *:nth-child(1) { animation-delay: 0ms; }
+  .stagger-children > *:nth-child(2) { animation-delay: 45ms; }
+  .stagger-children > *:nth-child(3) { animation-delay: 90ms; }
+  .stagger-children > *:nth-child(4) { animation-delay: 135ms; }
+  .stagger-children > *:nth-child(5) { animation-delay: 180ms; }
+  .stagger-children > *:nth-child(6) { animation-delay: 225ms; }
+  .stagger-children > *:nth-child(7) { animation-delay: 270ms; }
+  .stagger-children > *:nth-child(n + 8) { animation-delay: 315ms; }
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background-color: hsl(var(--muted-foreground) / 0.3);
+    border-radius: 9999px;
+  }
+}
+
+/* Accessibility: users who ask the OS for less motion get (near-)instant
+   transitions everywhere instead of our entrance/hover animations. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@media print {
+  .no-print,
+  aside,
+  header {
+    display: none !important;
+  }
+  main {
+    padding: 0 !important;
+    margin: 0 !important;
+    overflow: visible !important;
+  }
+  body {
+    background: white;
+  }
+}
+
+/* ── Dark-mode compatibility shim ──────────────────────────────────────────
+   This app predates the dark-mode token system above: most pages/components
+   were authored with raw Tailwind slate/white utility classes (bg-white,
+   bg-slate-50, border-slate-200, text-slate-500, …) instead of the semantic
+   bg-card/bg-muted/text-foreground tokens. Retrofitting every one of those
+   call sites (~180 occurrences across ~37 files) file-by-file would be a
+   huge, risky diff for what's fundamentally a styling detail — so instead
+   these rules retarget the known raw classes to the token system whenever
+   `.dark` is active, and any component using them "just works" without
+   being touched. Deliberately left alone: colorful status pills (badges,
+   toasts — bg-emerald-100/bg-amber-100/etc.) stay as light pastel chips in
+   both themes, which reads fine on a dark page and is a common dark-mode
+   pattern; and the ErrorBoundary's bg-slate-900 button, which is meant to
+   look like a dark button regardless of theme.
+   Deliberately UNLAYERED (not inside @layer base/utilities) — Tailwind's
+   own utilities layer would otherwise always win over an equally- or even
+   more-specific rule declared inside @layer base, since layer order beats
+   specificity. Unlayered rules outrank every layered rule, so these are
+   guaranteed to apply regardless of where Tailwind's own utilities land. */
+.dark .bg-white,
+.dark .bg-white\/80 {
+  background-color: hsl(var(--card));
+}
+.dark .bg-slate-50,
+.dark .bg-slate-50\/80 {
+  background-color: hsl(var(--background));
+}
+.dark .bg-slate-100 {
+  background-color: hsl(var(--muted));
+}
+.dark .bg-slate-200 {
+  background-color: hsl(var(--border));
+}
+.dark .bg-slate-300 {
+  background-color: hsl(var(--muted-foreground) / 0.5);
+}
+.dark .hover\:bg-slate-50:hover {
+  background-color: hsl(var(--muted));
+}
+.dark .border-slate-100,
+.dark .border-slate-200,
+.dark .border-slate-300 {
+  border-color: hsl(var(--border));
+}
+.dark .hover\:border-slate-300:hover {
+  border-color: hsl(var(--ring));
+}
+.dark .text-slate-400 {
+  color: hsl(var(--muted-foreground));
+}
+.dark .text-slate-500,
+.dark .text-slate-600 {
+  color: hsl(var(--muted-foreground));
+}
+.dark .text-slate-700,
+.dark .text-slate-800 {
+  color: hsl(var(--foreground));
+}
+.dark .hover\:text-slate-700:hover,
+.dark .hover\:text-slate-900:hover {
+  color: hsl(var(--foreground));
+}
+/* Gradient stop utilities (Sidebar's logo header) set --tw-gradient-from/to
+   custom properties, not background-color, so the rules above don't touch
+   them — from-brand-50 already resolves through the token system on its
+   own, but to-white/from-slate-100 are hardcoded and need their own
+   override or the gradient fades into a bright white patch in dark mode. */
+.dark .to-white {
+  --tw-gradient-to: hsl(var(--background)) var(--tw-gradient-to-position);
+}
+.dark .from-slate-100 {
+  --tw-gradient-from: hsl(var(--muted)) var(--tw-gradient-from-position);
+  --tw-gradient-to: hsl(var(--muted) / 0) var(--tw-gradient-to-position);
+  --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to);
+}
+
+/* Scrollbars default to the browser's own light theme regardless of page
+   theme — Chromium doesn't reskin them automatically just because the page
+   went dark. That left a stark light-gray scrollbar track/thumb on every
+   scrollable area (the page itself, any horizontally-scrolling table inside
+   a modal, etc.) — reported as light/white bars surrounding popups and
+   running along the page edges. Colors only (no width/height) so this
+   doesn't fight the existing .scrollbar-thin::-webkit-scrollbar sizing. */
+.dark ::-webkit-scrollbar-track {
+  background: hsl(var(--muted));
+}
+.dark ::-webkit-scrollbar-thumb {
+  background-color: hsl(var(--muted-foreground) / 0.5);
+  border-radius: 9999px;
+}
+.dark ::-webkit-scrollbar-thumb:hover {
+  background-color: hsl(var(--muted-foreground) / 0.7);
+}
+.dark ::-webkit-scrollbar-corner {
+  background: hsl(var(--muted));
+}

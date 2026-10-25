@@ -1,0 +1,372 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Users ────────────────────────────────────────────────────────────────────
+model User {
+  id           Int       @id @default(autoincrement())
+  username     String    @unique
+  passwordHash String    @map("password_hash")
+  role         String    @default("staff") // admin | staff
+  isActive     Boolean   @default(true) @map("is_active")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  bills        Bill[]
+  logs         Log[]
+
+  @@map("users")
+}
+
+// ─── Customers ────────────────────────────────────────────────────────────────
+model Customer {
+  id        Int       @id @default(autoincrement())
+  name      String
+  phone     String
+  email     String?
+  address   String?
+  gstin     String?
+  notes     String?
+  isActive  Boolean   @default(true) @map("is_active")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  bills     Bill[]
+
+  @@map("customers")
+}
+
+// ─── MM Customers (separate customer database for the MM billing module) ────
+// MM is a wholly separate billing area — its own customers, never mixed with
+// the studio's normal Customer list above.
+model MmCustomer {
+  id        Int       @id @default(autoincrement())
+  name      String
+  phone     String
+  email     String?
+  address   String?
+  gstin     String?
+  notes     String?
+  isActive  Boolean   @default(true) @map("is_active")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  bills     Bill[]
+
+  @@map("mm_customers")
+}
+
+// ─── Products ─────────────────────────────────────────────────────────────────
+model Product {
+  id          Int       @id @default(autoincrement())
+  name        String
+  description String?
+  unit        String    @default("piece") // photo, album, set, piece, frame
+  unitPrice   Int       @map("unit_price")  // in paise (integer cents)
+  gstRate     Float     @default(0) @map("gst_rate") // e.g. 18.00 for 18%
+  hsnSac      String?   @map("hsn_sac") // HSN (goods) / SAC (services) code — printed on the A4 invoice layout
+  // Manual display order (Products page → Rearrange), same convention as
+  // Staff.sortOrder — the whole active list is reassigned 0..n-1 on every
+  // reorder, never per-row deltas. Existing rows were backfilled to their
+  // prior alphabetical order when this column was introduced, so upgrading
+  // doesn't visibly reshuffle anyone's catalog until they actually reorder.
+  sortOrder   Int       @default(0) @map("sort_order")
+  isActive    Boolean   @default(true) @map("is_active")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  billItems   BillItem[]
+
+  @@map("products")
+}
+
+// ─── MM Products (separate catalog for the MM billing module) ────────────────
+// MM is a wholly separate billing area from the studio's normal Thermal/A4
+// products — its own catalog, its own bill numbering series (see Bill.series
+// below), never mixed with the main Products list.
+model MmProduct {
+  id          Int       @id @default(autoincrement())
+  name        String
+  unit        String    @default("Kgs")
+  unitPrice   Int       @map("unit_price")  // in paise
+  gstRate     Float     @default(5) @map("gst_rate")
+  hsnSac      String?   @default("210690") @map("hsn_sac")
+  // Current quantity on hand, in `unit` above (e.g. Kgs). Auto-decremented
+  // when an MM bill sells this product, auto-restored if that bill is later
+  // edited or cancelled (see BillService) — otherwise a plain manual number
+  // editable on the MM/Products page (e.g. when new stock arrives). Allowed
+  // to go negative: an oversell is a signal to restock, not a blocked action.
+  stockQty    Float     @default(0) @map("stock_qty")
+  // Minimum stock level before this product should be reordered. 0 (the
+  // default) means "no alert configured" — the low-stock badge only shows
+  // once a studio actually sets a real threshold for a product.
+  reorderLevel Float    @default(0) @map("reorder_level")
+  // Manual display/catalog order (MM Products page → Rearrange) — unrelated
+  // to reorderLevel above (that's a stock-restock threshold). Same
+  // convention as Staff.sortOrder/Product.sortOrder.
+  sortOrder   Int       @default(0) @map("sort_order")
+  isActive    Boolean   @default(true) @map("is_active")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  billItems   BillItem[]
+  stockMovements MmStockMovement[]
+
+  @@map("mm_products")
+}
+
+// ─── MM Stock Movements (inventory ledger for MmProduct) ─────────────────────
+// Every stock change — a sale, a bill edit/cancel reversing one, a restock, or
+// a manual correction — gets its own row here, so stockQty is never just a
+// silent number: there's always a dated, reasoned trail behind it.
+model MmStockMovement {
+  id            Int       @id @default(autoincrement())
+  mmProductId   Int       @map("mm_product_id")
+  // 'SALE' (bill sold this, qtyChange negative), 'RESTORE' (an edited/
+  // cancelled bill reversing a prior SALE, qtyChange positive), 'PURCHASE'
+  // (manual restock via the Restock dialog, qtyChange positive), or
+  // 'CORRECTION' (manual stockQty edit not tied to a purchase, either sign).
+  type          String
+  qtyChange     Float     @map("qty_change")
+  // Snapshot of stockQty right after this movement applied — lets the ledger
+  // render a running balance without recomputing from the full history.
+  balanceAfter  Float     @map("balance_after")
+  // Set for SALE/RESTORE — which bill caused this movement.
+  billId        Int?      @map("bill_id")
+  // Set for PURCHASE — who it was bought from, what it cost, and any
+  // supplier invoice/reference number, entered on the Restock dialog.
+  supplierName  String?   @map("supplier_name")
+  purchaseCost  Int?      @map("purchase_cost") // in paise, total for this restock
+  invoiceRef    String?   @map("invoice_ref")
+  notes         String?
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  mmProduct     MmProduct @relation(fields: [mmProductId], references: [id])
+  bill          Bill?     @relation(fields: [billId], references: [id])
+
+  @@index([mmProductId])
+  @@map("mm_stock_movements")
+}
+
+// ─── Services (reusable catalog for the A4 invoice's Service Description) ─────
+model Service {
+  id        Int      @id @default(autoincrement())
+  name      String
+  // Manual display order (Services page → Rearrange) — same convention as
+  // Staff.sortOrder/Product.sortOrder.
+  sortOrder Int      @default(0) @map("sort_order")
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("services")
+}
+
+// ─── Staff (the "Billed By" list, managed in Settings) ────────────────────────
+// Replaces the earlier hardcoded frontend/src/lib/staff.ts constant. Real
+// table now, same soft-delete convention as Product/Service (isActive, never
+// hard-deleted) — a bill's Bill.billedById/billedByName is denormalized
+// (schema comment on Bill), so deactivating or renaming a staff member here
+// never changes what an already-saved bill shows or prints. sortOrder drives
+// both the Settings management list and the BilledBySelect dropdown order —
+// Settings → Staff reassigns it for the full active list on every reorder,
+// not per-row deltas, so it can never drift out of a clean 0..n-1 sequence.
+model Staff {
+  id        Int      @id @default(autoincrement())
+  name      String
+  sortOrder Int      @default(0) @map("sort_order")
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("staff")
+}
+
+// ─── Bills ────────────────────────────────────────────────────────────────────
+model Bill {
+  id             Int       @id @default(autoincrement())
+  billNumber     String    @unique @map("bill_number")  // e.g. PS-2024-0001
+  customerId     Int?      @map("customer_id")
+  // MM bills link here instead of customerId above — separate customer
+  // database, separate FK. A bill only ever populates one of the two,
+  // matching its series.
+  mmCustomerId   Int?      @map("mm_customer_id")
+  billDate       DateTime  @map("bill_date")
+  dueDate        DateTime? @map("due_date")
+  subTotal       Int       @map("sub_total")     // in paise
+  gstAmount      Int       @default(0) @map("gst_amount")  // in paise
+  discountAmount Int       @default(0) @map("discount_amount") // in paise
+  grandTotal     Int       @map("grand_total")   // in paise
+  status         String    @default("PAID")      // DRAFT | PAID | PARTIAL | CANCELLED
+  paymentMode    String?   @map("payment_mode")  // CASH | UPI | CARD | CHEQUE
+  notes          String?
+  // A4 "Service Bill" layout only — a one-line summary of the engagement (e.g.
+  // "Product Video Shoot Services") shown above the item table instead of the
+  // single bill date. Optional; the thermal receipt layout never shows these.
+  serviceDescription String? @map("service_description")
+  // Deprecated in favour of serviceDates below (superseded — the UI used to
+  // offer only a single from/to date range, now an arbitrary list of dates).
+  // Left in place, unwritten by new bills, purely so older bills already
+  // storing a range keep rendering correctly.
+  serviceFrom        DateTime? @map("service_from")
+  serviceTo          DateTime? @map("service_to")
+  // JSON-encoded array of "YYYY-MM-DD" strings — an arbitrary list of service
+  // dates (not necessarily contiguous), replacing the old from/to range so a
+  // multi-day shoot with gaps can list each actual date worked.
+  serviceDates       String?   @map("service_dates")
+  // Whether item prices were entered GST-inclusive (tax extracted from the
+  // entered price) or GST-exclusive (tax added on top, the pre-existing
+  // default). subTotal/gstAmount/grandTotal always end up populated the same
+  // way regardless — this only changes how they were derived and whether the
+  // printed receipt/invoice shows a CGST/SGST breakdown.
+  gstInclusive   Boolean   @default(false) @map("gst_inclusive")
+  // Whether this bill is an inter-state supply (IGST) instead of intra-state
+  // (CGST+SGST). Mutually exclusive with the CGST/SGST split — never both.
+  // gstAmount itself is unaffected; this only changes how it's split/labeled
+  // at render/report time (thermalLayout.ts, a4invoice.ts, mmA4invoice.ts,
+  // ReportService.ts/GstReport.tsx all branch on this flag).
+  isInterState   Boolean   @default(false) @map("is_inter_state")
+  // MM/A4 "Tax Invoice" layout only — transport/e-way details for a formal
+  // GST tax invoice (goods dispatch), never shown on thermal or the plain A4
+  // layout. All optional: a studio issuing an occasional wholesale-style bill
+  // fills in only what applies.
+  vehicleNo          String?   @map("vehicle_no")
+  despatchedThrough  String?   @map("despatched_through")
+  destination        String?
+  otherReference     String?   @map("other_reference")
+  ewayBillNo         String?   @map("eway_bill_no")
+  // Invoice Reference Number from the government e-invoice portal — entered
+  // manually if the studio generates one there; this app never calls that
+  // API itself, so there is no QR code to go with it (a fake one would be
+  // meaningless/misleading on a real tax document).
+  irnNo              String?   @map("irn_no")
+  // Consignee defaults to the Buyer (the bill's customer) when blank — only
+  // set these when goods ship to someone other than the billed customer.
+  consigneeName      String?   @map("consignee_name")
+  consigneeAddress   String?   @map("consignee_address")
+  consigneeGstin     String?   @map("consignee_gstin")
+  // MM/A4 "Tax Invoice" layout only — manual Buyer override, for a one-off
+  // wholesale buyer the operator doesn't want to save as an MmCustomer (which
+  // mandates a phone number). Falls back to mmCustomer's fields when blank —
+  // same fallback shape as consignee falling back to the buyer above, just
+  // one level higher up the chain.
+  buyerName          String?   @map("buyer_name")
+  buyerAddress       String?   @map("buyer_address")
+  buyerGstin         String?   @map("buyer_gstin")
+  // Which billing area created this bill: "MAIN" (Thermal/A4, the studio's
+  // normal billing — the default) or "MM" (the separate MM billing module —
+  // its own product catalog, its own MM/YY-YY/NNN numbering series, filtered
+  // into its own MM History list). Bill numbers are NOT unique across series
+  // by format alone (a MAIN "047/2026" and an MM "MM/26-27/047" can coexist),
+  // so series is what actually keeps the two apart everywhere they're
+  // queried, not just how they're numbered.
+  series         String    @default("MAIN")
+  // "Billed By" — which staff member rang up this bill. Denormalized (both
+  // the id AND the name are stored, not just a foreign key) on purpose: the
+  // staff list is a small hardcoded constant (frontend/src/lib/staff.ts),
+  // not a real Staff table, and it deliberately isn't versioned — if a name
+  // is edited or removed from that list later, every already-saved bill
+  // must keep printing/showing exactly who billed it at the time, not
+  // whatever the list says now. Optional: bills saved before this feature
+  // existed have neither, and must still load/print (shown as "—").
+  billedById     Int?      @map("billed_by_id")
+  billedByName   String?   @map("billed_by_name")
+  createdBy      Int?      @map("created_by")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+  deletedAt      DateTime? @map("deleted_at")
+
+  customer       Customer? @relation(fields: [customerId], references: [id])
+  mmCustomer     MmCustomer? @relation(fields: [mmCustomerId], references: [id])
+  createdByUser  User?     @relation(fields: [createdBy], references: [id])
+  items          BillItem[]
+  payments       Payment[]
+  mmStockMovements MmStockMovement[]
+
+  // Day/Month/GST reports and history filtering all query by billDate range;
+  // the customer ledger queries by customerId — neither had an index.
+  @@index([billDate])
+  @@index([customerId])
+  @@index([mmCustomerId])
+  @@index([series])
+  @@map("bills")
+}
+
+// ─── Bill Items ───────────────────────────────────────────────────────────────
+model BillItem {
+  id          Int      @id @default(autoincrement())
+  billId      Int      @map("bill_id")
+  productId   Int?     @map("product_id")
+  // Separate FK for MM items — an MmProduct's id is a different row entirely
+  // from Product's, so MM line items link here instead (see LineItemRow's
+  // catalog='mm' handling). Set only when picked from the MM/Products
+  // catalog; a manually-typed item leaves both FKs null. Lets stock
+  // deduction (BillService) trace a sold item back to its MmProduct.
+  mmProductId Int?     @map("mm_product_id")
+  productName String   @map("product_name") // denormalized
+  hsnSac      String?  @map("hsn_sac")      // denormalized from Product at time of billing
+  unit        String   @default("piece")
+  qty         Float
+  unitPrice   Int      @map("unit_price")   // in paise at time of billing
+  gstRate     Float    @default(0) @map("gst_rate")
+  gstAmount   Int      @default(0) @map("gst_amount")  // in paise
+  totalAmount Int      @map("total_amount") // in paise (qty * unitPrice + gstAmount)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  bill        Bill     @relation(fields: [billId], references: [id], onDelete: Cascade)
+  product     Product? @relation(fields: [productId], references: [id])
+  mmProduct   MmProduct? @relation(fields: [mmProductId], references: [id])
+
+  @@map("bill_items")
+}
+
+// ─── Payments ─────────────────────────────────────────────────────────────────
+model Payment {
+  id             Int      @id @default(autoincrement())
+  billId         Int      @map("bill_id")
+  amount         Int                       // in paise
+  paymentMode    String   @map("payment_mode") // CASH | UPI | CARD | CHEQUE
+  transactionRef String?  @map("transaction_ref")
+  paidAt         DateTime @default(now()) @map("paid_at")
+  notes          String?
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  bill           Bill     @relation(fields: [billId], references: [id], onDelete: Cascade)
+
+  @@map("payments")
+}
+
+// ─── Settings ─────────────────────────────────────────────────────────────────
+model Setting {
+  id        Int      @id @default(autoincrement())
+  key       String   @unique
+  value     String
+  group     String   @default("general") // studio | invoice | printer | tax
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("settings")
+}
+
+// ─── Logs ─────────────────────────────────────────────────────────────────────
+model Log {
+  id         Int      @id @default(autoincrement())
+  userId     Int?     @map("user_id")
+  action     String                        // CREATE | UPDATE | DELETE | LOGIN
+  entityType String   @map("entity_type") // bill | customer | product
+  entityId   Int?     @map("entity_id")
+  oldValue   String?  @map("old_value")   // JSON string
+  newValue   String?  @map("new_value")   // JSON string
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  user       User?    @relation(fields: [userId], references: [id])
+
+  @@map("logs")
+}

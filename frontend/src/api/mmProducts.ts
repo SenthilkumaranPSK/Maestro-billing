@@ -1,0 +1,41 @@
+import { api } from './client';
+import type { MmProduct, MmStockMovement, ApiResponse } from '@/types';
+
+/** MM billing module's own product catalog — mirrors productsApi exactly,
+ * against the separate /mm-products endpoint. */
+export const mmProductsApi = {
+  list: (params?: { search?: string; active?: boolean }) =>
+    api.get<ApiResponse<MmProduct[]>>('/mm-products', { params }).then((r) => r.data.data),
+
+  get: (id: number) =>
+    api.get<ApiResponse<MmProduct>>(`/mm-products/${id}`).then((r) => r.data.data),
+
+  create: (data: Partial<MmProduct>) =>
+    api.post<ApiResponse<MmProduct>>('/mm-products', data).then((r) => r.data.data),
+
+  update: (id: number, data: Partial<MmProduct>) =>
+    api.put<ApiResponse<MmProduct>>(`/mm-products/${id}`, data).then((r) => r.data.data),
+
+  // Reorders the FULL active-product id list at once — the route reassigns
+  // sortOrder = array index for each, so a caller always sends the whole
+  // desired order, not a per-row move.
+  reorder: (ids: number[]) =>
+    api.put<ApiResponse<MmProduct[]>>('/mm-products/reorder', { ids }).then((r) => r.data.data),
+
+  delete: (id: number) => api.delete(`/mm-products/${id}`),
+
+  // Manual restock — records a PURCHASE ledger entry with supplier/cost/
+  // invoice details, not just a stockQty bump. See the backend route comment.
+  restock: (id: number, data: { qty: number; supplierName?: string; purchaseCost?: number; invoiceRef?: string; notes?: string }) =>
+    api.post<ApiResponse<MmProduct>>(`/mm-products/${id}/restock`, data).then((r) => r.data.data),
+
+  bulkRestock: (data: {
+    items: Array<{ productId: number; qty: number; purchaseCost?: number }>;
+    supplierName?: string;
+    invoiceRef?: string;
+    notes?: string;
+  }) => api.post<ApiResponse<MmProduct[]>>('/mm-products/bulk-restock', data).then((r) => r.data.data),
+
+  getStockMovements: (id: number) =>
+    api.get<ApiResponse<MmStockMovement[]>>(`/mm-products/${id}/stock-movements`).then((r) => r.data.data),
+};

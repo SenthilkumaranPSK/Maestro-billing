@@ -1,0 +1,1716 @@
+// MM Billing — Electron shell.
+// Boots the Fastify backend (which also serves the built frontend) inside
+// this process, then opens the app window pointed at it. All mutable data
+// (database, backups, WhatsApp session) lives in the per-user app-data
+// folder, because the install directory is not writable.
+
+const { app, BrowserWindow, Menu, dialog, shell, session, ipcMain } = require('electron');
+const path = require('path');
+const fs = require('fs');
+const http = require('http');
+const os = require('os');
+
+const PORT = 3180;
+const LOCAL_URL = `http://127.0.0.1:${PORT}`;
+
+// Where the UI actually lives. In the normal ("server") mode that's this PC's
+// own in-process backend; on a second PC running in "client" mode it's the
+// main PC's address across the studio LAN. Assigned during startup, before
+// any window exists, so every isAppUrl() check below compares against the
+// origin this install genuinely talks to.
+let APP_URL = LOCAL_URL;
+
+// url.startsWith(APP_URL) is not a safe origin check: a URL like
+// "http://127.0.0.1:3179@evil.example" passes that prefix test (the string
+// literally starts with APP_URL) but the "@" makes "127.0.0.1:3179" parsed
+// userinfo, not the host — it actually navigates to evil.example. Parse the
+// URL and compare the real origin instead. pathPrefix additionally restricts
+// to a specific route (e.g. the backup/report download endpoints).
+function isAppUrl(url, pathPrefix) {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  if (parsed.origin !== APP_URL) return false;
+  return pathPrefix ? parsed.pathname.startsWith(pathPrefix) : true;
+}
+
+// Data lives under %APPDATA%/MM Billing — set before any getPath call,
+// otherwise Electron derives the folder from the package name.
+app.setName('MM Billing');
+
+// Packaged: resources/app.asar/{backend,frontend,node_modules} (archived —
+// Electron's require()/fs transparently read through it) plus
+// resources/template/ (a real loose file — see extraResources below, kept
+// out of the archive since main.js fs.copyFileSync()s it directly).
+// Dev (electron . from codes/desktop): the codes/ folder itself.
+const APP_ROOT = app.isPackaged
+  ? path.join(process.resourcesPath, 'app.asar')
+  : path.resolve(__dirname, '..');
+const TEMPLATE_DB = app.isPackaged
+  ? path.join(process.resourcesPath, 'template', 'studio.db')
+  : path.join(__dirname, 'template', 'studio.db');
+
+let mainWindow = null;
+// A double-click on the shortcut while the first instance is still starting
+// (server/WhatsApp warm-up) arrives before mainWindow exists — remember it
+// and focus as soon as the window is actually created.
+let focusPending = false;
+
+// A second double-click on the shortcut must focus the running app,
+// not boot a second server against the same database.
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    } else {
+      focusPending = true;
+    }
+  });
+}
+
+// ── Network mode (single PC vs. two PCs sharing one database) ─────────────
+// Two studio PCs cannot both open the same studio.db over a file share:
+// SQLite in WAL mode needs shared memory that only works when every process
+// is on the same machine, and Windows share locking would corrupt the file
+// regardless. So the second PC does NOT get its own database — it runs the
+// UI against the main PC's backend over HTTP, which is what this app already
+// is internally (a Fastify server + a browser UI that happens to be local).
+//
+//   server mode — the normal install: own database, backups, WhatsApp.
+//                 `share: true` additionally binds the backend to the LAN.
+//   client mode — no database, no backend, no WhatsApp on this PC. The window
+//                 just points at the main PC. Nothing is stored locally.
+//
+// Concurrency is already safe: billNumber is UNIQUE and BillService.createBill
+// retries on P2002, so two operators saving at the same instant get different
+// bill numbers rather than a duplicate-key error.
+const NETWORK_CONFIG = path.join(app.getPath('userData'), 'network-mode.json');
+
+function readNetworkConfig() {
+  try {
+    // Strip a UTF-8 BOM before parsing. We never write one, but Notepad and
+    // PowerShell's Out-File both add one by default — so the moment anyone
+    // hand-edits this file to fix an address, JSON.parse would throw and the
+    // app would silently look like it had forgotten its settings.
+    const raw = fs.readFileSync(NETWORK_CONFIG, 'utf8').replace(/^﻿/, '');
+    const cfg = JSON.parse(raw);
+    if (cfg.mode === 'client' && typeof cfg.address === 'string' && cfg.address) return cfg;
+    if (cfg.mode === 'server') return { mode: 'server', share: cfg.share === true };
+    return null;
+  } catch {
+    return null; // never configured — first run
+  }
+}
+
+// Turns whatever the operator typed into the exact origin string every
+// isAppUrl() check compares against.
+//
+// Two things go wrong without this. First, a bare "192.168.1.50" becomes
+// http://192.168.1.50 — which is port 80, not this app — so the second PC
+// would sit there insisting the main PC is switched off. The setup screen
+// deliberately allows a bare address (a studio operator should not have to
+// know what a port is), so the default has to be applied here.
+//
+// Second, isAppUrl compares against URL.origin, which is normalized:
+// lowercased host, and the default port dropped. Comparing that to a raw
+// concatenated string means an address typed as "Reception-PC:3179" never
+// matches its own pages — and then every in-app navigation gets treated as
+// external and thrown out to the system browser. Normalizing through URL
+// once, here, keeps both sides in the same shape.
+function clientOrigin(address) {
+  const withPort = /:\d+$/.test(address) ? address : `${address}:${PORT}`;
+  try {
+    return new URL(`http://${withPort}`).origin;
+  } catch {
+    return `http://${withPort}`; // setup.html already validated the shape
+  }
+}
+
+function writeNetworkConfig(cfg) {
+  fs.mkdirSync(path.dirname(NETWORK_CONFIG), { recursive: true });
+  fs.writeFileSync(NETWORK_CONFIG, JSON.stringify(cfg), 'utf8');
+}
+
+// This PC's LAN addresses, shown on the main PC so the operator knows what to
+// type on the second one.
+//
+// A bare "every non-internal IPv4" list is not usable here — a normal Windows
+// PC reports a pile of addresses that will never work: 169.254.x.x (APIPA,
+// which Windows self-assigns to an adapter that got NO network at all), and
+// virtual switches from Hyper-V/WSL/VirtualBox/VMware, which are real private
+// addresses on a network the other PC isn't on. Handing the operator six
+// addresses and letting them guess is how "I typed it and it didn't work"
+// happens. Drop the ones that cannot be right, then order the rest so the
+// most likely home/studio-router address is first.
+const VIRTUAL_IFACE = /vethernet|virtualbox|vmware|hyper-v|loopback|wsl|docker|tailscale|zerotier/i;
+
+function getLanAddresses() {
+  const candidates = [];
+  const ifaces = os.networkInterfaces();
+  for (const name of Object.keys(ifaces)) {
+    if (VIRTUAL_IFACE.test(name)) continue;
+    for (const net of ifaces[name] ?? []) {
+      if (net.family !== 'IPv4' || net.internal) continue;
+      if (net.address.startsWith('169.254.')) continue; // APIPA — no network
+      candidates.push(net.address);
+    }
+  }
+  // 192.168.x.x is what almost every home/small-office router hands out, so
+  // it goes first; then 10.x, then the 172.16–31 range.
+  const rank = (ip) => (ip.startsWith('192.168.') ? 0 : ip.startsWith('10.') ? 1 : 2);
+  return candidates.sort((a, b) => rank(a) - rank(b));
+}
+
+// Electron has no text-input dialog, so this is a real (small, frameless-ish)
+// window loading setup.html. It stays under the same webPreferences lockdown
+// as the main window — no Node in the renderer — and hands its answer back
+// through a page-side promise that executeJavaScript awaits. Resolves to the
+// chosen config, or null if the operator cancelled.
+let setupWindow = null;
+
+function showSetupWindow(current) {
+  // Ctrl+Shift+C is an app-wide accelerator, so it fires while the setup
+  // window itself has focus — without this it would stack a second setup
+  // window over the first, each awaiting its own page promise, and only one
+  // of them could ever be the answer.
+  if (setupWindow && !setupWindow.isDestroyed()) {
+    setupWindow.focus();
+    return Promise.resolve(null);
+  }
+  return new Promise((resolve) => {
+    const params = new URLSearchParams({
+      ips: JSON.stringify(getLanAddresses()),
+      port: String(PORT),
+      mode: current?.mode ?? '',
+      address: current?.address ?? '',
+      share: current?.share ? '1' : '0',
+      firstRun: current ? '0' : '1',
+    });
+
+    const win = new BrowserWindow({
+      width: 620,
+      height: 660,
+      resizable: false,
+      minimizable: false,
+      maximizable: false,
+      autoHideMenuBar: true,
+      title: 'MM Billing — Connection Setup',
+      backgroundColor: '#f8fafc',
+      webPreferences: { nodeIntegration: false, contextIsolation: true },
+    });
+    setupWindow = win;
+    // The app menu's Ctrl+R (role: 'reload') would otherwise reload this page,
+    // which builds a brand-new window.__setupResult promise while we are still
+    // awaiting the old one — Save & Start would then appear to do nothing at
+    // all, forever. Nothing here needs reloading.
+    win.setMenu(null);
+
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      if (setupWindow === win) setupWindow = null;
+      if (!win.isDestroyed()) win.destroy();
+      resolve(value);
+    };
+
+    // Closing the window with the X is the same as cancelling.
+    win.on('closed', () => finish(null));
+
+    win.loadFile(path.join(__dirname, 'setup.html'), { search: params.toString() });
+    // `on`, not `once`: if the page ever does reload, re-attach to the new
+    // promise rather than waiting forever on the discarded one.
+    win.webContents.on('did-finish-load', () => {
+      win.webContents
+        .executeJavaScript('window.__setupResult')
+        .then(finish)
+        .catch(() => {
+          // A reload rejects the pending executeJavaScript. That is not a
+          // cancellation — the next did-finish-load will re-attach.
+          if (win.isDestroyed()) finish(null);
+        });
+    });
+  });
+}
+
+// The database's folder is user-choosable (e.g. a bigger D:\ or E:\ drive)
+// but that choice itself has to live somewhere fixed, so it survives even
+// after the database moves off C: — this small pointer file is that fixed
+// spot. Backups and the WhatsApp session are NOT affected by this: they
+// always stay under dataRoot (%APPDATA%), only the .db file relocates.
+const DB_LOCATION_POINTER = path.join(app.getPath('userData'), 'db-location.json');
+const DEFAULT_DB_DIR = path.join(app.getPath('userData'), 'data', 'database');
+
+function readDbLocationPointer() {
+  try {
+    const { dbDir } = JSON.parse(fs.readFileSync(DB_LOCATION_POINTER, 'utf8'));
+    return typeof dbDir === 'string' && dbDir ? dbDir : null;
+  } catch {
+    return null; // no pointer yet — this is the first run
+  }
+}
+
+function writeDbLocationPointer(dbDir) {
+  fs.mkdirSync(path.dirname(DB_LOCATION_POINTER), { recursive: true });
+  fs.writeFileSync(DB_LOCATION_POINTER, JSON.stringify({ dbDir }), 'utf8');
+}
+
+// Asked once, ever, on the very first launch (there is no later "change
+// location" setting) — where should studio.db live? Defaults to the normal
+// per-user app-data folder, but the operator can instead pick a folder on
+// another drive (handy when C: is small/an SSD they want to keep free).
+function chooseDbDirOnFirstRun() {
+  // NOTE: showMessageBoxSync returns the clicked button INDEX (a number), not
+  // the {response} object its async sibling showMessageBox resolves to. This
+  // was destructured as an object here for a long time, which silently made
+  // `response` undefined — so "Use Default Location" never matched and every
+  // first run fell through to the folder picker regardless of the choice.
+  const response = dialog.showMessageBoxSync({
+    type: 'question',
+    title: 'MM Billing — Database Location',
+    message: 'Where should the billing database be stored?',
+    detail:
+      `This is asked once. "Use Default" keeps it with the app:\n${DEFAULT_DB_DIR}\n\n` +
+      'Or pick a folder on a different drive (e.g. D:\\ or E:\\). Backups and the ' +
+      'WhatsApp session always stay in the default app-data folder either way.',
+    buttons: ['Use Default Location', 'Choose Folder…'],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true,
+  });
+  if (response === 0) return DEFAULT_DB_DIR;
+
+  const picked = dialog.showOpenDialogSync({
+    title: 'Choose a folder for the MM Billing database',
+    properties: ['openDirectory', 'createDirectory'],
+  });
+  if (!picked || picked.length === 0) return DEFAULT_DB_DIR;
+  return path.join(picked[0], 'MM Billing Database');
+}
+
+// ── Restore from a backup ─────────────────────────────────────────────────
+// Restoring is kept out of the billing UI on purpose — a one-click way to
+// discard every bill taken since a backup is too easy to hit by accident —
+// but the studio still needs SOME way back after a corrupted database, so it
+// lives here, in the Setup menu, behind two confirmations.
+//
+// The swap deliberately does NOT happen while the app is running. The chosen
+// file is recorded in a marker file and the app restarts; the copy then
+// happens during prepareDataDir(), before the backend is required and before
+// anything has opened studio.db. On Windows that is the difference between a
+// reliable restore and an EBUSY halfway through replacing a live database.
+const PENDING_RESTORE = path.join(app.getPath('userData'), 'pending-restore.json');
+
+// Every SQLite database on disk starts with this exact 16-byte string. Cheap
+// guard against the operator picking a PDF, a .db-wal sidecar, or a truncated
+// file — all of which would otherwise replace their real database with
+// something Prisma cannot open, turning a recovery into a second outage.
+function looksLikeSqliteDb(file) {
+  let fd;
+  try {
+    const stat = fs.statSync(file);
+    if (stat.size < 1024) return false;
+    fd = fs.openSync(file, 'r');
+    const header = Buffer.alloc(16);
+    fs.readSync(fd, header, 0, 16, 0);
+    return header.toString('latin1') === 'SQLite format 3\u0000';
+  } catch {
+    return false;
+  } finally {
+    if (fd !== undefined) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        /* nothing useful to do */
+      }
+    }
+  }
+}
+
+// Runs at boot, before the database is opened by anything.
+function applyPendingRestore(dbFile) {
+  let pending;
+  try {
+    pending = JSON.parse(fs.readFileSync(PENDING_RESTORE, 'utf8').replace(/^﻿/, ''));
+  } catch {
+    return; // nothing pending — the normal case
+  }
+  // Clear the marker FIRST. If the copy below throws (drive unplugged, file
+  // deleted since it was chosen), the operator gets one clear error and a
+  // normal app — not a restore that retries and fails on every launch
+  // forever, which would leave them unable to open their billing app at all.
+  try {
+    fs.unlinkSync(PENDING_RESTORE);
+  } catch {
+    /* already gone */
+  }
+
+  const src = pending && pending.source;
+  try {
+    if (!src || !looksLikeSqliteDb(src)) {
+      throw new Error(`The selected file is no longer a readable database backup:\n${src}`);
+    }
+
+    // Keep the pre-restore database next to the live one. This is the undo
+    // for "I restored the wrong backup", and it is written before anything is
+    // overwritten. Not routed through BackupService: that resolves a
+    // configured backup folder which may be on a drive that isn't attached,
+    // and this must not be the step that fails.
+    if (fs.existsSync(dbFile)) {
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      fs.copyFileSync(dbFile, `${dbFile}.before-restore-${stamp}`);
+    }
+
+    // Drop the live WAL/SHM sidecars before swapping the file underneath
+    // them — a stale WAL no longer corresponds to the restored database and
+    // SQLite would try to replay it on the next connection.
+    for (const suffix of ['-wal', '-shm']) {
+      const sidecar = dbFile + suffix;
+      if (fs.existsSync(sidecar)) fs.unlinkSync(sidecar);
+    }
+
+    fs.copyFileSync(src, dbFile);
+    dialog.showMessageBoxSync({
+      type: 'info',
+      title: 'MM Billing — Restore Complete',
+      message: 'The database has been restored.',
+      detail:
+        `Restored from:\n${src}\n\n` +
+        'The database as it was just before this restore was saved next to it as ' +
+        'a ".before-restore-…" file, in case this was not the backup you wanted.',
+      buttons: ['OK'],
+      noLink: true,
+    });
+  } catch (err) {
+    dialog.showMessageBoxSync({
+      type: 'error',
+      title: 'MM Billing — Restore Failed',
+      message: 'The database was NOT restored.',
+      detail: `${err.message}\n\nYour existing database has been left untouched.`,
+      buttons: ['OK'],
+      noLink: true,
+    });
+  }
+}
+
+// rename() fails with EXDEV across drives (e.g. C: -> D:) — fall back to
+// copy+delete in that case. Used for studio.db and its WAL/SHM sidecars.
+function moveFile(src, dest) {
+  try {
+    fs.renameSync(src, dest);
+  } catch (err) {
+    if (err.code !== 'EXDEV') throw err;
+    fs.copyFileSync(src, dest);
+    fs.unlinkSync(src);
+  }
+}
+
+// If the operator picked a custom folder (a USB drive, a network share)
+// this can fail on a later launch simply because that drive isn't connected
+// right now — not a real error, just a temporary unavailability. Without
+// this, prepareDataDir()'s mkdirSync would throw straight up to the
+// app.whenReady() catch-all, which shows a raw stack trace no operator
+// could act on. Give them a clear choice instead: retry (plug the drive
+// back in), fall back to the default location, or quit.
+function ensureDbDirAccessible(dbDir) {
+  for (;;) {
+    try {
+      fs.mkdirSync(dbDir, { recursive: true });
+      return dbDir;
+    } catch (err) {
+      // Button index, not an object — see chooseDbDirOnFirstRun above.
+      // Destructured as {response} here previously, which meant Retry and
+      // "Use Default Location" both fell through to the quit branch.
+      const response = dialog.showMessageBoxSync({
+        type: 'error',
+        title: 'MM Billing — Database Location Unavailable',
+        message: `Can't reach the database folder:\n${dbDir}`,
+        detail:
+          `${err.message}\n\n` +
+          "If this is a USB drive or network share, make sure it's connected, then Retry.\n" +
+          `Otherwise, switch to the default location instead:\n${DEFAULT_DB_DIR}`,
+        buttons: ['Retry', 'Use Default Location', 'Quit'],
+        defaultId: 0,
+        cancelId: 2,
+      });
+      if (response === 0) continue;
+      if (response === 1) {
+        dbDir = DEFAULT_DB_DIR;
+        writeDbLocationPointer(dbDir); // remember the fallback so it's not asked again next time
+        continue;
+      }
+      app.quit();
+      process.exit(0);
+    }
+  }
+}
+
+function prepareDataDir() {
+  const dataRoot = path.join(app.getPath('userData'), 'data');
+  fs.mkdirSync(dataRoot, { recursive: true });
+
+  let dbDir = readDbLocationPointer();
+  if (!dbDir) {
+    dbDir = chooseDbDirOnFirstRun();
+    writeDbLocationPointer(dbDir);
+  }
+  dbDir = ensureDbDirAccessible(dbDir);
+
+  const dbFile = path.join(dbDir, 'studio.db');
+  if (!fs.existsSync(dbFile)) {
+    const existingDbFile = path.join(DEFAULT_DB_DIR, 'studio.db');
+    if (dbDir !== DEFAULT_DB_DIR && fs.existsSync(existingDbFile)) {
+      // This install already had a real database at the default location
+      // (from before this folder-choice existed, or from a run where the
+      // operator picked "Use Default" previously) — carry it across along
+      // with its WAL/SHM sidecars instead of handing them a blank template.
+      moveFile(existingDbFile, dbFile);
+      for (const suffix of ['-wal', '-shm']) {
+        const sidecar = existingDbFile + suffix;
+        if (fs.existsSync(sidecar)) moveFile(sidecar, dbFile + suffix);
+      }
+    } else {
+      // Genuine first run: install the pre-migrated, seeded database template.
+      fs.copyFileSync(TEMPLATE_DB, dbFile);
+    }
+  }
+
+  // Only safe to do here: after dbFile is known, before the backend is
+  // required and before Prisma has opened anything.
+  applyPendingRestore(dbFile);
+
+  return { dataRoot, dbFile };
+}
+
+function startBackend(share) {
+  const { dataRoot, dbFile } = prepareDataDir();
+
+  process.env.NODE_ENV = 'production';
+  process.env.DATABASE_URL = 'file:' + dbFile.replace(/\\/g, '/');
+  process.env.PORT = String(PORT);
+  // Loopback unless the operator explicitly opted into letting a second
+  // studio PC connect — this app has no login, so binding to the LAN is a
+  // deliberate choice, never the default.
+  process.env.HOST = share ? '0.0.0.0' : '127.0.0.1';
+  // The second PC loads the UI *from* this server, so its requests are
+  // same-origin and never hit CORS at all. The LAN origins are listed anyway
+  // so a direct cross-origin call from the other PC isn't silently blocked.
+  process.env.CORS_ORIGIN = share
+    ? [LOCAL_URL, ...getLanAddresses().map((ip) => `http://${ip}:${PORT}`)].join(',')
+    : LOCAL_URL;
+  process.env.FRONTEND_DIST = path.join(APP_ROOT, 'frontend', 'dist');
+  process.env.LOG_LEVEL = process.env.LOG_LEVEL || 'info';
+  process.env.APP_VERSION = app.getVersion();
+
+  // Runs Fastify inside this (Node-capable) Electron main process.
+  require(path.join(APP_ROOT, 'backend', 'dist', 'server.js'));
+}
+
+function waitForServer(retriesLeft, onReady, onUnreachable) {
+  const req = http.get(`${APP_URL}/live`, (res) => {
+    res.resume();
+    if (res.statusCode === 200) return onReady();
+    retry();
+  });
+  req.on('error', retry);
+  req.setTimeout(1000, () => {
+    req.destroy();
+    retry();
+  });
+
+  function retry() {
+    if (retriesLeft <= 0) {
+      if (onUnreachable) return onUnreachable();
+      dialog.showErrorBox(
+        'MM Billing could not start',
+        'The billing server did not come up. Restart the app; if this keeps happening, contact support.',
+      );
+      app.quit();
+      return;
+    }
+    setTimeout(() => waitForServer(retriesLeft - 1, onReady, onUnreachable), 500);
+  }
+}
+
+function createWindow() {
+  // electron-builder embeds build/icon.ico into the exe (covers the taskbar
+  // and shortcuts automatically), but the window/title-bar icon is set here
+  // explicitly so it's never left blank regardless of Windows icon caching.
+  // Packaged: shipped alongside "app" as its own resource (see package.json
+  // extraResources). Dev: read straight from the desktop/build folder.
+  const iconPath = app.isPackaged
+    ? path.join(process.resourcesPath, 'icon.ico')
+    : path.join(__dirname, 'build', 'icon.ico');
+
+  mainWindow = new BrowserWindow({
+    width: 1360,
+    height: 860,
+    minWidth: 1024,
+    minHeight: 700,
+    autoHideMenuBar: true,
+    title: 'MM Billing',
+    backgroundColor: '#f8fafc',
+    icon: fs.existsSync(iconPath) ? iconPath : undefined,
+    webPreferences: {
+      // The UI is our own local site — no Node access needed in the renderer.
+      nodeIntegration: false,
+      contextIsolation: true,
+      // Enables Chromium's built-in PDF viewer plugin for instant inline
+      // previewing and offscreen iframe printing on Windows 11 / Electron.
+      plugins: true,
+      // Lets the billing UI host WhatsApp Web in a <webview> (see
+      // configureWhatsAppGuest below). A <webview> is a separate,
+      // out-of-process webContents with its own session — it is NOT an
+      // iframe, so the backend's helmet CSP frame-src does not apply to it,
+      // and nothing it loads shares a process or a cookie jar with our UI.
+      webviewTag: true,
+      // Exposes exactly one function to the billing UI: "send this PDF on
+      // WhatsApp". See preload.js and the whatsapp:send handler below.
+      preload: path.join(__dirname, 'preload.js'),
+    },
+  });
+
+  // The thermal receipt opens a popup that calls window.print() — allow it.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (isAppUrl(url) || url === 'about:blank') return { action: 'allow' };
+    // Anything external (e.g. wa.me links) goes to the system browser.
+    shell.openExternal(url);
+    return { action: 'deny' };
+  });
+
+  // setWindowOpenHandler above only covers NEW windows/tabs (window.open,
+  // target="_blank"); it does nothing for the main window navigating itself
+  // (e.g. location.href = someUrl, or clicking a plain link). This app has
+  // no legitimate reason to ever navigate the main window away from its own
+  // server — block anything else and send it to the system browser instead,
+  // same treatment as setWindowOpenHandler, so a stray external link can
+  // never replace the billing UI with an arbitrary page.
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (isAppUrl(url)) return;
+    event.preventDefault();
+    shell.openExternal(url);
+  });
+
+  mainWindow.on('closed', () => {
+    mainWindow = null;
+  });
+
+  // If the server passed its health check but then dies before the page
+  // finishes loading (crash in the brief gap between the two), the window
+  // would otherwise sit blank with no clue why. Offer a retry instead.
+  //
+  // did-fail-load fires for ANY failed load in this webContents, not just
+  // the top-level page — including the hidden <iframe src="blob:...">
+  // printing uses (lib/pdf.ts printBillPDF). Without the isMainFrame check,
+  // a print action that failed to load its iframe (e.g. blocked by CSP)
+  // triggered this exact "app failed to load" dialog, and clicking through
+  // it either reloaded the whole app (losing the in-progress bill) or quit
+  // it outright — a print hiccup should never be able to take the app down.
+  mainWindow.webContents.on('did-fail-load', (_e, errorCode, errorDescription, _url, isMainFrame) => {
+    if (errorCode === -3) return; // ERR_ABORTED — normal on a redirect/reload, not a failure
+    if (!isMainFrame) {
+      console.error(`Sub-frame failed to load (ignored, not fatal): ${errorDescription}`);
+      return;
+    }
+    dialog
+      .showMessageBox(mainWindow, {
+        type: 'error',
+        title: 'MM Billing',
+        message: 'The billing app failed to load.',
+        detail: errorDescription || 'Unknown error',
+        buttons: ['Retry', 'Quit'],
+        defaultId: 0,
+      })
+      .then(({ response }) => {
+        if (response === 0) mainWindow?.loadURL(APP_URL);
+        else app.quit();
+      });
+  });
+
+  // If the renderer process itself dies (a Chromium-level crash or OOM, not
+  // a JS error — those stay inside the page and don't hit this at all), the
+  // window would otherwise just sit there frozen/blank with no explanation
+  // and no way back except force-closing the app. Same recovery pattern as
+  // did-fail-load above: offer reload or quit instead of leaving it dead.
+  mainWindow.webContents.on('render-process-gone', (_e, details) => {
+    if (details.reason === 'clean-exit') return; // normal app-quit teardown
+    dialog
+      .showMessageBox(mainWindow, {
+        type: 'error',
+        title: 'MM Billing',
+        message: 'The billing app stopped responding.',
+        detail: `Reason: ${details.reason}`,
+        buttons: ['Reload', 'Quit'],
+        defaultId: 0,
+      })
+      .then(({ response }) => {
+        if (response === 0) mainWindow?.loadURL(APP_URL);
+        else app.quit();
+      });
+  });
+
+  // The WhatsApp Web <webview> mounted by the renderer arrives here once,
+  // when it attaches. Everything security-relevant about it is set from the
+  // main process rather than from renderer attributes, so the page cannot
+  // widen its own guest's privileges.
+  mainWindow.webContents.on('did-attach-webview', (_e, guest) => {
+    configureWhatsAppGuest(guest);
+    whatsappGuest = guest;
+    guest.once('destroyed', () => {
+      if (whatsappGuest === guest) whatsappGuest = null;
+    });
+  });
+
+  mainWindow.loadURL(APP_URL);
+
+  if (focusPending) {
+    focusPending = false;
+    mainWindow.focus();
+  }
+}
+
+// Backup/report "Save a Copy" downloads (see backend routes/backups.ts and
+// routes/reports.ts) and bill/invoice PDF downloads (frontend lib/pdf.ts +
+// lib/a4invoice.ts — generated client-side as a blob: URL, not a server
+// route) all arrive here as a normal Chromium download. Rather than
+// silently dropping the file in the default Downloads folder, prompt a
+// native Save As dialog every time so the operator can put the copy
+// anywhere they like — a USB drive, a cloud-synced folder, wherever.
+//
+// The blob: case was missed when this was first written ("this app never
+// loads remote content, so nothing else can trigger a download" — true,
+// but bill PDFs are a *local* blob: download, not remote content) — every
+// "Download PDF" click on a bill was silently cancelled below, with no
+// visible error, because its blob: URL matched neither the backup nor the
+// report route prefix.
+function setupBackupDownloads() {
+  session.defaultSession.on('will-download', (_event, item) => {
+    const url = item.getURL();
+    const isBackup = isAppUrl(url, '/api/v1/backups/');
+    const isReport = isAppUrl(url, '/api/v1/reports/');
+    const isBlobDownload = url.startsWith('blob:'); // bill/invoice PDFs, generated client-side
+    if (!isBackup && !isReport && !isBlobDownload) {
+      item.cancel();
+      return;
+    }
+    const chosenPath = dialog.showSaveDialogSync(mainWindow ?? undefined, {
+      title: isBackup ? 'Save Backup Copy' : isReport ? 'Save Report Copy' : 'Save Invoice PDF',
+      defaultPath: item.getFilename(),
+      filters: isBackup
+        ? [{ name: 'Database Backup', extensions: ['db'] }]
+        : [{ name: 'PDF File', extensions: ['pdf'] }],
+    });
+    if (chosenPath) {
+      item.setSavePath(chosenPath);
+    } else {
+      item.cancel();
+    }
+  });
+}
+
+// ─── WhatsApp Web (embedded) ────────────────────────────────────────────────
+//
+// The app used to drive WhatsApp by launching a SECOND headless Chrome via
+// puppeteer + the stealth plugin and handing whatsapp-web.js its WS endpoint
+// (backend/src/services/WhatsAppService.ts). That approach could never
+// persist a login — LocalAuth persists by setting `userDataDir`, which is a
+// puppeteer *launch* option, and the WS-endpoint path goes through
+// puppeteer.connect(), which ignores launch options entirely. So the session
+// folder was created and never written to, and every app restart demanded a
+// fresh QR scan.
+//
+// Hosting WhatsApp Web in our own window on a persistent partition removes
+// that whole class of problem: Electron stores cookies/IndexedDB for
+// `persist:whatsapp` in the user's profile exactly like a normal browser, so
+// the operator scans once and stays linked. No second browser process, no
+// stealth plugin, no puppeteer-core version trap.
+const WHATSAPP_PARTITION = 'persist:whatsapp';
+
+// WhatsApp Web sniffs the UA and shows "update your browser" for anything it
+// doesn't recognise — Electron's default UA carries both an `Electron/33`
+// and a `MM Billing/x.y.z` token, neither of which it knows. Strip them
+// so what's left is the plain Chrome UA that the bundled Chromium genuinely
+// is. Deriving it from the real UA (rather than hardcoding a Chrome version)
+// keeps it truthful and correct across Electron upgrades.
+function whatsappUserAgent() {
+  // Keep only the product tokens a real Chrome UA carries and drop every
+  // other "Name/version" token. Electron's default adds two that WhatsApp
+  // does not recognise — its own "Electron/33.4.11" and an app token — and a
+  // single unknown token is enough for WhatsApp Web to serve the
+  // "WhatsApp works with Google Chrome 100+ / update Chrome" page instead of
+  // the QR, even though the underlying Chromium is new enough.
+  //
+  // Do NOT go back to removing the app token by exact string
+  // (` ${app.getName()}/${app.getVersion()}`): Electron strips the spaces
+  // out of the product name when it builds userAgentFallback, so
+  // "MM Billing" appears as "MaestroBilling/2.5.2" and the exact match
+  // silently fails — observed live, which is how the update-Chrome page was
+  // found. An allowlist is immune to that and to any future rename.
+  const CHROME_UA_PRODUCTS = new Set(['Mozilla', 'AppleWebKit', 'Chrome', 'Safari']);
+  return app.userAgentFallback
+    .split(' ')
+    .filter((token) => {
+      const slash = token.indexOf('/');
+      return slash === -1 || CHROME_UA_PRODUCTS.has(token.slice(0, slash));
+    })
+    .join(' ');
+}
+
+function isWhatsAppUrl(url) {
+  try {
+    const { hostname, protocol } = new URL(url);
+    if (protocol !== 'https:') return false;
+    return (
+      hostname === 'web.whatsapp.com' ||
+      hostname === 'whatsapp.com' ||
+      hostname.endsWith('.whatsapp.com') ||
+      hostname.endsWith('.whatsapp.net')
+    );
+  } catch {
+    return false;
+  }
+}
+
+// Called once per app run, before the renderer mounts its <webview>, so the
+// very first request already carries the right UA and download handling.
+function setupWhatsAppSession() {
+  const waSession = session.fromPartition(WHATSAPP_PARTITION);
+  waSession.setUserAgent(whatsappUserAgent());
+
+  // Downloads started from inside WhatsApp Web (a customer sending back a
+  // photo or document) hit this session, not defaultSession — so
+  // setupBackupDownloads()'s handler never sees them. Without a handler of
+  // its own they would land silently in the OS Downloads folder; prompt
+  // instead, same as every other download this app produces.
+  waSession.on('will-download', (_event, item) => {
+    const chosenPath = dialog.showSaveDialogSync(mainWindow ?? undefined, {
+      title: 'Save File from WhatsApp',
+      defaultPath: item.getFilename(),
+    });
+    if (chosenPath) item.setSavePath(chosenPath);
+    else item.cancel();
+  });
+
+  // WhatsApp asks for notifications and (on a call) camera/mic. This is a
+  // billing terminal, not a chat client — nothing here needs either, and a
+  // permission prompt appearing over a half-finished bill is pure noise.
+  waSession.setPermissionRequestHandler((_wc, permission, callback) => {
+    callback(permission === 'clipboard-read' || permission === 'clipboard-sanitized-write');
+  });
+}
+
+// Applied to the guest webContents itself once the renderer's <webview>
+// attaches. Keeps WhatsApp inside WhatsApp: any link a customer sends opens
+// in the operator's real browser instead of replacing the chat UI, and the
+// guest can never be navigated somewhere unrelated.
+function configureWhatsAppGuest(guest) {
+  guest.setUserAgent(whatsappUserAgent());
+
+  guest.setWindowOpenHandler(({ url }) => {
+    if (/^https?:/.test(url)) shell.openExternal(url);
+    return { action: 'deny' };
+  });
+
+  guest.on('will-navigate', (event, url) => {
+    if (isWhatsAppUrl(url)) return;
+    event.preventDefault();
+    if (/^https?:/.test(url)) shell.openExternal(url);
+  });
+}
+
+// ── Automated WhatsApp send ──────────────────────────────────────────────
+//
+// Drives the WhatsApp Web guest to attach a bill PDF and send it, so the
+// operator does not have to save the file and re-pick it from a file dialog.
+//
+// Everything here runs against WhatsApp's real UI through the CDP debugger,
+// for two reasons that are not negotiable:
+//
+//  * `DOM.setFileInputFiles` is the only way to put a file into WhatsApp's
+//    <input type="file"> without popping a native file picker. A native
+//    dialog would block the whole app, and the operator picking the file is
+//    exactly the step being removed.
+//  * WhatsApp ignores untrusted events. A plain `element.click()` from
+//    executeJavaScript does NOT open the attach menu (measured); only real
+//    input events via `Input.dispatchMouseEvent` do. Same for the synthetic
+//    drag-and-drop route — `DragEvent` with a DataTransfer is silently
+//    dropped because `isTrusted` is false.
+//
+// This is DOM automation against someone else's app, so it WILL break when
+// WhatsApp reorganises its UI. Every step is therefore verified and the whole
+// thing fails closed: any failure returns {ok:false} and the caller falls
+// back to the manual attach flow. It must never send a half-built message —
+// notably, the caption is inserted with `Input.insertText` rather than typed,
+// because a literal Enter keystroke in WhatsApp's caption box sends the
+// message immediately, which on a multi-line caption would fire off the bill
+// before the text was complete.
+let whatsappGuest = null;
+
+const WA_SEND_TIMEOUT_MS = 45_000;
+
+/** Poll an in-page predicate until it returns truthy, or give up. */
+async function waitInGuest(dbg, expression, timeoutMs, label) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const r = await dbg.sendCommand('Runtime.evaluate', {
+      expression, returnByValue: true, awaitPromise: true,
+    });
+    if (r?.result?.value) return r.result.value;
+    await new Promise((res) => setTimeout(res, 400));
+  }
+  throw new Error(`Timed out waiting for ${label}`);
+}
+
+async function evalInGuest(dbg, expression) {
+  const r = await dbg.sendCommand('Runtime.evaluate', {
+    expression, returnByValue: true, awaitPromise: true,
+  });
+  if (r?.exceptionDetails) {
+    throw new Error(r.exceptionDetails.exception?.description || `Failed evaluating ${expression.slice(0, 40)}`);
+  }
+  return r?.result?.value;
+}
+
+/** A real, trusted left click at viewport coordinates. */
+async function clickInGuest(dbg, point) {
+  await dbg.sendCommand('Input.dispatchMouseEvent', { type: 'mouseMoved', x: point.x, y: point.y, buttons: 0 });
+  await new Promise((r) => setTimeout(r, 120));
+  await dbg.sendCommand('Input.dispatchMouseEvent', { type: 'mousePressed', x: point.x, y: point.y, button: 'left', buttons: 1, clickCount: 1 });
+  await new Promise((r) => setTimeout(r, 80));
+  await dbg.sendCommand('Input.dispatchMouseEvent', { type: 'mouseReleased', x: point.x, y: point.y, button: 'left', buttons: 0, clickCount: 1 });
+}
+
+/** Centre of the first element matching `selector`, or null if not present. */
+function centreOfExpr(selector) {
+  return `(() => {
+    const el = document.querySelector(${JSON.stringify(selector)});
+    if (!el) return null;
+    const t = el.closest('button') || el.closest('[role=button]') || el;
+    const r = t.getBoundingClientRect();
+    if (!r.width || !r.height) return null;
+    return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+  })()`;
+}
+
+/**
+ * Centre of the first element matching `selector`, but ONLY once that point
+ * genuinely hits the element (or something inside it).
+ *
+ * `centreOfExpr` above trusts `getBoundingClientRect()` alone, and that is not
+ * enough on WhatsApp Web. Measured 2026-09-24: the attach menu's "Document"
+ * row is `pointer-events: none` and its own rect sits ~21px below the content
+ * it renders, so a click at "the centre of the element" landed on the menu
+ * container and did nothing at all — the silent cause of the automated attach
+ * never working. Hit-testing with elementFromPoint also waits out the menu's
+ * open animation for free, since a mid-animation rect simply fails the test.
+ */
+function hittablePointExpr(selector) {
+  return `(() => {
+    const el = document.querySelector(${JSON.stringify(selector)});
+    if (!el) return null;
+    const target = el.closest('button') || el.closest('[role=button]') || el;
+    for (const cand of [target, ...target.querySelectorAll('*')]) {
+      const r = cand.getBoundingClientRect();
+      if (!r.width || !r.height) continue;
+      if (getComputedStyle(cand).pointerEvents === 'none') continue;
+      const x = Math.round(r.left + r.width / 2);
+      const y = Math.round(r.top + r.height / 2);
+      if (x < 0 || y < 0 || x > innerWidth || y > innerHeight) continue;
+      const at = document.elementFromPoint(x, y);
+      if (at && (target.contains(at) || at === target)) return { x, y };
+    }
+    return null;
+  })()`;
+}
+
+/**
+ * Send one bill to one chat as a plain WhatsApp message.
+ *
+ * This is the path that replaced attaching the PDF. WhatsApp fills its own
+ * composer from the `?text=` deep link, so there is no attach menu, no
+ * `<input type=file>`, no `DOM.setFileInputFiles` and no native picker to
+ * suppress — precisely the machinery that kept failing. The only interaction
+ * left is committing the message.
+ *
+ * It still fails closed: the composer must be carrying THIS bill's number
+ * before anything is committed, so a mis-timed or half-loaded page can never
+ * fire a wrong or empty message at a customer. On any doubt it returns
+ * `{ok:false}` with the message left typed, and the caller tells the operator
+ * to press Send.
+ */
+async function sendWhatsAppText({ phone, text, billNumber }) {
+  const guestDeadline = Date.now() + 20_000;
+  while ((!whatsappGuest || whatsappGuest.isDestroyed()) && Date.now() < guestDeadline) {
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  if (!whatsappGuest || whatsappGuest.isDestroyed()) throw new Error('WhatsApp panel is not open yet');
+
+  const digits = String(phone || '').replace(/\D/g, '');
+  const number = digits.length === 10 ? `91${digits}` : digits;
+  if (!number) throw new Error('No phone number to send to');
+  if (!text) throw new Error('Nothing to send');
+
+  const dbg = whatsappGuest.debugger;
+  let attached = false;
+  try {
+    try { dbg.attach('1.3'); attached = true; } catch (err) {
+      if (!/already attached/i.test(String(err))) throw err;
+    }
+    await dbg.sendCommand('DOM.enable');
+    await dbg.sendCommand('Runtime.enable');
+
+    const url = `https://web.whatsapp.com/send?phone=${encodeURIComponent(number)}` +
+      `&text=${encodeURIComponent(text)}`;
+    await whatsappGuest.loadURL(url);
+
+    const deadline = Date.now() + WA_SEND_TIMEOUT_MS;
+    let composerFound = false;
+    while (Date.now() < deadline) {
+      const state = await evalInGuest(
+        dbg,
+        `(() => {
+          if (document.querySelector('footer [contenteditable=true]')) return 'chat_ready';
+          if (/phone number shared via url is invalid|isn't on WhatsApp|not on WhatsApp/i.test(document.body.innerText)) return 'invalid_number';
+          if (/To use WhatsApp on your computer|Scan this QR code/i.test(document.body.innerText) || document.querySelector('canvas[aria-label]')) return 'needs_login';
+          return 'loading';
+        })()`
+      );
+      if (state === 'chat_ready') {
+        composerFound = true;
+        break;
+      }
+      if (state === 'invalid_number') {
+        throw new Error('That phone number is not registered on WhatsApp');
+      }
+      if (state === 'needs_login') {
+        throw new Error('WhatsApp is not logged in. Open the WhatsApp tab to scan QR code');
+      }
+      await new Promise((res) => setTimeout(res, 400));
+    }
+    if (!composerFound) {
+      throw new Error('Timed out waiting for the WhatsApp chat to open');
+    }
+
+    // Fail-closed gate: WhatsApp must have actually taken our text. Matching on
+    // the bill number rather than the whole body keeps this robust against
+    // WhatsApp reflowing or truncating what it renders.
+    const marker = String(billNumber || '').trim();
+    const composerHasBill = marker
+      ? `(() => {
+           const box = document.querySelector('footer [contenteditable=true]');
+           return !!box && (box.innerText || '').includes(${JSON.stringify(marker)});
+         })()`
+      : `(() => {
+           const box = document.querySelector('footer [contenteditable=true]');
+           return !!box && (box.innerText || '').trim().length > 0;
+         })()`;
+    await waitInGuest(dbg, composerHasBill, 15_000, 'the message to appear in the composer');
+
+    // Multi-strategy send commit loop:
+    // In modern WhatsApp Web, Enter key alone on contenteditable may not trigger send
+    // when offscreen/backgrounded. We try DOM click on the Send button, DOM KeyboardEvent,
+    // CDP click and CDP Enter key until the composer clears.
+    const sendDeadline = Date.now() + 20_000;
+    let messageSent = false;
+
+    while (Date.now() < sendDeadline) {
+      // Check if message is already sent (composer empty)
+      const isSent = await evalInGuest(
+        dbg,
+        `(() => {
+          const box = document.querySelector('footer [contenteditable=true]');
+          return !box || (box.innerText || '').trim().length === 0;
+        })()`
+      );
+      if (isSent) {
+        messageSent = true;
+        break;
+      }
+
+      // Check if invalid number dialog popped up
+      const isInvalid = await evalInGuest(
+        dbg,
+        `(() => /phone number shared via url is invalid|isn't on WhatsApp|not on WhatsApp/i.test(document.body.innerText))()`
+      );
+      if (isInvalid) {
+        throw new Error('That phone number is not registered on WhatsApp');
+      }
+
+      // Strategy 1: Find and click the WhatsApp Send button directly in DOM
+      await evalInGuest(
+        dbg,
+        `(() => {
+          const sendBtn = document.querySelector('button[aria-label="Send"]')
+            || document.querySelector('[data-testid="send"]')
+            || document.querySelector('[data-icon="send"]')?.closest('button')
+            || document.querySelector('[data-icon="wds-ic-send-filled"]')?.closest('button')
+            || document.querySelector('footer button:has(span[data-icon="send"])')
+            || document.querySelector('footer button:has(span[data-icon="wds-ic-send-filled"])')
+            || document.querySelector('footer [data-icon="send"]')
+            || document.querySelector('footer [data-icon="wds-ic-send-filled"]');
+
+          if (sendBtn) {
+            const target = sendBtn.closest('button') || sendBtn;
+            const opts = { bubbles: true, cancelable: true, view: window };
+            target.dispatchEvent(new PointerEvent('pointerdown', opts));
+            target.dispatchEvent(new MouseEvent('mousedown', opts));
+            target.dispatchEvent(new PointerEvent('pointerup', opts));
+            target.dispatchEvent(new MouseEvent('mouseup', opts));
+            target.click();
+            return true;
+          }
+          return false;
+        })()`
+      );
+
+      // Strategy 2: Focus composer & dispatch DOM KeyboardEvent (Enter)
+      await evalInGuest(
+        dbg,
+        `(() => {
+          const box = document.querySelector('footer [contenteditable=true]');
+          if (box) {
+            box.focus();
+            const ev = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true };
+            box.dispatchEvent(new KeyboardEvent('keydown', ev));
+            box.dispatchEvent(new KeyboardEvent('keypress', ev));
+            box.dispatchEvent(new KeyboardEvent('keyup', ev));
+          }
+        })()`
+      );
+
+      // Strategy 3: CDP click & Enter key
+      try {
+        const sendPoint = await evalInGuest(dbg, centreOfExpr('[data-icon="send"], [data-icon="wds-ic-send-filled"], button[aria-label="Send"], [data-testid="send"]'));
+        if (sendPoint) {
+          await clickInGuest(dbg, sendPoint);
+        }
+      } catch {
+        // ignore
+      }
+
+      try {
+        await dbg.sendCommand('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13, text: '\r' });
+        await dbg.sendCommand('Input.dispatchKeyEvent', { type: 'keyUp',   key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
+      } catch {
+        // ignore
+      }
+
+      await new Promise((r) => setTimeout(r, 600));
+    }
+
+    if (!messageSent) {
+      throw new Error('Timed out waiting for the message to be sent');
+    }
+
+    return { ok: true };
+  } finally {
+    if (attached) { try { dbg.detach(); } catch { /* already detached */ } }
+  }
+}
+
+async function sendWhatsAppPdf({ phone, caption, pdfBase64, fileName }) {
+  // The guest only exists once the renderer has mounted the WhatsApp panel,
+  // which it does lazily. A send fired in the same tick as that navigation
+  // would otherwise lose the race on the very first bill of a session.
+  const guestDeadline = Date.now() + 20_000;
+  while ((!whatsappGuest || whatsappGuest.isDestroyed()) && Date.now() < guestDeadline) {
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  if (!whatsappGuest || whatsappGuest.isDestroyed()) {
+    throw new Error('WhatsApp panel is not open yet');
+  }
+  const digits = String(phone || '').replace(/\D/g, '');
+  const number = digits.length === 10 ? `91${digits}` : digits;
+  if (!number) throw new Error('No phone number to send to');
+  const safeName = (fileName || 'invoice.pdf').replace(/[\\/:*?"<>|]/g, '_');
+
+  // A real file on disk is required by DOM.setFileInputFiles. It is removed in
+  // the finally below, sent or not.
+  //
+  // The uniqueness goes in the DIRECTORY name, never the file name. WhatsApp
+  // uploads the file under its basename, so a `maestro-wa-<timestamp>-` prefix
+  // is what the customer actually receives ("maestro-wa-1758712345678-047_2026.pdf"),
+  // and it also pushed the name long enough that WhatsApp truncated it in the
+  // attachment preview — which broke the step-5 check below, since that looks
+  // for the bill number in the preview text and then refuses to click Send.
+  // The net effect was a send that always fell back to "downloaded only".
+  const tmpDir = fs.mkdtempSync(path.join(app.getPath('temp'), 'maestro-wa-'));
+  const tmpPath = path.join(tmpDir, safeName);
+  fs.writeFileSync(tmpPath, Buffer.from(pdfBase64, 'base64'));
+
+  const dbg = whatsappGuest.debugger;
+  let attached = false;
+  try {
+    try { dbg.attach('1.3'); attached = true; } catch (err) {
+      // Already attached (e.g. a previous send crashed mid-flight) is fine.
+      if (!/already attached/i.test(String(err))) throw err;
+    }
+    await dbg.sendCommand('DOM.enable');
+    await dbg.sendCommand('Runtime.enable');
+
+    // 1. Open the conversation. The caption rides along in ?text= so WhatsApp
+    //    itself fills the composer — far more reliable than typing it.
+    const url = `https://web.whatsapp.com/send?phone=${encodeURIComponent(number)}` +
+      (caption ? `&text=${encodeURIComponent(caption)}` : '');
+    await whatsappGuest.loadURL(url);
+    await waitInGuest(dbg, `!!document.querySelector('footer [contenteditable=true]')`, WA_SEND_TIMEOUT_MS, 'the chat to open');
+
+    // A number that is not on WhatsApp produces a dialog instead of a chat.
+    const invalid = await evalInGuest(dbg, `/phone number shared via url is invalid|isn't on WhatsApp|not on WhatsApp/i.test(document.body.innerText)`);
+    if (invalid) throw new Error('That number is not on WhatsApp');
+
+    // 2. Swallow the native file picker and capture the input WhatsApp opens
+    //    it from. Without this, clicking "Document" blocks on an OS dialog.
+    await evalInGuest(dbg, `(() => {
+      window.__maestroCap = null;
+      if (!window.__maestroOrigClick) window.__maestroOrigClick = HTMLInputElement.prototype.click;
+      HTMLInputElement.prototype.click = function () {
+        if (this.type === 'file') { window.__maestroCap = this; return; }
+        return window.__maestroOrigClick.apply(this, arguments);
+      };
+      return true;
+    })()`);
+
+    // 3. Attach menu → Document. The menu is a toggle, so only open it if the
+    //    Document item isn't already showing.
+    const docItemExpr = `(() => {
+      const mi = [...document.querySelectorAll('[role=menuitem]')].find(e => /document/i.test(e.innerText || ''));
+      if (!mi) return null;
+      const r = mi.getBoundingClientRect();
+      return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+    })()`;
+    let docPoint = await evalInGuest(dbg, docItemExpr);
+    if (!docPoint) {
+      const attachPoint = await evalInGuest(dbg, centreOfExpr('[data-icon=ic-attach-file]'));
+      if (!attachPoint) throw new Error('Could not find the attach button');
+      await clickInGuest(dbg, attachPoint);
+      docPoint = await waitInGuest(dbg, docItemExpr, 8000, 'the attach menu');
+    }
+    await clickInGuest(dbg, docPoint);
+
+    // 4. Hand the file straight to the captured input.
+    await waitInGuest(dbg, `!!window.__maestroCap`, 8000, 'the document file input');
+    const ref = await dbg.sendCommand('Runtime.evaluate', { expression: 'window.__maestroCap', returnByValue: false });
+    const objectId = ref?.result?.objectId;
+    if (!objectId) throw new Error('Could not reach the file input');
+    await dbg.sendCommand('DOM.setFileInputFiles', { files: [tmpPath], objectId });
+
+    // 5. Confirm THIS file is really attached before sending, so a failed
+    //    attach can never send a bare caption to a customer.
+    //
+    //    Two independent conditions, both required:
+    //      a) the captured <input type=file> actually holds our file — the
+    //         direct, render-independent proof that the attach worked;
+    //      b) WhatsApp has produced a preview for it — either the name appears
+    //         in the document, or the send affordance has appeared.
+    //    (b) used to be the only check, matching on the filename alone. That
+    //    is at WhatsApp's mercy: it truncates long document names in the
+    //    preview, so the match failed, this step timed out, Send was never
+    //    clicked, and every bill fell back to "downloaded only".
+    const nameNoExt = safeName.replace(/\.pdf$/i, '');
+    await waitInGuest(
+      dbg,
+      `(() => {
+        const cap = window.__maestroCap;
+        const attached = !!(cap && cap.files && cap.files.length === 1 &&
+                            cap.files[0].name === ${JSON.stringify(safeName)});
+        const previewed = document.body.innerText.includes(${JSON.stringify(nameNoExt)}) ||
+                          !!document.querySelector('[data-icon=wds-ic-send-filled]');
+        return attached && previewed;
+      })()`,
+      20_000,
+      'the attachment preview',
+    );
+
+    // 6. Make sure the caption actually made it into the preview; insert it
+    //    without keystrokes if not (Enter here would send prematurely).
+    if (caption) {
+      const hasCaption = await evalInGuest(dbg, `(() => {
+        const boxes = [...document.querySelectorAll('[contenteditable=true]')];
+        return boxes.some(b => (b.innerText || '').includes(${JSON.stringify(caption.split('\n')[0])}));
+      })()`);
+      if (!hasCaption) {
+        const capPoint = await evalInGuest(dbg, centreOfExpr('[contenteditable=true]'));
+        if (capPoint) {
+          await clickInGuest(dbg, capPoint);
+          await dbg.sendCommand('Input.insertText', { text: caption });
+          await new Promise((r) => setTimeout(r, 400));
+        }
+      }
+    }
+
+    // 7. Send, and confirm the composer actually cleared.
+    const sendPoint = await waitInGuest(dbg, centreOfExpr('[data-icon=wds-ic-send-filled]'), 10_000, 'the send button');
+    await clickInGuest(dbg, sendPoint);
+    await waitInGuest(
+      dbg,
+      `!document.body.innerText.includes(${JSON.stringify(nameNoExt)}) || !document.querySelector('[data-icon=wds-ic-send-filled]')`,
+      20_000,
+      'the message to be sent',
+    );
+
+    return { ok: true };
+  } finally {
+    // Always un-patch: leaving the prototype hooked would break the operator's
+    // own manual attach (the picker would never open again).
+    try {
+      await evalInGuest(dbg, `(() => {
+        if (window.__maestroOrigClick) { HTMLInputElement.prototype.click = window.__maestroOrigClick; delete window.__maestroOrigClick; }
+        window.__maestroCap = null; return true;
+      })()`);
+    } catch { /* guest may be gone; nothing to restore */ }
+    if (attached) { try { dbg.detach(); } catch { /* already detached */ } }
+    // Remove the file and the directory that was created to hold it, so the
+    // temp dir doesn't accumulate one folder per bill sent.
+    try { fs.unlinkSync(tmpPath); } catch { /* best effort */ }
+    try { fs.rmdirSync(tmpDir); } catch { /* best effort */ }
+  }
+}
+
+ipcMain.handle('whatsapp:send', async (_event, payload) => {
+  try {
+    return await sendWhatsAppPdf(payload || {});
+  } catch (err) {
+    console.error('WhatsApp auto-send failed:', err);
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
+ipcMain.handle('whatsapp:send-text', async (_event, payload) => {
+  try {
+    return await sendWhatsAppText(payload || {});
+  } catch (err) {
+    console.error('WhatsApp text send failed:', err);
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
+ipcMain.handle('whatsapp:status', async () => {
+  if (!whatsappGuest || whatsappGuest.isDestroyed()) {
+    return { status: 'disconnected' };
+  }
+  try {
+    const res = await whatsappGuest.executeJavaScript(`(() => {
+      if (document.querySelector('footer [contenteditable=true]') || document.querySelector('#pane-side') || document.querySelector('[data-icon=chat]')) return 'connected';
+      if (/To use WhatsApp on your computer|Scan this QR code/i.test(document.body?.innerText || '') || document.querySelector('canvas[aria-label]')) return 'qr_ready';
+      if (/Connecting|Trying to connect/i.test(document.body?.innerText || '')) return 'connecting';
+      if (document.querySelector('[data-icon=refresh]')) return 'disconnected';
+      return 'loading';
+    })()`).catch(() => 'loading');
+    return { status: res || 'loading' };
+  } catch {
+    return { status: 'loading' };
+  }
+});
+
+
+// A crash in a non-renderer child process (GPU, print backend/spooler
+// service, network service, etc.) doesn't fire render-process-gone above —
+// that's renderer-only. Printing in particular can spin up its own
+// out-of-process print-compositor/backend service, and certain printer
+// drivers are known to crash it when print settings change mid-dialog (e.g.
+// switching the destination printer while the preview re-renders). Without
+// this handler such a crash was silently unhandled — just logging it here
+// stops it from being a mystery "the app vanished" report with no trace,
+// and Chromium already recovers most of these services on its own; only the
+// GPU process taking the renderer down with it would still hit
+// render-process-gone separately.
+app.on('child-process-gone', (_e, details) => {
+  console.error(`Child process gone: type=${details.type} reason=${details.reason} name=${details.name ?? ''}`);
+});
+
+let networkMode = 'server';
+// True only while the Connection Setup window is open — see runSetup().
+let setupInFlight = false;
+// What an install runs as unless it has been told otherwise: its own
+// database, loopback only. Every existing 2.0.0 install has no
+// network-mode.json at all, so this is also what they upgrade into — they
+// must never be stopped by a connection question they didn't ask for.
+const DEFAULT_NETWORK_CONFIG = { mode: 'server', share: false };
+
+// Asks for the connection settings (first run, or after the main PC turned
+// out to be unreachable), saves them, then boots accordingly. Recursive on
+// purpose: a client that still can't reach the main PC lands back on the
+// setup screen instead of a dead window with no way out.
+function startWithConfig(cfg) {
+  networkMode = cfg.mode;
+  APP_URL = cfg.mode === 'client' ? clientOrigin(cfg.address) : LOCAL_URL;
+
+  if (cfg.mode === 'server') {
+    try {
+      startBackend(cfg.share);
+    } catch (err) {
+      dialog.showErrorBox('MM Billing could not start', String(err && err.stack ? err.stack : err));
+      app.quit();
+      return;
+    }
+    waitForServer(60, createWindow);
+    return;
+  }
+
+  // Client mode: nothing to boot locally — just check the main PC answers.
+  // Far fewer retries than a local boot: this isn't waiting for a server to
+  // warm up, it's asking whether another PC is switched on and reachable, and
+  // making the operator stare at a blank window for 30s to find that out is
+  // worse than telling them in 5.
+  waitForServer(10, createWindow, () => {
+    // Button index, not an object — see chooseDbDirOnFirstRun above.
+    const response = dialog.showMessageBoxSync({
+      type: 'error',
+      title: 'MM Billing — Cannot Reach the Main PC',
+      message: `No answer from ${cfg.address}`,
+      detail:
+        'Check that:\n' +
+        '  • the Main PC is switched on and MM Billing is open on it\n' +
+        '  • both PCs are on the same Wi-Fi\n' +
+        "  • the Main PC's Connection Setup has sharing turned on\n" +
+        '  • the address is still correct (it can change if the router reassigns it)',
+      buttons: ['Retry', 'Change Connection Settings…', 'Quit'],
+      defaultId: 0,
+      cancelId: 2,
+      noLink: true,
+    });
+    if (response === 0) return startWithConfig(cfg);
+    if (response === 1) return runSetup(cfg);
+    app.quit();
+  });
+}
+
+function runSetup(current) {
+  // Destroying the setup window leaves zero open windows, and Electron emits
+  // 'window-all-closed' synchronously during that destroy — i.e. BEFORE the
+  // .then() below (a microtask) can open the real window. Without this flag
+  // the handler's app.quit() fires mid-setup: in client mode that reaches
+  // beginGracefulShutdown's app.exit(0) and kills the app with the operator's
+  // just-saved settings never applied, and in server mode it latches
+  // `quitting = true`, so the genuine quit later that session skips the
+  // backend's SIGTERM shutdown entirely — reintroducing the zombie chrome.exe
+  // the before-quit fix exists to prevent.
+  setupInFlight = true;
+  showSetupWindow(current).then((cfg) => {
+    setupInFlight = false;
+    if (!cfg) {
+      // Cancelled — carry on with whatever was already in effect. There is
+      // always something to fall back to now that a missing config means
+      // "normal single-PC install" rather than "must answer this dialog".
+      return startWithConfig(current ?? DEFAULT_NETWORK_CONFIG);
+    }
+    writeNetworkConfig(cfg);
+    startWithConfig(cfg);
+  });
+}
+
+// Changing the connection afterwards is rare — the usual case (the router
+// gave the main PC a new address) is already handled by the "Cannot Reach the
+// Main PC" dialog's own "Change Connection Settings…" button. This menu is
+// the deliberate route for everything else: switching a PC between main and
+// second, or turning sharing on later. The menu bar is auto-hidden, so it
+// appears on Alt; Ctrl+Shift+C works without it.
+// Asks the running backend where backups actually live, so the file picker
+// opens in the right folder — that location is an operator setting
+// (Settings → Database), not something main.js can derive on its own.
+// Best-effort: if anything goes wrong the picker just opens with no default.
+function fetchBackupDir() {
+  return new Promise((resolve) => {
+    const req = http.get(
+      `${APP_URL}/api/v1/backups`,
+      { headers: { 'X-Requested-With': 'maestro-billing-app' } },
+      (res) => {
+        let body = '';
+        res.setEncoding('utf8');
+        res.on('data', (chunk) => (body += chunk));
+        res.on('end', () => {
+          try {
+            resolve(JSON.parse(body)?.meta?.backupDir ?? null);
+          } catch {
+            resolve(null);
+          }
+        });
+      },
+    );
+    req.on('error', () => resolve(null));
+    req.setTimeout(3000, () => {
+      req.destroy();
+      resolve(null);
+    });
+  });
+}
+
+async function restoreFromBackup() {
+  // Client mode has no local database — the database it shows belongs to the
+  // main PC, and restoring it from here would be both wrong and confusing.
+  if (networkMode === 'client') {
+    dialog.showMessageBoxSync(mainWindow ?? undefined, {
+      type: 'info',
+      title: 'MM Billing',
+      message: 'Restore has to be done on the Main PC.',
+      detail:
+        'This PC does not hold the database — it shows the Main PC\'s. Open MM Billing on ' +
+        'the Main PC and use Setup → Restore from Backup… there.',
+      buttons: ['OK'],
+      noLink: true,
+    });
+    return;
+  }
+
+  const backupDir = await fetchBackupDir();
+  const picked = dialog.showOpenDialogSync(mainWindow ?? undefined, {
+    title: 'Choose a backup to restore',
+    // Not restricted to the backup folder: "Save a Copy" exists precisely so
+    // operators can keep copies on a USB drive or a cloud-synced folder, and
+    // the case where that copy is the only surviving one is exactly the case
+    // this feature is for.
+    defaultPath: backupDir ?? undefined,
+    filters: [{ name: 'Database Backup', extensions: ['db'] }],
+    properties: ['openFile'],
+  });
+  if (!picked || picked.length === 0) return;
+  const source = picked[0];
+
+  if (!looksLikeSqliteDb(source)) {
+    dialog.showMessageBoxSync(mainWindow ?? undefined, {
+      type: 'error',
+      title: 'MM Billing',
+      message: 'That file is not a MM Billing backup.',
+      detail: `${source}\n\nPick a "studio_….db" file from your backup folder.`,
+      buttons: ['OK'],
+      noLink: true,
+    });
+    return;
+  }
+
+  const { mtime } = fs.statSync(source);
+  const confirm1 = dialog.showMessageBoxSync(mainWindow ?? undefined, {
+    type: 'warning',
+    title: 'MM Billing — Restore Database',
+    message: 'Replace the current database with this backup?',
+    detail:
+      `${source}\n(from ${mtime.toLocaleString()})\n\n` +
+      'EVERY bill, customer and product added since this backup was taken will be GONE.\n\n' +
+      'MM Billing will close and reopen to do this.',
+    buttons: ['Continue', 'Cancel'],
+    defaultId: 1,
+    cancelId: 1,
+    noLink: true,
+  });
+  if (confirm1 !== 0) return;
+
+  const confirm2 = dialog.showMessageBoxSync(mainWindow ?? undefined, {
+    type: 'warning',
+    title: 'MM Billing — Are You Sure?',
+    message: 'This cannot be undone from inside the app.',
+    detail:
+      'A copy of the current database will be saved next to it as a ".before-restore-…" file, ' +
+      'so support can put it back if this turns out to be the wrong backup.\n\n' +
+      'Restore now?',
+    buttons: ['Restore and Restart', 'Cancel'],
+    defaultId: 1,
+    cancelId: 1,
+    noLink: true,
+  });
+  if (confirm2 !== 0) return;
+
+  fs.mkdirSync(path.dirname(PENDING_RESTORE), { recursive: true });
+  fs.writeFileSync(PENDING_RESTORE, JSON.stringify({ source, chosenAt: new Date().toISOString() }), 'utf8');
+  app.relaunch();
+  app.quit(); // graceful: before-quit still runs the backend's SIGTERM shutdown
+}
+
+/**
+ * Alt → Setup → "Restore Default Products & Services…".
+ *
+ * Puts back catalog items that ship with a fresh install and have since been
+ * deleted. Additive only — it never edits or removes anything, so unlike
+ * "Restore from Backup…" above it needs no restart, no file swap, and cannot
+ * lose work. The confirmation wording says so plainly rather than using the
+ * usual scary-warning tone, because a warning that doesn't match the risk just
+ * trains people to click through the ones that matter.
+ *
+ * Uses APP_URL rather than LOCAL_URL so a two-PC client correctly targets the
+ * Main PC's database — the catalog lives there, and a client has no local one.
+ */
+async function restoreCatalogDefaults() {
+  const { response } = await dialog.showMessageBox(mainWindow ?? undefined, {
+    type: 'question',
+    title: 'MM Billing',
+    message: 'Restore the default products and services?',
+    detail:
+      'Any standard item that was deleted comes back. Nothing is removed and no ' +
+      'prices are changed — items you added yourself, and any price or GST you ' +
+      'have edited, are left exactly as they are.',
+    buttons: ['Restore Defaults', 'Cancel'],
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true,
+  });
+  if (response !== 0) return;
+
+  try {
+    const res = await fetch(`${APP_URL}/api/v1/catalog/restore-defaults`, {
+      method: 'POST',
+      // Mutating routes require this header (see middleware/requireAppHeader).
+      headers: { 'X-Requested-With': 'maestro-billing-app', 'Content-Type': 'application/json' },
+    });
+    if (!res.ok) throw new Error(`Server returned ${res.status}`);
+    const body = await res.json();
+    const d = (body && body.data) || {};
+    const line = (label, c) =>
+      c ? `${label}: ${c.created} added, ${c.reactivated} restored, ${c.unchanged} already there` : null;
+    const summary = [
+      line('Products', d.products),
+      line('MM Products', d.mmProducts),
+      line('Services', d.services),
+    ].filter(Boolean).join('\n');
+    const touched =
+      (d.products?.created ?? 0) + (d.products?.reactivated ?? 0) +
+      (d.mmProducts?.created ?? 0) + (d.mmProducts?.reactivated ?? 0) +
+      (d.services?.created ?? 0) + (d.services?.reactivated ?? 0);
+
+    // The catalog pages hold their lists in TanStack Query caches, so a reload
+    // is what actually makes the restored rows appear.
+    if (touched > 0 && mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.reload();
+
+    await dialog.showMessageBox(mainWindow ?? undefined, {
+      type: 'info',
+      title: 'MM Billing',
+      message: touched > 0 ? 'Default items restored.' : 'Nothing to restore.',
+      detail: touched > 0
+        ? summary
+        : 'Every default product and service is already in your catalog.\n\n' + summary,
+      buttons: ['OK'],
+      noLink: true,
+    });
+  } catch (err) {
+    dialog.showErrorBox(
+      'MM Billing',
+      `The default products and services could not be restored:\n${err.message}`,
+    );
+  }
+}
+
+function buildMenu() {
+  Menu.setApplicationMenu(
+    Menu.buildFromTemplate([
+      {
+        label: '&Setup',
+        submenu: [
+          {
+            label: 'Restore from Backup…',
+            click: () => {
+              restoreFromBackup().catch((err) => {
+                dialog.showErrorBox('MM Billing', `Restore could not be started:\n${err.message}`);
+              });
+            },
+          },
+          {
+            label: 'Restore Default Products & Services…',
+            click: () => { void restoreCatalogDefaults(); },
+          },
+          { type: 'separator' },
+          {
+            label: 'Connection Setup…',
+            accelerator: 'CommandOrControl+Shift+C',
+            click: () => {
+              dialog
+                .showMessageBox(mainWindow ?? undefined, {
+                  type: 'question',
+                  title: 'MM Billing',
+                  message: 'Change how this PC connects?',
+                  detail: 'MM Billing needs to restart to apply the new setting.',
+                  buttons: ['Continue', 'Cancel'],
+                  defaultId: 0,
+                  cancelId: 1,
+                  noLink: true,
+                })
+                .then(({ response }) => {
+                  if (response !== 0) return;
+                  showSetupWindow(readNetworkConfig()).then((cfg) => {
+                    if (!cfg) return;
+                    writeNetworkConfig(cfg);
+                    app.relaunch();
+                    app.quit();
+                  });
+                });
+            },
+          },
+          { type: 'separator' },
+          { role: 'reload' },
+          { role: 'quit' },
+        ],
+      },
+    ]),
+  );
+}
+
+app.whenReady().then(() => {
+  buildMenu();
+  // Registered once, here — not per boot. startWithConfig can be re-entered
+  // (Retry from the unreachable dialog, cancelling out of setup, switching
+  // mode), and re-registering would stack duplicate 'will-download' handlers
+  // on the shared default session: one "Download PDF" click would then open
+  // a Save As dialog per stacked listener, each racing setSavePath/cancel on
+  // the same item.
+  setupBackupDownloads();
+  setupWhatsAppSession();
+  // A missing config is NOT a question to ask — it's every existing install
+  // on upgrade, plus every fresh single-PC install. Boot normally; two-PC
+  // mode is opt-in via Setup → Connection Setup (Ctrl+Shift+C).
+  startWithConfig(readNetworkConfig() ?? DEFAULT_NETWORK_CONFIG);
+});
+
+app.on('window-all-closed', () => {
+  // The setup window is briefly the only window there is; quitting while it
+  // is open (or while its result is being applied) would kill the app right
+  // as the operator finished configuring it. See runSetup().
+  if (setupInFlight) return;
+  app.quit();
+});
+
+let quitting = false;
+function beginGracefulShutdown() {
+  if (quitting) return;
+  quitting = true;
+  // In client mode there is no backend in this process, so nothing is
+  // listening for SIGTERM — process.emit() would just return false and the
+  // app would hang on quit forever, since before-quit already called
+  // preventDefault(). Exit directly instead; there's nothing local to flush.
+  if (networkMode === 'client') {
+    app.exit(0);
+    return;
+  }
+  try {
+    process.emit('SIGTERM', 'SIGTERM');
+  } catch {
+    app.exit(1);
+  }
+}
+
+app.on('before-quit', (event) => {
+  // Without preventDefault, Electron's own quit sequence races ahead and can
+  // kill the process before the backend's async shutdown below — closing
+  // WhatsApp's Chrome and disconnecting Prisma — has actually finished,
+  // leaving a zombie chrome.exe holding the session lock. The backend's
+  // SIGTERM handler ends with process.exit() itself, which is what actually
+  // terminates the app (with its own 10s failsafe if something hangs).
+  if (quitting) return;
+  event.preventDefault();
+  beginGracefulShutdown();
+});
+
+// Windows/Linux-only: fired on OS shutdown, restart, or user log-off — a
+// separate path from a normal in-app quit, and one 'before-quit' does NOT
+// cover. Without this handler, Windows just force-kills the whole process
+// (including WhatsApp's Chrome instance) partway through, whatever it's
+// doing at that instant — which was the actual cause of WhatsApp needing a
+// fresh QR scan after a system shutdown/restart (not a real "logout" call
+// anywhere in this codebase, just an unclean process kill). preventDefault()
+// has no effect here (Windows will not wait for us either way), so this is
+// purely "run cleanup as fast as possible before the OS pulls the plug."
+app.on('session-end', beginGracefulShutdown);

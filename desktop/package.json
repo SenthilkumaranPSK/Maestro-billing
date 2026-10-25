@@ -1,0 +1,87 @@
+{
+  "name": "mm-billing-desktop",
+  "version": "1.0.0",
+  "description": "MM Billing System (Moru Moru Snacks)",
+  "main": "main.js",
+  "author": "Sree Meenakshi Enterprises",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "icon": "node scripts/make-mm-icon.js",
+    "stage": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/stage.ps1",
+    "dist": "npm run stage && electron-builder --win"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "png-to-ico": "^2.1.8",
+    "sharp": "^0.35.3"
+  },
+  "build": {
+    "appId": "in.sreemeenakshi.mmbilling",
+    "productName": "MM Billing",
+    "asar": true,
+    "asarUnpack": [
+      "**/.prisma/**",
+      "**/@prisma/engines/**"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "setup.html",
+      {
+        "from": "staging/backend_dist",
+        "to": "backend/dist"
+      },
+      {
+        "from": "staging/backend_package.json",
+        "to": "backend/package.json"
+      },
+      {
+        "from": "staging/backend_prisma",
+        "to": "backend/prisma"
+      },
+      {
+        "from": "staging/root_node_modules",
+        "to": "node_modules"
+      },
+      {
+        "from": "staging/frontend_dist",
+        "to": "frontend/dist"
+      }
+    ],
+    "extraResources": [
+      {
+        "from": "build/icon.ico",
+        "to": "icon.ico"
+      },
+      {
+        "from": "template",
+        "to": "template"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": false,
+      "createDesktopShortcut": true,
+      "shortcutName": "MM Billing",
+      "runAfterFinish": true
+    }
+  }
+}
