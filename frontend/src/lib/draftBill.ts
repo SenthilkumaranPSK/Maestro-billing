@@ -25,6 +25,14 @@ export interface DraftBillFields {
   buyerName?: string;
   buyerAddress?: string;
   buyerGstin?: string;
+  billDate?: string;
+  deliveryNote?: string;
+  termsOfPayment?: string;
+  buyersOrderNo?: string;
+  buyersOrderDate?: string;
+  dispatchDocNo?: string;
+  deliveryNoteDate?: string;
+  termsOfDelivery?: string;
   billedByName?: string;
 }
 
@@ -83,7 +91,7 @@ export function buildDraftBill(fields: DraftBillFields): Bill {
     customer: series === 'MAIN' ? (customerRecord as Customer | undefined) : undefined,
     mmCustomerId: series === 'MM' ? fields.customer.id : undefined,
     mmCustomer: series === 'MM' ? (customerRecord as MmCustomer | undefined) : undefined,
-    billDate: new Date().toISOString(),
+    billDate: fields.billDate ? (fields.billDate.includes('T') ? fields.billDate : `${fields.billDate}T12:00:00.000Z`) : new Date().toISOString(),
     subTotal: subTotalP,
     gstAmount: gstAmountP,
     discountAmount: 0,
@@ -105,6 +113,13 @@ export function buildDraftBill(fields: DraftBillFields): Bill {
     buyerName: fields.buyerName,
     buyerAddress: fields.buyerAddress,
     buyerGstin: fields.buyerGstin,
+    deliveryNote: fields.deliveryNote,
+    termsOfPayment: fields.termsOfPayment,
+    buyersOrderNo: fields.buyersOrderNo,
+    buyersOrderDate: fields.buyersOrderDate,
+    dispatchDocNo: fields.dispatchDocNo,
+    deliveryNoteDate: fields.deliveryNoteDate,
+    termsOfDelivery: fields.termsOfDelivery,
     billedByName: fields.billedByName,
     series,
     items,

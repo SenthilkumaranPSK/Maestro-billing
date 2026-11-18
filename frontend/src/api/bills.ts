@@ -45,6 +45,13 @@ export interface CreateBillPayload {
   buyerName?: string;
   buyerAddress?: string;
   buyerGstin?: string;
+  deliveryNote?: string;
+  termsOfPayment?: string;
+  buyersOrderNo?: string;
+  buyersOrderDate?: string;
+  dispatchDocNo?: string;
+  deliveryNoteDate?: string;
+  termsOfDelivery?: string;
   // "Billed By" (cashier) — see backend schema.prisma Bill.billedById/billedByName.
   billedById?: number;
   billedByName?: string;
@@ -79,8 +86,15 @@ export const billsApi = {
   create: (data: CreateBillPayload) =>
     api.post<ApiResponse<Bill>>('/bills', data).then((r) => r.data.data),
 
-  editBill: (id: number, data: CreateBillPayload) =>
-    api.put<ApiResponse<Bill>>(`/bills/${id}`, data).then((r) => r.data.data),
+  editBill: (id: number, data: CreateBillPayload, securityPin?: string) =>
+    api
+      .put<ApiResponse<Bill>>(
+        `/bills/${id}`,
+        data,
+        securityPin ? { headers: { 'x-security-pin': securityPin } } : undefined
+      )
+      .then((r) => r.data.data),
 
-  delete: (id: number) => api.delete(`/bills/${id}`),
+  delete: (id: number, securityPin?: string) =>
+    api.delete(`/bills/${id}`, securityPin ? { headers: { 'x-security-pin': securityPin } } : undefined),
 };

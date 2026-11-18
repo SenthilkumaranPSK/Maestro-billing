@@ -198,6 +198,13 @@ export interface Bill {
   buyerName?: string;
   buyerAddress?: string;
   buyerGstin?: string;
+  deliveryNote?: string;
+  termsOfPayment?: string;
+  buyersOrderNo?: string;
+  buyersOrderDate?: string;
+  dispatchDocNo?: string;
+  deliveryNoteDate?: string;
+  termsOfDelivery?: string;
   // "Billed By" (cashier) — MAIN billing only so far. See lib/staff.ts for
   // the staff list and backend schema.prisma Bill.billedById/billedByName.
   billedById?: number;
@@ -277,10 +284,12 @@ export interface Settings {
     mm_bank_branch?: string;
     mm_bank_ifsc?: string;
     mm_jurisdiction?: string;
+    mm_logo_data?: string;
   };
   // Gate on editing a saved bill (both MAIN and MM) — see PasswordGateModal.
   security: {
     bill_edit_password: string;
+    bill_edit_protection_enabled?: string;
   };
 }
 

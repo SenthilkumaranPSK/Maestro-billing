@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Plus, Printer, FileText, ScanEye, Save, RotateCcw, CalendarDays } from 'lucide-react';
+import { Plus, Printer, FileText, ScanEye, Save, RotateCcw, Zap, FileSpreadsheet } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -65,6 +65,7 @@ export default function MmBillingPage() {
   const [sendOnWhatsApp, setSendOnWhatsApp] = useState(false);
   const navigate = useNavigate();
   const [sendingWhatsApp, setSendingWhatsApp] = useState(false);
+  const [previousDueRupees, setPreviousDueRupees] = useState('');
   // How the bill was paid — shown in the form and history/detail views only,
   // never on the printed invoice. See components/billing/PaymentModeSelect.
   const [paymentMode, setPaymentMode] = useState<PaymentMode | ''>('');
@@ -79,6 +80,18 @@ export default function MmBillingPage() {
   // Internal record only — never printed on the Tax Invoice (same rule as
   // paymentMode above). See schema.prisma Bill.notes.
   const [notes, setNotes] = useState('');
+
+  // Editable Bill Date (defaults to today YYYY-MM-DD)
+  const [billDate, setBillDate] = useState(() => new Date().toISOString().slice(0, 10));
+
+  // Tally Order & Dispatch Details
+  const [termsOfPayment, setTermsOfPayment] = useState('');
+  const [deliveryNote, setDeliveryNote] = useState('');
+  const [deliveryNoteDate, setDeliveryNoteDate] = useState('');
+  const [buyersOrderNo, setBuyersOrderNo] = useState('');
+  const [buyersOrderDate, setBuyersOrderDate] = useState('');
+  const [dispatchDocNo, setDispatchDocNo] = useState('');
+  const [termsOfDelivery, setTermsOfDelivery] = useState('');
 
   // Tax Invoice Details — same fields as the main Billing page's MM/A4 mode,
   // always shown here since MM bills always need them.
@@ -116,6 +129,104 @@ export default function MmBillingPage() {
     queryKey: ['settings'],
     queryFn: settingsApi.get,
   });
+
+  const { data: customerPastBills } = useQuery({
+    queryKey: ['mm-customer-bills', customer.id],
+    queryFn: () => mmCustomersApi.getBills(customer.id!),
+    enabled: !!customer.id && !savedBill,
+  });
+
+  const lastBill = customerPastBills && customerPastBills.length > 0 ? customerPastBills[0] : null;
+
+  // Fetch all MM customers and past bills to provide typing history for Buyers and Consignees
+  const { data: mmCustomersList } = useQuery({
+    queryKey: ['mm-customers', 'history-parties'],
+    queryFn: () => mmCustomersApi.list({ limit: 100 }),
+    staleTime: 60_000,
+  });
+
+  const { data: pastMmBillsList } = useQuery({
+    queryKey: ['bills', 'history-parties', 'MM'],
+    queryFn: () => billsApi.list({ series: 'MM', limit: 100 }),
+    staleTime: 60_000,
+  });
+
+  const partyHistory = useMemo(() => {
+    const map = new Map<string, { name: string; address: string; gstin: string }>();
+
+    (mmCustomersList?.data || []).forEach((c) => {
+      if (c.name?.trim()) {
+        const key = c.name.trim().toLowerCase();
+        if (!map.has(key)) {
+          map.set(key, {
+            name: c.name.trim(),
+            address: c.address?.trim() || '',
+            gstin: c.gstin?.trim() || '',
+          });
+        }
+      }
+    });
+
+    (pastMmBillsList?.data || []).forEach((b) => {
+      if (b.buyerName?.trim()) {
+        const key = b.buyerName.trim().toLowerCase();
+        if (!map.has(key)) {
+          map.set(key, {
+            name: b.buyerName.trim(),
+            address: b.buyerAddress?.trim() || '',
+            gstin: b.buyerGstin?.trim() || '',
+          });
+        }
+      }
+      if (b.consigneeName?.trim()) {
+        const key = b.consigneeName.trim().toLowerCase();
+        if (!map.has(key)) {
+          map.set(key, {
+            name: b.consigneeName.trim(),
+            address: b.consigneeAddress?.trim() || '',
+            gstin: b.consigneeGstin?.trim() || '',
+          });
+        }
+      }
+    });
+
+    return Array.from(map.values());
+  }, [mmCustomersList, pastMmBillsList]);
+
+  const [showBuyerSuggestions, setShowBuyerSuggestions] = useState(false);
+  const [showConsigneeSuggestions, setShowConsigneeSuggestions] = useState(false);
+
+  const buyerSuggestions = useMemo(() => {
+    if (!buyerName.trim()) return partyHistory.slice(0, 8);
+    const q = buyerName.toLowerCase();
+    return partyHistory.filter((p) => p.name.toLowerCase().includes(q)).slice(0, 8);
+  }, [partyHistory, buyerName]);
+
+  const consigneeSuggestions = useMemo(() => {
+    if (!consigneeName.trim()) return partyHistory.slice(0, 8);
+    const q = consigneeName.toLowerCase();
+    return partyHistory.filter((p) => p.name.toLowerCase().includes(q)).slice(0, 8);
+  }, [partyHistory, consigneeName]);
+
+  const handleReorderLastBill = () => {
+    if (!lastBill || !lastBill.items || lastBill.items.length === 0) return;
+    const newItems: BillItemForm[] = lastBill.items.map((it) => ({
+      _id: newId(),
+      mmProductId: it.mmProductId ?? undefined,
+      productName: it.productName,
+      unit: it.unit || 'Kgs',
+      qty: it.qty,
+      unitPrice: paisaToRupee(it.unitPrice),
+      gstRate: it.gstRate,
+      hsnSac: it.hsnSac || undefined,
+    }));
+    setItems(newItems);
+    toast({
+      title: 'Previous order loaded!',
+      description: `Loaded ${newItems.length} items from Bill #${lastBill.billNumber}.`,
+      variant: 'success',
+    });
+  };
   // Editable via MM Settings — falls back to the seeded 5% until that
   // setting exists (older installs, or before settings finish loading).
   const defaultGstRate = Number(settings?.mm?.mm_default_gst_rate ?? 5);
@@ -124,6 +235,18 @@ export default function MmBillingPage() {
 
   // Re-suggest Inter-state whenever the selected customer's GSTIN changes —
   // still just a default, the checkbox stays freely overridable.
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest('.party-autocomplete-container')) {
+        setShowBuyerSuggestions(false);
+        setShowConsigneeSuggestions(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
   useEffect(() => {
     if (savedBill) return;
     const suggestion = suggestInterState(settings?.studio?.studio_gstin, customer.gstin);
@@ -166,11 +289,20 @@ export default function MmBillingPage() {
         buyerName: buyerManualEntry ? buyerName : undefined,
         buyerAddress: buyerManualEntry ? buyerAddress : undefined,
         buyerGstin: buyerManualEntry ? buyerGstin : undefined,
+        billDate,
+        deliveryNote,
+        termsOfPayment,
+        buyersOrderNo,
+        buyersOrderDate,
+        dispatchDocNo,
+        deliveryNoteDate,
+        termsOfDelivery,
       }),
     [
       nextNumber, items, gstInclusive, isInterState, customer, roundOffP, vehicleNo, despatchedThrough, destination,
       otherReference, ewayBillNo, irnNo, consigneeName, consigneeAddress, consigneeGstin,
       buyerManualEntry, buyerName, buyerAddress, buyerGstin,
+      billDate, deliveryNote, termsOfPayment, buyersOrderNo, buyersOrderDate, dispatchDocNo, deliveryNoteDate, termsOfDelivery,
     ],
   );
 
@@ -282,7 +414,7 @@ export default function MmBillingPage() {
 
     createBillMutation.mutate({
       mmCustomerId,
-      billDate: new Date().toISOString(),
+      billDate: billDate ? (billDate.includes('T') ? billDate : `${billDate}T12:00:00.000Z`) : new Date().toISOString(),
       items: validItems.map((i) => ({
         // MM items never link back to a Product row — see LineItemRow's
         // catalog='mm' note (productId is a FK into Product only). They
@@ -313,6 +445,13 @@ export default function MmBillingPage() {
       buyerName: buyerManualEntry ? buyerName.trim() || undefined : undefined,
       buyerAddress: buyerManualEntry ? buyerAddress.trim() || undefined : undefined,
       buyerGstin: buyerManualEntry ? buyerGstin.trim() || undefined : undefined,
+      deliveryNote: deliveryNote.trim() || undefined,
+      termsOfPayment: termsOfPayment.trim() || undefined,
+      buyersOrderNo: buyersOrderNo.trim() || undefined,
+      buyersOrderDate: buyersOrderDate.trim() || undefined,
+      dispatchDocNo: dispatchDocNo.trim() || undefined,
+      deliveryNoteDate: deliveryNoteDate.trim() || undefined,
+      termsOfDelivery: termsOfDelivery.trim() || undefined,
       series: 'MM',
     });
   };
@@ -320,13 +459,19 @@ export default function MmBillingPage() {
   const handlePrint = async () => {
     if (!savedBill) return;
     const { printMmA4InvoicePDF } = await loadMmA4Lib();
-    await printMmA4InvoicePDF(savedBill, settings ?? {});
+    const prevDue = Number(previousDueRupees) > 0 ? rupeeToPaisa(Number(previousDueRupees)) : undefined;
+    await printMmA4InvoicePDF(savedBill, settings ?? {}, {
+      previousDueP: prevDue,
+    });
   };
 
   const handleDownloadPdf = async () => {
     if (!savedBill) return;
     const { downloadMmA4InvoicePDF } = await loadMmA4Lib();
-    await downloadMmA4InvoicePDF(savedBill, settings ?? {});
+    const prevDue = Number(previousDueRupees) > 0 ? rupeeToPaisa(Number(previousDueRupees)) : undefined;
+    await downloadMmA4InvoicePDF(savedBill, settings ?? {}, {
+      previousDueP: prevDue,
+    });
   };
 
   /** "Send Bill on WhatsApp" sends directly in background if phone is valid, or opens dialog if missing */
@@ -348,6 +493,7 @@ export default function MmBillingPage() {
     setPaymentMode('');
     setGstInclusive(false);
     setNotes('');
+    setPreviousDueRupees('');
     setVehicleNo('');
     setDespatchedThrough('');
     setDestination('');
@@ -361,6 +507,14 @@ export default function MmBillingPage() {
     setBuyerName('');
     setBuyerAddress('');
     setBuyerGstin('');
+    setBillDate(new Date().toISOString().slice(0, 10));
+    setTermsOfPayment('');
+    setDeliveryNote('');
+    setDeliveryNoteDate('');
+    setBuyersOrderNo('');
+    setBuyersOrderDate('');
+    setDispatchDocNo('');
+    setTermsOfDelivery('');
     qc.invalidateQueries({ queryKey: ['bills', 'next-number', 'MM'] });
     qc.refetchQueries({ queryKey: ['bills', 'next-number', 'MM'] });
   };
@@ -434,56 +588,226 @@ export default function MmBillingPage() {
         </div>
       </div>
 
-      {/* ── Customer + Date bar ─────────────────────────────── */}
+      {/* ── Customer + Payment Mode bar ─────────────────────────────── */}
       <Card className="border-brand-500/30 bg-brand-50/60">
         <CardContent className="pt-4 pb-4 grid grid-cols-12 gap-4 items-end">
-          <div className="col-span-6">
+          <div className="col-span-8">
             <Label className="text-xs text-muted-foreground mb-1.5 block">Customer</Label>
             <CustomerBar value={customer} onChange={setCustomer} disabled={!!savedBill} showAddress isMm />
           </div>
-          <div className="col-span-3">
-            <Label className="text-xs text-muted-foreground mb-1.5 flex items-center gap-1">
-              <CalendarDays className="w-3.5 h-3.5" /> Date
-            </Label>
-            <p className="h-10 flex items-center px-3 rounded-lg border border-slate-200 bg-slate-50 text-sm font-medium text-slate-700">
-              {new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
-            </p>
-          </div>
-          <div className="col-span-3">
+          <div className="col-span-4">
             <Label className="text-xs text-muted-foreground mb-1.5 block">Payment Mode</Label>
             <PaymentModeSelect value={paymentMode} onChange={setPaymentMode} disabled={!!savedBill} />
           </div>
         </CardContent>
       </Card>
 
-      {/* ── Tax Invoice Details — always shown for MM bills ─────────────── */}
-      <Card className="border-slate-200">
-        <CardContent className="pt-3 pb-3 space-y-3">
-          <p className="text-xs font-medium text-slate-500 uppercase tracking-wide">Tax Invoice Details</p>
-          <div className="grid grid-cols-12 gap-3">
-            <div className="col-span-3">
-              <Label className="text-xs text-muted-foreground mb-1.5 block">Vehicle No</Label>
-              <Input value={vehicleNo} disabled={!!savedBill} onChange={(e) => setVehicleNo(e.target.value)} />
+      {/* ── Repeat / Reorder Last Order Shortcut ────────────── */}
+      {!savedBill && lastBill && (
+        <div className="flex items-center justify-between px-3.5 py-2.5 rounded-lg border border-amber-300 bg-amber-50/90 text-amber-950 text-xs shadow-xs animate-in fade-in slide-in-from-top-1 duration-200">
+          <div className="flex items-center gap-2.5">
+            <div className="w-6 h-6 rounded-full bg-amber-200/80 flex items-center justify-center shrink-0">
+              <Zap className="w-3.5 h-3.5 text-amber-700 fill-amber-500" />
             </div>
-            <div className="col-span-3">
-              <Label className="text-xs text-muted-foreground mb-1.5 block">Despatched Through</Label>
-              <Input value={despatchedThrough} disabled={!!savedBill} onChange={(e) => setDespatchedThrough(e.target.value)} />
+            <div>
+              <span className="font-semibold text-amber-900">Repeat Last Order:</span>{' '}
+              <span>
+                Bill <strong>{lastBill.billNumber}</strong> ({new Date(lastBill.billDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}) —{' '}
+                <strong className="tabular-nums text-amber-900">{formatCurrency(lastBill.grandTotal)}</strong> ({lastBill.items?.length ?? 0} items)
+              </span>
             </div>
-            <div className="col-span-3">
-              <Label className="text-xs text-muted-foreground mb-1.5 block">Destination</Label>
-              <Input value={destination} disabled={!!savedBill} onChange={(e) => setDestination(e.target.value)} />
+          </div>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={handleReorderLastBill}
+            className="h-7 text-xs bg-white hover:bg-amber-100 border-amber-300 text-amber-900 font-semibold shadow-xs hover:border-amber-400"
+          >
+            <RotateCcw className="w-3 h-3 mr-1.5 text-amber-700" />
+            Load Last Order Items
+          </Button>
+        </div>
+      )}
+
+      {/* ── Tax Invoice Order & Dispatch Details — matching Tally GST format ─────────────── */}
+      <Card className="border-slate-200 shadow-xs">
+        <CardContent className="pt-3.5 pb-3.5 space-y-3.5">
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-semibold text-slate-700 uppercase tracking-wide flex items-center gap-1.5">
+              <FileSpreadsheet className="w-3.5 h-3.5 text-brand-600" />
+              Tax Invoice Order &amp; Dispatch Details
+            </p>
+            <span className="text-[11px] text-muted-foreground">
+              Official Tally 7-row layout (leave blank to omit)
+            </span>
+          </div>
+
+          {/* Section 1: Buyer's Order & Terms of Payment */}
+          <div className="rounded-md border border-slate-200/80 bg-slate-50/60 p-3 space-y-2.5">
+            <p className="text-[11px] font-semibold text-slate-600 uppercase tracking-wider">
+              1. Buyer's Order &amp; Terms of Payment
+            </p>
+            <div className="grid grid-cols-12 gap-3">
+              <div className="col-span-3">
+                <Label className="text-xs text-muted-foreground mb-1 block">Buyer's Order No.</Label>
+                <Input
+                  value={buyersOrderNo}
+                  disabled={!!savedBill}
+                  placeholder="e.g. PO-8924"
+                  onChange={(e) => setBuyersOrderNo(e.target.value)}
+                />
+              </div>
+              <div className="col-span-3">
+                <Label className="text-xs text-muted-foreground mb-1 block">Buyer's Order Date</Label>
+                <Input
+                  type="date"
+                  value={buyersOrderDate}
+                  disabled={!!savedBill}
+                  onChange={(e) => setBuyersOrderDate(e.target.value)}
+                  className="bg-white"
+                />
+              </div>
+              <div className="col-span-6">
+                <div className="flex items-center justify-between mb-1">
+                  <Label className="text-xs text-muted-foreground block">Terms of Payment / Credit</Label>
+                  {!savedBill && (
+                    <div className="flex gap-1 text-[10px]">
+                      {[
+                        { label: 'Immediate', val: 'Immediate' },
+                        { label: '15 Days', val: '15 Days Credit' },
+                        { label: '30 Days', val: '30 Days Credit' },
+                        { label: 'COD', val: 'Cash on Delivery' },
+                      ].map((chip) => (
+                        <button
+                          key={chip.label}
+                          type="button"
+                          onClick={() => setTermsOfPayment(chip.val)}
+                          className="px-1.5 py-0.5 rounded bg-slate-200 hover:bg-slate-300 text-slate-700 font-medium transition-colors"
+                        >
+                          {chip.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <Input
+                  value={termsOfPayment}
+                  disabled={!!savedBill}
+                  placeholder="e.g. 30 Days Credit / Immediate"
+                  onChange={(e) => setTermsOfPayment(e.target.value)}
+                />
+              </div>
             </div>
-            <div className="col-span-3">
-              <Label className="text-xs text-muted-foreground mb-1.5 block">E-Way Bill No</Label>
-              <Input value={ewayBillNo} disabled={!!savedBill} onChange={(e) => setEwayBillNo(e.target.value)} />
+          </div>
+
+          {/* Section 2: Delivery Note & Dispatch Documents */}
+          <div className="rounded-md border border-slate-200/80 bg-slate-50/60 p-3 space-y-2.5">
+            <p className="text-[11px] font-semibold text-slate-600 uppercase tracking-wider">
+              2. Delivery Note &amp; Dispatch Documents
+            </p>
+            <div className="grid grid-cols-12 gap-3">
+              <div className="col-span-3">
+                <Label className="text-xs text-muted-foreground mb-1 block">Delivery Note</Label>
+                <Input
+                  value={deliveryNote}
+                  disabled={!!savedBill}
+                  placeholder="e.g. DN-01"
+                  onChange={(e) => setDeliveryNote(e.target.value)}
+                />
+              </div>
+              <div className="col-span-3">
+                <Label className="text-xs text-muted-foreground mb-1 block">Delivery Note Date</Label>
+                <Input
+                  type="date"
+                  value={deliveryNoteDate}
+                  disabled={!!savedBill}
+                  onChange={(e) => setDeliveryNoteDate(e.target.value)}
+                  className="bg-white"
+                />
+              </div>
+              <div className="col-span-3">
+                <Label className="text-xs text-muted-foreground mb-1 block">Dispatch Doc No.</Label>
+                <Input
+                  value={dispatchDocNo}
+                  disabled={!!savedBill}
+                  placeholder="e.g. LR / RR No."
+                  onChange={(e) => setDispatchDocNo(e.target.value)}
+                />
+              </div>
+              <div className="col-span-3">
+                <Label className="text-xs text-muted-foreground mb-1 block">E-Way Bill No</Label>
+                <Input
+                  value={ewayBillNo}
+                  disabled={!!savedBill}
+                  placeholder="12-digit E-Way Bill"
+                  onChange={(e) => setEwayBillNo(e.target.value)}
+                />
+              </div>
+
+              <div className="col-span-4">
+                <Label className="text-xs text-muted-foreground mb-1 block">Dispatched Through</Label>
+                <Input
+                  value={despatchedThrough}
+                  disabled={!!savedBill}
+                  placeholder="e.g. VRL Logistics / By Hand"
+                  onChange={(e) => setDespatchedThrough(e.target.value)}
+                />
+              </div>
+              <div className="col-span-4">
+                <Label className="text-xs text-muted-foreground mb-1 block">Vehicle No</Label>
+                <Input
+                  value={vehicleNo}
+                  disabled={!!savedBill}
+                  placeholder="e.g. TN-01-AB-1234"
+                  onChange={(e) => setVehicleNo(e.target.value)}
+                />
+              </div>
+              <div className="col-span-4">
+                <Label className="text-xs text-muted-foreground mb-1 block">Destination</Label>
+                <Input
+                  value={destination}
+                  disabled={!!savedBill}
+                  placeholder="e.g. Madurai / Chennai"
+                  onChange={(e) => setDestination(e.target.value)}
+                />
+              </div>
             </div>
-            <div className="col-span-6">
-              <Label className="text-xs text-muted-foreground mb-1.5 block">Other Reference</Label>
-              <Input value={otherReference} disabled={!!savedBill} onChange={(e) => setOtherReference(e.target.value)} />
-            </div>
-            <div className="col-span-6">
-              <Label className="text-xs text-muted-foreground mb-1.5 block">IRN No</Label>
-              <Input value={irnNo} disabled={!!savedBill} onChange={(e) => setIrnNo(e.target.value)} placeholder="Paste from the govt. e-invoice portal, if any" />
+          </div>
+
+          {/* Section 3: References & Delivery Terms */}
+          <div className="rounded-md border border-slate-200/80 bg-slate-50/60 p-3 space-y-2.5">
+            <p className="text-[11px] font-semibold text-slate-600 uppercase tracking-wider">
+              3. References &amp; Terms of Delivery
+            </p>
+            <div className="grid grid-cols-12 gap-3">
+              <div className="col-span-6">
+                <Label className="text-xs text-muted-foreground mb-1 block">Terms of Delivery</Label>
+                <Input
+                  value={termsOfDelivery}
+                  disabled={!!savedBill}
+                  placeholder="e.g. Delivery at Buyer's Godown / Freight Paid"
+                  onChange={(e) => setTermsOfDelivery(e.target.value)}
+                />
+              </div>
+              <div className="col-span-3">
+                <Label className="text-xs text-muted-foreground mb-1 block">Other Reference &amp; Date</Label>
+                <Input
+                  value={otherReference}
+                  disabled={!!savedBill}
+                  placeholder="e.g. Ref / Quotation No."
+                  onChange={(e) => setOtherReference(e.target.value)}
+                />
+              </div>
+              <div className="col-span-3">
+                <Label className="text-xs text-muted-foreground mb-1 block">IRN No (Govt E-Invoice)</Label>
+                <Input
+                  value={irnNo}
+                  disabled={!!savedBill}
+                  placeholder="Paste IRN hash if applicable"
+                  onChange={(e) => setIrnNo(e.target.value)}
+                />
+              </div>
             </div>
           </div>
 
@@ -500,9 +824,47 @@ export default function MmBillingPage() {
             </label>
             {buyerManualEntry && (
               <div className="grid grid-cols-12 gap-3 mb-3">
-                <div className="col-span-4">
+                <div className="col-span-4 relative party-autocomplete-container">
                   <Label className="text-xs text-muted-foreground mb-1.5 block">Buyer Name</Label>
-                  <Input value={buyerName} disabled={!!savedBill} onChange={(e) => setBuyerName(e.target.value)} />
+                  <Input
+                    value={buyerName}
+                    disabled={!!savedBill}
+                    onChange={(e) => {
+                      setBuyerName(e.target.value);
+                      setShowBuyerSuggestions(true);
+                    }}
+                    onFocus={() => setShowBuyerSuggestions(true)}
+                    placeholder="Type or select buyer…"
+                    autoComplete="off"
+                  />
+                  {showBuyerSuggestions && buyerSuggestions.length > 0 && !savedBill && (
+                    <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-slate-200 rounded-lg shadow-lg z-50 max-h-52 overflow-y-auto">
+                      <div className="px-3 py-1 text-[10px] font-semibold text-muted-foreground bg-slate-50 uppercase tracking-wider border-b">
+                        Party History ({buyerSuggestions.length})
+                      </div>
+                      {buyerSuggestions.map((p, idx) => (
+                        <button
+                          key={idx}
+                          type="button"
+                          className="w-full text-left px-3 py-2 hover:bg-brand-50 border-b last:border-b-0 transition-colors"
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            setBuyerName(p.name);
+                            if (p.address) setBuyerAddress(p.address);
+                            if (p.gstin) setBuyerGstin(p.gstin);
+                            setShowBuyerSuggestions(false);
+                          }}
+                        >
+                          <p className="text-xs font-semibold text-slate-800">{p.name}</p>
+                          {(p.address || p.gstin) && (
+                            <p className="text-[11px] text-muted-foreground truncate">
+                              {[p.address, p.gstin ? `GST: ${p.gstin}` : ''].filter(Boolean).join(' • ')}
+                            </p>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
                 <div className="col-span-5">
                   <Label className="text-xs text-muted-foreground mb-1.5 block">Buyer Address</Label>
@@ -521,9 +883,47 @@ export default function MmBillingPage() {
               Consignee (ship-to) — entered separately, not copied from Buyer
             </p>
             <div className="grid grid-cols-12 gap-3">
-              <div className="col-span-4">
+              <div className="col-span-4 relative party-autocomplete-container">
                 <Label className="text-xs text-muted-foreground mb-1.5 block">Consignee Name</Label>
-                <Input value={consigneeName} disabled={!!savedBill} onChange={(e) => setConsigneeName(e.target.value)} />
+                <Input
+                  value={consigneeName}
+                  disabled={!!savedBill}
+                  onChange={(e) => {
+                    setConsigneeName(e.target.value);
+                    setShowConsigneeSuggestions(true);
+                  }}
+                  onFocus={() => setShowConsigneeSuggestions(true)}
+                  placeholder="Type or select consignee…"
+                  autoComplete="off"
+                />
+                {showConsigneeSuggestions && consigneeSuggestions.length > 0 && !savedBill && (
+                  <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-slate-200 rounded-lg shadow-lg z-50 max-h-52 overflow-y-auto">
+                    <div className="px-3 py-1 text-[10px] font-semibold text-muted-foreground bg-slate-50 uppercase tracking-wider border-b">
+                      Party History ({consigneeSuggestions.length})
+                    </div>
+                    {consigneeSuggestions.map((p, idx) => (
+                      <button
+                        key={idx}
+                        type="button"
+                        className="w-full text-left px-3 py-2 hover:bg-brand-50 border-b last:border-b-0 transition-colors"
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          setConsigneeName(p.name);
+                          if (p.address) setConsigneeAddress(p.address);
+                          if (p.gstin) setConsigneeGstin(p.gstin);
+                          setShowConsigneeSuggestions(false);
+                        }}
+                      >
+                        <p className="text-xs font-semibold text-slate-800">{p.name}</p>
+                        {(p.address || p.gstin) && (
+                          <p className="text-[11px] text-muted-foreground truncate">
+                            {[p.address, p.gstin ? `GST: ${p.gstin}` : ''].filter(Boolean).join(' • ')}
+                          </p>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
               <div className="col-span-5">
                 <Label className="text-xs text-muted-foreground mb-1.5 block">Consignee Address</Label>
@@ -659,8 +1059,37 @@ export default function MmBillingPage() {
                   <span className="text-xl font-bold text-brand-700 tabular-nums">{formatCurrency(grandTotalP)}</span>
                 </div>
               </div>
+
+              {/* Previous Due / Balance (Optional ledger balance for A4 Tax Invoice) */}
+              <div className="pt-2 border-t border-slate-100 space-y-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <Label className="text-xs text-muted-foreground flex items-center gap-1">
+                    Previous Due (₹)
+                    <span className="text-[10px] text-slate-400 font-normal">(Optional)</span>
+                  </Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    step="1"
+                    placeholder="0"
+                    value={previousDueRupees}
+                    onChange={(e) => setPreviousDueRupees(e.target.value)}
+                    className="w-24 h-7 text-right text-xs tabular-nums"
+                  />
+                </div>
+                {Number(previousDueRupees) > 0 && (
+                  <div className="flex justify-between text-xs text-brand-800 bg-brand-50 px-2 py-1 rounded font-medium border border-brand-100">
+                    <span>Total Net Payable:</span>
+                    <span className="tabular-nums font-bold">
+                      {formatCurrency(grandTotalP + rupeeToPaisa(Number(previousDueRupees) || 0))}
+                    </span>
+                  </div>
+                )}
+              </div>
             </CardContent>
           </Card>
+
+
 
           {!savedBill && (
             <div className="space-y-2">
@@ -729,20 +1158,6 @@ export default function MmBillingPage() {
 
           {/* Internal record only — never printed on the Tax Invoice (same
               rule as Payment Mode). */}
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm">Notes / Remarks</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <Textarea
-                value={notes}
-                disabled={!!savedBill}
-                onChange={(e) => setNotes(e.target.value)}
-                placeholder="Internal notes about this bill — not printed on the invoice"
-                className="min-h-[100px]"
-              />
-            </CardContent>
-          </Card>
         </div>
       </div>
     </div>
@@ -753,6 +1168,7 @@ export default function MmBillingPage() {
         settings={settings ?? {}}
         layout="mm_a4"
         readOnly={!savedBill}
+        previousDueP={Number(previousDueRupees) > 0 ? rupeeToPaisa(Number(previousDueRupees)) : undefined}
         onClose={() => setPreviewOpen(false)}
       />
     )}

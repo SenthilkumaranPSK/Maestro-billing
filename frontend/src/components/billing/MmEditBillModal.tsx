@@ -32,12 +32,13 @@ interface MmEditBillModalProps {
   bill: Bill;
   onClose: () => void;
   onSaved: (updated: Bill) => void;
+  securityPin?: string;
 }
 
 /** MM billing module's own edit-bill flow — mirrors EditBillModal, but always
  * shows the Tax Invoice Details fields (no Thermal/A4/MM toggle — MM bills
  * are never anything else) and edits bill.mmCustomer via mmCustomersApi. */
-export function MmEditBillModal({ bill, onClose, onSaved }: MmEditBillModalProps) {
+export function MmEditBillModal({ bill, onClose, onSaved, securityPin }: MmEditBillModalProps) {
   const { toast } = useToast();
   const qc = useQueryClient();
   const { closing, requestClose } = useClosingTransition(onClose);
@@ -95,7 +96,7 @@ export function MmEditBillModal({ bill, onClose, onSaved }: MmEditBillModalProps
 
   const updateMutation = useMutation({
     mutationFn: (payload: Parameters<typeof billsApi.editBill>[1]) =>
-      billsApi.editBill(bill.id, payload),
+      billsApi.editBill(bill.id, payload, securityPin),
     onSuccess: (updated) => {
       qc.invalidateQueries({ queryKey: ['bills'] });
       toast({ title: 'MM Bill updated!', description: `${updated.billNumber} saved.`, variant: 'success' });

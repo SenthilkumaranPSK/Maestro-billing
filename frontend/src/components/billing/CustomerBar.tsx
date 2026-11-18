@@ -36,15 +36,13 @@ export function CustomerBar({ value, onChange, disabled, showAddress, isMm }: Cu
   const [searchTerm, setSearchTerm] = useState('');
   const barRef = useRef<HTMLDivElement>(null);
 
-  const activeSearch = searchTerm.length >= 2 ? searchTerm : '';
-
   const { data: suggestions } = useQuery({
-    queryKey: [isMm ? 'mm-customers' : 'customers', 'suggest', activeSearch],
+    queryKey: [isMm ? 'mm-customers' : 'customers', 'suggest', searchTerm],
     queryFn: () =>
       isMm
-        ? mmCustomersApi.list({ search: activeSearch, limit: 6 })
-        : customersApi.list({ search: activeSearch, limit: 6 }),
-    enabled: !!activeSearch,
+        ? mmCustomersApi.list({ search: searchTerm.trim() || undefined, limit: 10 })
+        : customersApi.list({ search: searchTerm.trim() || undefined, limit: 10 }),
+    enabled: showSuggestions,
   });
 
   const { data: insights } = useQuery({
@@ -106,7 +104,10 @@ export function CustomerBar({ value, onChange, disabled, showAddress, isMm }: Cu
             placeholder="Customer name…"
             value={value.name}
             onChange={(e) => handleNameChange(e.target.value)}
-            onFocus={() => value.name.length >= 2 && setShowSuggestions(true)}
+            onFocus={() => {
+              setSearchTerm(value.name || '');
+              setShowSuggestions(true);
+            }}
             disabled={disabled}
             autoComplete="off"
           />
