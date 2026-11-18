@@ -329,7 +329,7 @@ export async function generateMmA4InvoicePDF(
 
     // Left: Marketed By
     text('Marketed By:', left + 5, topY - 16, { size: 9.5, font: bold });
-    text(companyName, left + 5, topY - 31, { size: 9.5, font: regular });
+    text(companyName, left + 5, topY - 31, { size: 9.5, font: bold });
     const rawAddrLines = companyAddress
       .split('\n')
       .map((s) => s.trim())
@@ -432,7 +432,7 @@ export async function generateMmA4InvoicePDF(
     text('Mode/Terms of Payment', col2X + 4, ry - 11, { size: 8, font: regular });
     const paymentDisplay = bill.termsOfPayment || bill.paymentMode || '';
     if (paymentDisplay) {
-      text(paymentDisplay, col2X + 4, ry - 21, { size: 8, font: bold, maxWidth: 110 });
+      text(paymentDisplay, col2X + 4, ry - 21, { size: 7.5, font: regular, maxWidth: 110 });
     }
     ry -= ROW_H;
     hline(ry, midX, right);
@@ -466,10 +466,10 @@ export async function generateMmA4InvoicePDF(
     text('Despatched through', midX + 4, ry - 15, { size: 8, font: regular });
     const dispatchDetails = [bill.despatchedThrough, bill.vehicleNo].filter(Boolean);
     if (dispatchDetails.length === 1) {
-      text(dispatchDetails[0]!, col2X + 4, ry - 15, { size: 8, font: bold, maxWidth: 120 });
+      text(dispatchDetails[0]!, col2X + 4, ry - 15, { size: 7.5, font: regular, maxWidth: 120 });
     } else if (dispatchDetails.length > 1) {
-      text(dispatchDetails[0]!, col2X + 4, ry - 11, { size: 8, font: bold, maxWidth: 120 });
-      text(dispatchDetails[1]!, col2X + 4, ry - 21, { size: 7.5, font: bold, maxWidth: 120 });
+      text(dispatchDetails[0]!, col2X + 4, ry - 11, { size: 7.5, font: regular, maxWidth: 120 });
+      text(dispatchDetails[1]!, col2X + 4, ry - 21, { size: 7.5, font: regular, maxWidth: 120 });
     }
     ry -= ROW_H;
     hline(ry, midX, right);
@@ -477,7 +477,7 @@ export async function generateMmA4InvoicePDF(
     // Row 6: Destination (Label on Left, Value on Right)
     text('Destination', midX + 4, ry - 15, { size: 8, font: regular });
     if (bill.destination) {
-      text(bill.destination, col2X + 4, ry - 15, { size: 8, font: bold, maxWidth: 120 });
+      text(bill.destination, col2X + 4, ry - 15, { size: 7.5, font: regular, maxWidth: 120 });
     }
     ry -= ROW_H;
     hline(ry, midX, right);
@@ -488,11 +488,11 @@ export async function generateMmA4InvoicePDF(
     if (termsDisplay) {
       const termsLines = wrapText(regular, termsDisplay, 7.5, 120);
       if (termsLines.length <= 1) {
-        text(termsLines[0] || termsDisplay, col2X + 4, ry - 15, { size: 8, font: bold, maxWidth: 120 });
+        text(termsLines[0] || termsDisplay, col2X + 4, ry - 15, { size: 7.5, font: regular, maxWidth: 120 });
       } else {
         let ty = ry - 11;
         for (const line of termsLines.slice(0, 2)) {
-          text(line, col2X + 4, ty, { size: 7.5, font: bold, maxWidth: 120 });
+          text(line, col2X + 4, ty, { size: 7.5, font: regular, maxWidth: 120 });
           ty -= 10;
         }
       }
@@ -560,7 +560,7 @@ export async function generateMmA4InvoicePDF(
   }
 
   const itemLayouts: ItemLayout[] = bill.items.map((item, idx) => {
-    const lines = wrapText(bold, item.productName, 8, cols[1].w - 8);
+    const lines = wrapText(regular, item.productName, 8, cols[1].w - 8);
     const baseAmt = item.totalAmount - item.gstAmount;
     const baseUnitPrice = item.qty ? Math.round(baseAmt / item.qty) : item.unitPrice;
     const height = Math.max(18, lines.length * 10 + 6);
@@ -608,7 +608,7 @@ export async function generateMmA4InvoicePDF(
 
         let ly = rowTop - 11;
         for (const line of il.nameLines) {
-          text(line, cols[1].x + 4, ly, { size: 8, font: bold });
+          text(line, cols[1].x + 4, ly, { size: 8, font: regular });
           ly -= 10;
         }
 
@@ -644,7 +644,7 @@ export async function generateMmA4InvoicePDF(
         if (bill.isInterState) {
           const rateStr = fullRate !== undefined ? `${fullRate}%` : `${hsnGroups[0]?.igstRate ?? 0}%`;
           const igstY = tableBottom + 4;
-          text(`OUTPUT IGST ${rateStr}`, cols[1].x + 20, igstY, { size: 8, font: bold });
+          text(`OUTPUT IGST ${rateStr}`, cols[1].x + 20, igstY, { size: 8, font: regular });
           text(fullRate !== undefined ? String(fullRate) : String(hsnGroups[0]?.igstRate ?? 0), cols[5].x, igstY, {
             size: 8,
             font: regular,
@@ -658,12 +658,12 @@ export async function generateMmA4InvoicePDF(
           const rateVal = halfRate !== undefined ? String(halfRate) : String(hsnGroups[0]?.cgstRate ?? 0);
 
           const cgstY = tableBottom + 17;
-          text(`OUTPUT CGST ${rateStr}`, cols[1].x + 20, cgstY, { size: 8, font: bold });
+          text(`OUTPUT CGST ${rateStr}`, cols[1].x + 20, cgstY, { size: 8, font: regular });
           text(rateVal, cols[5].x, cgstY, { size: 8, font: regular, align: 'right', maxWidth: cols[5].w - 4 });
           text(formatAmt2(cgstP), cols[6].x, cgstY, { size: 8, font: regular, align: 'right', maxWidth: cols[6].w - 4 });
 
           const sgstY = tableBottom + 4;
-          text(`OUTPUT SGST ${rateStr}`, cols[1].x + 20, sgstY, { size: 8, font: bold });
+          text(`OUTPUT SGST ${rateStr}`, cols[1].x + 20, sgstY, { size: 8, font: regular });
           text(rateVal, cols[5].x, sgstY, { size: 8, font: regular, align: 'right', maxWidth: cols[5].w - 4 });
           text(formatAmt2(sgstP), cols[6].x, sgstY, { size: 8, font: regular, align: 'right', maxWidth: cols[6].w - 4 });
         }
