@@ -769,7 +769,7 @@ export default function MmSettingsPage() {
               <CardHeader className="pb-3">
                 <CardTitle className="text-sm flex items-center gap-2">
                   <Building2 className="h-4 w-4 text-brand-600" />
-                  Branch Office &amp; Sales Point (Right Header)
+                  Sales Point (Right Header)
                 </CardTitle>
                 <CardDescription className="text-xs">
                   Printed in the top right address box of the invoice.
@@ -777,7 +777,7 @@ export default function MmSettingsPage() {
               </CardHeader>
               <CardContent className="space-y-3">
                 <div>
-                  <Label className="text-xs font-semibold">Branch Office Address</Label>
+                  <Label className="text-xs font-semibold">Sales Point Address</Label>
                   <Textarea
                     value={branchOffice}
                     onChange={(e) => setBranchOffice(e.target.value)}
