@@ -26,8 +26,32 @@ export async function settingsRoutes(fastify: FastifyInstance) {
     return reply.send({ success: true, data: grouped });
   });
 
+  
+  // Verify Security PIN endpoint
+  fastify.post('/verify-pin', { preHandler: requireAppHeader }, async (request, reply) => {
+    const body = request.body as { pin?: string };
+    const passwordSetting = await prisma.setting.findUnique({
+      where: { key: 'bill_edit_password' },
+    });
+    const correctPin = passwordSetting?.value || '1234567890';
+    const isValid = Boolean(body?.pin && body.pin.trim() === correctPin);
+    return reply.send({ success: true, valid: isValid });
+  });
+
   fastify.put('/', { preHandler: requireAppHeader }, async (request, reply) => {
     const body = settingSchema.parse(request.body);
+
+    if (body.key === 'bill_edit_password' || body.key === 'bill_edit_protection_enabled') {
+      const isProtectionOn = (await prisma.setting.findUnique({ where: { key: 'bill_edit_protection_enabled' } }))?.value !== 'false';
+      if (isProtectionOn) {
+        const currentPinSetting = await prisma.setting.findUnique({ where: { key: 'bill_edit_password' } });
+        const currentPin = currentPinSetting?.value || '1234567890';
+        const providedPin = request.headers['x-current-security-pin'] as string | undefined;
+        if (!providedPin || providedPin !== currentPin) {
+          return reply.status(403).send({ success: false, error: 'Current Security PIN is required to change security settings' });
+        }
+      }
+    }
     const setting = await prisma.setting.upsert({
       where: { key: body.key },
       create: { key: body.key, value: body.value, group: body.group ?? 'general' },
@@ -39,6 +63,19 @@ export async function settingsRoutes(fastify: FastifyInstance) {
   // Bulk update settings
   fastify.put('/bulk', { preHandler: requireAppHeader }, async (request, reply) => {
     const body = bulkSettingsSchema.parse(request.body);
+
+    const touchesSecurity = body.some((s) => s.key === 'bill_edit_password' || s.key === 'bill_edit_protection_enabled');
+    if (touchesSecurity) {
+      const isProtectionOn = (await prisma.setting.findUnique({ where: { key: 'bill_edit_protection_enabled' } }))?.value !== 'false';
+      if (isProtectionOn) {
+        const currentPinSetting = await prisma.setting.findUnique({ where: { key: 'bill_edit_password' } });
+        const currentPin = currentPinSetting?.value || '1234567890';
+        const providedPin = request.headers['x-current-security-pin'] as string | undefined;
+        if (!providedPin || providedPin !== currentPin) {
+          return reply.status(403).send({ success: false, error: 'Current Security PIN is required to change security settings' });
+        }
+      }
+    }
     const updates = await Promise.all(
       body.map((s) =>
         prisma.setting.upsert({

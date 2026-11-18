@@ -204,7 +204,7 @@ export const createBillSchema = z.object({
 
 export const settingSchema = z.object({
   key: z.string().min(1).max(100),
-  value: z.string().max(5000),
+  value: z.string().max(5_000_000),
   group: z.string().max(50).optional(),
 });
 

@@ -184,32 +184,7 @@ export function PdfPreviewModal({
             )}
           </div>
 
-          {/* 3-Copy Selector for MM Wholesale Tax Invoices */}
-          {layout === 'mm_a4' && (
-            <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-lg border text-xs">
-              {(
-                [
-                  { id: 'ORIGINAL', label: 'Original' },
-                  { id: 'DUPLICATE', label: 'Duplicate' },
-                  { id: 'TRIPLICATE', label: 'Triplicate' },
-                  { id: 'ALL', label: 'All 3 Copies' },
-                ] as const
-              ).map((cp) => (
-                <button
-                  key={cp.id}
-                  type="button"
-                  onClick={() => setSelectedCopy(cp.id)}
-                  className={`px-2 py-1 rounded font-medium transition-all ${
-                    selectedCopy === cp.id
-                      ? 'bg-white text-emerald-800 shadow-2xs font-semibold'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  {cp.label}
-                </button>
-              ))}
-            </div>
-          )}
+
 
           <div className="flex items-center space-x-2">
             {!readOnly && (

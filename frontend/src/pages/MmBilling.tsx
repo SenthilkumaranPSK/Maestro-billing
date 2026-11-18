@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Plus, Printer, FileText, ScanEye, Save, RotateCcw, CalendarDays, Zap, Copy, FileSpreadsheet } from 'lucide-react';
+import { Plus, Printer, FileText, ScanEye, Save, RotateCcw, Zap, FileSpreadsheet } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -15,7 +15,6 @@ import { billsApi } from '@/api/bills';
 import { mmCustomersApi } from '@/api/mmCustomers';
 import { settingsApi } from '@/api/settings';
 import { useNavigate } from 'react-router-dom';
-import type { MmCopyType } from '@/lib/mmA4invoice';
 import {
   isWhatsAppEmbedAvailable,
   isWhatsAppTextSendAvailable,
@@ -66,7 +65,6 @@ export default function MmBillingPage() {
   const [sendOnWhatsApp, setSendOnWhatsApp] = useState(false);
   const navigate = useNavigate();
   const [sendingWhatsApp, setSendingWhatsApp] = useState(false);
-  const [copyType, setCopyType] = useState<MmCopyType>('ORIGINAL');
   const [previousDueRupees, setPreviousDueRupees] = useState('');
   // How the bill was paid — shown in the form and history/detail views only,
   // never on the printed invoice. See components/billing/PaymentModeSelect.
@@ -140,6 +138,76 @@ export default function MmBillingPage() {
 
   const lastBill = customerPastBills && customerPastBills.length > 0 ? customerPastBills[0] : null;
 
+  // Fetch all MM customers and past bills to provide typing history for Buyers and Consignees
+  const { data: mmCustomersList } = useQuery({
+    queryKey: ['mm-customers', 'history-parties'],
+    queryFn: () => mmCustomersApi.list({ limit: 100 }),
+    staleTime: 60_000,
+  });
+
+  const { data: pastMmBillsList } = useQuery({
+    queryKey: ['bills', 'history-parties', 'MM'],
+    queryFn: () => billsApi.list({ series: 'MM', limit: 100 }),
+    staleTime: 60_000,
+  });
+
+  const partyHistory = useMemo(() => {
+    const map = new Map<string, { name: string; address: string; gstin: string }>();
+
+    (mmCustomersList?.data || []).forEach((c) => {
+      if (c.name?.trim()) {
+        const key = c.name.trim().toLowerCase();
+        if (!map.has(key)) {
+          map.set(key, {
+            name: c.name.trim(),
+            address: c.address?.trim() || '',
+            gstin: c.gstin?.trim() || '',
+          });
+        }
+      }
+    });
+
+    (pastMmBillsList?.data || []).forEach((b) => {
+      if (b.buyerName?.trim()) {
+        const key = b.buyerName.trim().toLowerCase();
+        if (!map.has(key)) {
+          map.set(key, {
+            name: b.buyerName.trim(),
+            address: b.buyerAddress?.trim() || '',
+            gstin: b.buyerGstin?.trim() || '',
+          });
+        }
+      }
+      if (b.consigneeName?.trim()) {
+        const key = b.consigneeName.trim().toLowerCase();
+        if (!map.has(key)) {
+          map.set(key, {
+            name: b.consigneeName.trim(),
+            address: b.consigneeAddress?.trim() || '',
+            gstin: b.consigneeGstin?.trim() || '',
+          });
+        }
+      }
+    });
+
+    return Array.from(map.values());
+  }, [mmCustomersList, pastMmBillsList]);
+
+  const [showBuyerSuggestions, setShowBuyerSuggestions] = useState(false);
+  const [showConsigneeSuggestions, setShowConsigneeSuggestions] = useState(false);
+
+  const buyerSuggestions = useMemo(() => {
+    if (!buyerName.trim()) return partyHistory.slice(0, 8);
+    const q = buyerName.toLowerCase();
+    return partyHistory.filter((p) => p.name.toLowerCase().includes(q)).slice(0, 8);
+  }, [partyHistory, buyerName]);
+
+  const consigneeSuggestions = useMemo(() => {
+    if (!consigneeName.trim()) return partyHistory.slice(0, 8);
+    const q = consigneeName.toLowerCase();
+    return partyHistory.filter((p) => p.name.toLowerCase().includes(q)).slice(0, 8);
+  }, [partyHistory, consigneeName]);
+
   const handleReorderLastBill = () => {
     if (!lastBill || !lastBill.items || lastBill.items.length === 0) return;
     const newItems: BillItemForm[] = lastBill.items.map((it) => ({
@@ -167,6 +235,18 @@ export default function MmBillingPage() {
 
   // Re-suggest Inter-state whenever the selected customer's GSTIN changes —
   // still just a default, the checkbox stays freely overridable.
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest('.party-autocomplete-container')) {
+        setShowBuyerSuggestions(false);
+        setShowConsigneeSuggestions(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
   useEffect(() => {
     if (savedBill) return;
     const suggestion = suggestInterState(settings?.studio?.studio_gstin, customer.gstin);
@@ -381,7 +461,6 @@ export default function MmBillingPage() {
     const { printMmA4InvoicePDF } = await loadMmA4Lib();
     const prevDue = Number(previousDueRupees) > 0 ? rupeeToPaisa(Number(previousDueRupees)) : undefined;
     await printMmA4InvoicePDF(savedBill, settings ?? {}, {
-      copyType,
       previousDueP: prevDue,
     });
   };
@@ -391,7 +470,6 @@ export default function MmBillingPage() {
     const { downloadMmA4InvoicePDF } = await loadMmA4Lib();
     const prevDue = Number(previousDueRupees) > 0 ? rupeeToPaisa(Number(previousDueRupees)) : undefined;
     await downloadMmA4InvoicePDF(savedBill, settings ?? {}, {
-      copyType,
       previousDueP: prevDue,
     });
   };
@@ -416,7 +494,6 @@ export default function MmBillingPage() {
     setGstInclusive(false);
     setNotes('');
     setPreviousDueRupees('');
-    setCopyType('ORIGINAL');
     setVehicleNo('');
     setDespatchedThrough('');
     setDestination('');
@@ -511,26 +588,14 @@ export default function MmBillingPage() {
         </div>
       </div>
 
-      {/* ── Customer + Date bar ─────────────────────────────── */}
+      {/* ── Customer + Payment Mode bar ─────────────────────────────── */}
       <Card className="border-brand-500/30 bg-brand-50/60">
         <CardContent className="pt-4 pb-4 grid grid-cols-12 gap-4 items-end">
-          <div className="col-span-6">
+          <div className="col-span-8">
             <Label className="text-xs text-muted-foreground mb-1.5 block">Customer</Label>
             <CustomerBar value={customer} onChange={setCustomer} disabled={!!savedBill} showAddress isMm />
           </div>
-          <div className="col-span-3">
-            <Label className="text-xs text-muted-foreground mb-1.5 flex items-center gap-1">
-              <CalendarDays className="w-3.5 h-3.5 text-brand-600" /> Invoice Date
-            </Label>
-            <Input
-              type="date"
-              value={billDate}
-              disabled={!!savedBill}
-              onChange={(e) => setBillDate(e.target.value)}
-              className="h-10 bg-white font-medium text-slate-800"
-            />
-          </div>
-          <div className="col-span-3">
+          <div className="col-span-4">
             <Label className="text-xs text-muted-foreground mb-1.5 block">Payment Mode</Label>
             <PaymentModeSelect value={paymentMode} onChange={setPaymentMode} disabled={!!savedBill} />
           </div>
@@ -759,9 +824,47 @@ export default function MmBillingPage() {
             </label>
             {buyerManualEntry && (
               <div className="grid grid-cols-12 gap-3 mb-3">
-                <div className="col-span-4">
+                <div className="col-span-4 relative party-autocomplete-container">
                   <Label className="text-xs text-muted-foreground mb-1.5 block">Buyer Name</Label>
-                  <Input value={buyerName} disabled={!!savedBill} onChange={(e) => setBuyerName(e.target.value)} />
+                  <Input
+                    value={buyerName}
+                    disabled={!!savedBill}
+                    onChange={(e) => {
+                      setBuyerName(e.target.value);
+                      setShowBuyerSuggestions(true);
+                    }}
+                    onFocus={() => setShowBuyerSuggestions(true)}
+                    placeholder="Type or select buyer…"
+                    autoComplete="off"
+                  />
+                  {showBuyerSuggestions && buyerSuggestions.length > 0 && !savedBill && (
+                    <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-slate-200 rounded-lg shadow-lg z-50 max-h-52 overflow-y-auto">
+                      <div className="px-3 py-1 text-[10px] font-semibold text-muted-foreground bg-slate-50 uppercase tracking-wider border-b">
+                        Party History ({buyerSuggestions.length})
+                      </div>
+                      {buyerSuggestions.map((p, idx) => (
+                        <button
+                          key={idx}
+                          type="button"
+                          className="w-full text-left px-3 py-2 hover:bg-brand-50 border-b last:border-b-0 transition-colors"
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            setBuyerName(p.name);
+                            if (p.address) setBuyerAddress(p.address);
+                            if (p.gstin) setBuyerGstin(p.gstin);
+                            setShowBuyerSuggestions(false);
+                          }}
+                        >
+                          <p className="text-xs font-semibold text-slate-800">{p.name}</p>
+                          {(p.address || p.gstin) && (
+                            <p className="text-[11px] text-muted-foreground truncate">
+                              {[p.address, p.gstin ? `GST: ${p.gstin}` : ''].filter(Boolean).join(' • ')}
+                            </p>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
                 <div className="col-span-5">
                   <Label className="text-xs text-muted-foreground mb-1.5 block">Buyer Address</Label>
@@ -780,9 +883,47 @@ export default function MmBillingPage() {
               Consignee (ship-to) — entered separately, not copied from Buyer
             </p>
             <div className="grid grid-cols-12 gap-3">
-              <div className="col-span-4">
+              <div className="col-span-4 relative party-autocomplete-container">
                 <Label className="text-xs text-muted-foreground mb-1.5 block">Consignee Name</Label>
-                <Input value={consigneeName} disabled={!!savedBill} onChange={(e) => setConsigneeName(e.target.value)} />
+                <Input
+                  value={consigneeName}
+                  disabled={!!savedBill}
+                  onChange={(e) => {
+                    setConsigneeName(e.target.value);
+                    setShowConsigneeSuggestions(true);
+                  }}
+                  onFocus={() => setShowConsigneeSuggestions(true)}
+                  placeholder="Type or select consignee…"
+                  autoComplete="off"
+                />
+                {showConsigneeSuggestions && consigneeSuggestions.length > 0 && !savedBill && (
+                  <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-slate-200 rounded-lg shadow-lg z-50 max-h-52 overflow-y-auto">
+                    <div className="px-3 py-1 text-[10px] font-semibold text-muted-foreground bg-slate-50 uppercase tracking-wider border-b">
+                      Party History ({consigneeSuggestions.length})
+                    </div>
+                    {consigneeSuggestions.map((p, idx) => (
+                      <button
+                        key={idx}
+                        type="button"
+                        className="w-full text-left px-3 py-2 hover:bg-brand-50 border-b last:border-b-0 transition-colors"
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          setConsigneeName(p.name);
+                          if (p.address) setConsigneeAddress(p.address);
+                          if (p.gstin) setConsigneeGstin(p.gstin);
+                          setShowConsigneeSuggestions(false);
+                        }}
+                      >
+                        <p className="text-xs font-semibold text-slate-800">{p.name}</p>
+                        {(p.address || p.gstin) && (
+                          <p className="text-[11px] text-muted-foreground truncate">
+                            {[p.address, p.gstin ? `GST: ${p.gstin}` : ''].filter(Boolean).join(' • ')}
+                          </p>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
               <div className="col-span-5">
                 <Label className="text-xs text-muted-foreground mb-1.5 block">Consignee Address</Label>
@@ -948,43 +1089,7 @@ export default function MmBillingPage() {
             </CardContent>
           </Card>
 
-          {/* Invoice Copy Option */}
-          <div className="rounded-lg border border-slate-200 bg-slate-50/70 p-2.5 space-y-1.5">
-            <div className="flex items-center justify-between text-xs font-semibold text-slate-700">
-              <span className="flex items-center gap-1">
-                <Copy className="w-3.5 h-3.5 text-brand-600" /> Invoice Copy
-              </span>
-              <span className="text-[10px] text-muted-foreground font-normal">
-                {copyType === 'ALL' ? 'All 3 Copies (Batch)' : copyType}
-              </span>
-            </div>
-            <div className="grid grid-cols-4 gap-1 text-[11px]">
-              {(
-                [
-                  { id: 'ORIGINAL', label: 'Original', sub: 'Buyer' },
-                  { id: 'DUPLICATE', label: 'Duplicate', sub: 'Transp.' },
-                  { id: 'TRIPLICATE', label: 'Triplicate', sub: 'Seller' },
-                  { id: 'ALL', label: 'All 3', sub: 'Batch' },
-                ] as const
-              ).map((c) => (
-                <button
-                  key={c.id}
-                  type="button"
-                  onClick={() => setCopyType(c.id)}
-                  className={`px-1 py-1 rounded text-center border transition-all ${
-                    copyType === c.id
-                      ? 'bg-brand-600 text-white border-brand-600 font-medium shadow-xs'
-                      : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
-                  }`}
-                >
-                  <div className="font-semibold text-[11px] leading-tight">{c.label}</div>
-                  <div className={`text-[9px] leading-tight truncate ${copyType === c.id ? 'text-brand-100' : 'text-slate-400'}`}>
-                    {c.sub}
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
+
 
           {!savedBill && (
             <div className="space-y-2">
@@ -1053,20 +1158,6 @@ export default function MmBillingPage() {
 
           {/* Internal record only — never printed on the Tax Invoice (same
               rule as Payment Mode). */}
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm">Notes / Remarks</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <Textarea
-                value={notes}
-                disabled={!!savedBill}
-                onChange={(e) => setNotes(e.target.value)}
-                placeholder="Internal notes about this bill — not printed on the invoice"
-                className="min-h-[100px]"
-              />
-            </CardContent>
-          </Card>
         </div>
       </div>
     </div>
@@ -1077,7 +1168,6 @@ export default function MmBillingPage() {
         settings={settings ?? {}}
         layout="mm_a4"
         readOnly={!savedBill}
-        copyType={copyType}
         previousDueP={Number(previousDueRupees) > 0 ? rupeeToPaisa(Number(previousDueRupees)) : undefined}
         onClose={() => setPreviewOpen(false)}
       />

@@ -1,41 +1,41 @@
 import { useState, type FormEvent } from 'react';
-import { Lock, X } from 'lucide-react';
-import { useQuery } from '@tanstack/react-query';
+import { Lock, X, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { settingsApi } from '@/api/settings';
 
 interface PasswordGateModalProps {
-  onConfirm: () => void;
+  onConfirm: (pin: string) => void;
   onCancel: () => void;
   title?: string;
   description?: string;
 }
 
-// Mirrors the seeded default in backend/src/seed.ts — used only if the
-// setting is somehow missing (shouldn't happen post-seed, but a bill-edit
-// gate must never silently become unlockable-by-nobody on a stale install).
-const DEFAULT_EDIT_PASSWORD = '1234567890';
-
-/**
- * Blocks entry into an edit flow (EditBillModal / MmEditBillModal) until the
- * bill-edit password (Settings → Security) is entered correctly. A soft
- * deterrent against casual/accidental edits — this app has no real auth
- * anywhere, deliberately (single trusted operator), so this isn't either;
- * it's checked client-side only, same trust model as the rest of the app.
- */
 export function PasswordGateModal({ onConfirm, onCancel, title, description }: PasswordGateModalProps) {
   const [value, setValue] = useState('');
-  const [error, setError] = useState(false);
-  const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: settingsApi.get });
-  const correctPassword = settings?.security?.bill_edit_password || DEFAULT_EDIT_PASSWORD;
+  const [error, setError] = useState('');
+  const [isVerifying, setIsVerifying] = useState(false);
 
-  const handleSubmit = (e: FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    if (value === correctPassword) {
-      onConfirm();
-    } else {
-      setError(true);
+    const pin = value.trim();
+    if (!pin) {
+      setError('Please enter the Security PIN.');
+      return;
+    }
+    setIsVerifying(true);
+    setError('');
+    try {
+      const res = await settingsApi.verifyPin(pin);
+      if (res.data?.valid) {
+        onConfirm(pin);
+      } else {
+        setError('Incorrect Security PIN.');
+      }
+    } catch {
+      setError('Could not verify PIN. Please try again.');
+    } finally {
+      setIsVerifying(false);
     }
   };
 
@@ -43,7 +43,7 @@ export function PasswordGateModal({ onConfirm, onCancel, title, description }: P
     <div
       className="fixed inset-0 z-50 bg-slate-950/50 backdrop-blur-[2px] flex items-center justify-center p-4"
       onClick={(e) => {
-        if (e.target === e.currentTarget) onCancel();
+        if (e.target === e.currentTarget && !isVerifying) onCancel();
       }}
     >
       <form
@@ -55,7 +55,7 @@ export function PasswordGateModal({ onConfirm, onCancel, title, description }: P
             <Lock className="h-4 w-4" />
             {title || 'Security PIN Required'}
           </h3>
-          <Button type="button" variant="ghost" size="icon" onClick={onCancel}>
+          <Button type="button" variant="ghost" size="icon" onClick={onCancel} disabled={isVerifying}>
             <X className="h-4 w-4" />
           </Button>
         </div>
@@ -66,18 +66,28 @@ export function PasswordGateModal({ onConfirm, onCancel, title, description }: P
           type="password"
           autoFocus
           value={value}
+          disabled={isVerifying}
           onChange={(e) => {
             setValue(e.target.value);
-            setError(false);
+            setError('');
           }}
-          placeholder="Enter password"
+          placeholder="Enter Security PIN"
         />
-        {error && <p className="text-sm text-destructive">Incorrect password.</p>}
+        {error && <p className="text-sm text-destructive font-medium">{error}</p>}
         <div className="flex justify-end gap-2">
-          <Button type="button" variant="outline" onClick={onCancel}>
+          <Button type="button" variant="outline" onClick={onCancel} disabled={isVerifying}>
             Cancel
           </Button>
-          <Button type="submit">Unlock</Button>
+          <Button type="submit" disabled={isVerifying}>
+            {isVerifying ? (
+              <>
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                Verifying…
+              </>
+            ) : (
+              'Unlock'
+            )}
+          </Button>
         </div>
       </form>
     </div>

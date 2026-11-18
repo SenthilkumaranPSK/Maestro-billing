@@ -58,6 +58,7 @@ export default function MmHistoryPage() {
   // Editing/cancelling a bill is gated behind the bill-edit password (Settings → Security)
   const [pendingEdit, setPendingEdit] = useState<{ bill: Bill; fromDetail: boolean } | null>(null);
   const [pendingCancel, setPendingCancel] = useState<Bill | null>(null);
+  const [editPin, setEditPin] = useState<string>('');
 
   const isProtectionEnabled = settings?.security?.bill_edit_protection_enabled !== 'false';
 
@@ -89,7 +90,7 @@ export default function MmHistoryPage() {
 
 
   const cancelMutation = useMutation({
-    mutationFn: (id: number) => billsApi.delete(id),
+    mutationFn: ({ id, pin }: { id: number; pin?: string }) => billsApi.delete(id, pin),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['bills'] });
       toast({ title: 'MM bill cancelled', variant: 'success' });
@@ -99,12 +100,12 @@ export default function MmHistoryPage() {
     },
   });
 
-  const confirmAndExecuteCancel = (bill: Bill) => {
+  const confirmAndExecuteCancel = (bill: Bill, pin?: string) => {
     const ok = confirm(
       `Cancel MM bill ${bill.billNumber} (${formatCurrency(bill.grandTotal)})?\n\n` +
         'It will be marked CANCELLED. This cannot be undone.',
     );
-    if (ok) cancelMutation.mutate(bill.id);
+    if (ok) cancelMutation.mutate({ id: bill.id, pin });
   };
 
   const handleCancel = (bill: Bill) => {
@@ -397,9 +398,14 @@ export default function MmHistoryPage() {
       {editingBill && (
         <MmEditBillModal
           bill={editingBill}
-          onClose={() => setEditingBill(null)}
+          securityPin={editPin}
+          onClose={() => {
+            setEditingBill(null);
+            setEditPin('');
+          }}
           onSaved={(updated) => {
             setEditingBill(null);
+            setEditPin('');
             setSelectedBill(updated);
           }}
         />
@@ -419,7 +425,8 @@ export default function MmHistoryPage() {
           title="Edit MM Bill"
           description="Enter security password to edit this saved invoice."
           onCancel={() => setPendingEdit(null)}
-          onConfirm={() => {
+          onConfirm={(pin) => {
+            setEditPin(pin);
             setEditingBill(pendingEdit.bill);
             if (pendingEdit.fromDetail) setSelectedBill(null);
             setPendingEdit(null);
@@ -432,10 +439,10 @@ export default function MmHistoryPage() {
           title="Cancel MM Bill"
           description="Cancelling a saved invoice requires the Security PIN."
           onCancel={() => setPendingCancel(null)}
-          onConfirm={() => {
+          onConfirm={(pin) => {
             const billToCancel = pendingCancel;
             setPendingCancel(null);
-            confirmAndExecuteCancel(billToCancel);
+            confirmAndExecuteCancel(billToCancel, pin);
           }}
         />
       )}

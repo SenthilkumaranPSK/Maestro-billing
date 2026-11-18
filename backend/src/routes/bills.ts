@@ -145,8 +145,34 @@ export async function billRoutes(fastify: FastifyInstance) {
     return reply.status(201).send({ success: true, data: withParsedServiceDates(bill) });
   });
 
+
+  // Check security PIN for bill edit or cancel
+  async function checkBillSecurity(request: any, reply: any): Promise<boolean> {
+    const protectionSetting = await prisma.setting.findUnique({
+      where: { key: 'bill_edit_protection_enabled' },
+    });
+    const isEnabled = protectionSetting?.value !== 'false';
+    if (!isEnabled) return true;
+
+    const passwordSetting = await prisma.setting.findUnique({
+      where: { key: 'bill_edit_password' },
+    });
+    const requiredPin = passwordSetting?.value || '1234567890';
+    const providedPin = request.headers['x-security-pin'];
+
+    if (!providedPin || providedPin !== requiredPin) {
+      reply.status(403).send({
+        success: false,
+        error: 'Security PIN required or invalid. Modifying or cancelling saved bills is protected.',
+      });
+      return false;
+    }
+    return true;
+  }
+
   // Full edit — replaces items, recalculates totals; any non-cancelled bill
   fastify.put('/:id', { preHandler: requireAppHeader }, async (request, reply) => {
+    if (!(await checkBillSecurity(request, reply))) return;
     const id = parseId((request.params as { id: string }).id);
     if (!id) return reply.status(400).send({ success: false, error: 'Invalid bill id' });
     const body = createBillSchema.parse(request.body);
@@ -181,6 +207,7 @@ export async function billRoutes(fastify: FastifyInstance) {
   });
 
   fastify.delete('/:id', { preHandler: requireAppHeader }, async (request, reply) => {
+    if (!(await checkBillSecurity(request, reply))) return;
     const id = parseId((request.params as { id: string }).id);
     if (!id) return reply.status(400).send({ success: false, error: 'Invalid bill id' });
 
