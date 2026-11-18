@@ -36,3 +36,8 @@ contextBridge.exposeInMainWorld('maestroWhatsApp', {
   getStatus: () => ipcRenderer.invoke('whatsapp:status'),
 });
 
+
+contextBridge.exposeInMainWorld('maestroAdmin', {
+  restoreBackup: () => ipcRenderer.invoke('app:restore-backup'),
+  isDesktop: true,
+});

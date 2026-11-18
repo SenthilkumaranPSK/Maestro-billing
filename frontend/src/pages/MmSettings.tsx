@@ -18,6 +18,7 @@ import {
   Upload,
   Image as ImageIcon,
   RotateCcw,
+  Sliders,
 } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
@@ -121,6 +122,20 @@ export default function MmSettingsPage() {
   const [stateCode, setStateCode] = useState(MM_DEFAULTS.state_code);
   const [jurisdiction, setJurisdiction] = useState(MM_DEFAULTS.jurisdiction);
 
+  // Invoice Layout Section Toggles & Ergonomics
+  const [showDispatchGrid, setShowDispatchGrid] = useState(true);
+  const [showBankDetails, setShowBankDetails] = useState(true);
+  const [showDeclaration, setShowDeclaration] = useState(true);
+  const [logoPosition, setLogoPosition] = useState<'left' | 'center'>('left');
+  const [directPrintEnabled, setDirectPrintEnabled] = useState(false);
+
+  // Restore Modal State
+  const [showRestoreModal, setShowRestoreModal] = useState(false);
+  const [restoreSelectedFile, setRestoreSelectedFile] = useState<string>('MM_Billing_Backup.db');
+  const [restorePin, setRestorePin] = useState('');
+  const [restoreError, setRestoreError] = useState('');
+  const [isRestoring, setIsRestoring] = useState(false);
+
   // Bank details (only editable in Settings)
   const [bankAccountName, setBankAccountName] = useState(MM_DEFAULTS.bank_account_name);
   const [bankName, setBankName] = useState(MM_DEFAULTS.bank_name);
@@ -150,6 +165,12 @@ export default function MmSettingsPage() {
     if (mm?.mm_state_name) setStateName(mm.mm_state_name);
     if (mm?.mm_state_code) setStateCode(mm.mm_state_code);
     if (mm?.mm_jurisdiction) setJurisdiction(mm.mm_jurisdiction);
+
+    if (mm?.mm_show_dispatch_grid !== undefined) setShowDispatchGrid(mm.mm_show_dispatch_grid !== 'false');
+    if (mm?.mm_show_bank_details !== undefined) setShowBankDetails(mm.mm_show_bank_details !== 'false');
+    if (mm?.mm_show_declaration !== undefined) setShowDeclaration(mm.mm_show_declaration !== 'false');
+    if (mm?.mm_logo_position) setLogoPosition(mm.mm_logo_position as 'left' | 'center');
+    if (mm?.mm_direct_print_enabled !== undefined) setDirectPrintEnabled(mm.mm_direct_print_enabled === 'true');
 
     if (mm?.mm_bank_account_name) setBankAccountName(mm.mm_bank_account_name);
     if (mm?.mm_bank_name) setBankName(mm.mm_bank_name);
@@ -190,6 +211,11 @@ export default function MmSettingsPage() {
             mm_bank_branch: bankBranch,
             mm_bank_ifsc: bankIfsc,
             mm_logo_data: logoData || undefined,
+            mm_show_dispatch_grid: showDispatchGrid ? 'true' : 'false',
+            mm_show_bank_details: showBankDetails ? 'true' : 'false',
+            mm_show_declaration: showDeclaration ? 'true' : 'false',
+            mm_logo_position: logoPosition,
+            mm_direct_print_enabled: directPrintEnabled ? 'true' : 'false',
           },
         };
 
@@ -461,6 +487,44 @@ export default function MmSettingsPage() {
     },
   });
 
+  const handleTriggerRestore = async () => {
+    // Check if running in Electron desktop app with native IPC
+    if (typeof window !== 'undefined' && (window as any).maestroAdmin?.restoreBackup) {
+      try {
+        await (window as any).maestroAdmin.restoreBackup();
+      } catch (err: any) {
+        toast({ title: 'Restore failed', description: err.message, variant: 'destructive' });
+      }
+      return;
+    }
+    // Browser mode fallback modal
+    setRestoreError('');
+    setRestorePin('');
+    setShowRestoreModal(true);
+  };
+
+  const handlePerformRestore = async () => {
+    if (!restoreSelectedFile) return;
+    setIsRestoring(true);
+    setRestoreError('');
+    try {
+      await backupsApi.restore(restoreSelectedFile, restorePin.trim() || undefined);
+      toast({
+        title: 'Database restored successfully!',
+        description: 'Reloading to reflect restored bills, products, and settings...',
+        variant: 'success',
+      });
+      setShowRestoreModal(false);
+      setTimeout(() => {
+        window.location.reload();
+      }, 1000);
+    } catch (err: any) {
+      setRestoreError(err?.message || 'Restore failed. Check security PIN if protection is enabled.');
+    } finally {
+      setIsRestoring(false);
+    }
+  };
+
   const handleResetDefaults = () => {
     if (!confirm('Reset invoice layout and bank details to defaults?')) return;
     setCompanyName(MM_DEFAULTS.company_name);
@@ -475,6 +539,11 @@ export default function MmSettingsPage() {
     setStateName(MM_DEFAULTS.state_name);
     setStateCode(MM_DEFAULTS.state_code);
     setJurisdiction(MM_DEFAULTS.jurisdiction);
+    setShowDispatchGrid(true);
+    setShowBankDetails(true);
+    setShowDeclaration(true);
+    setLogoPosition('left');
+    setDirectPrintEnabled(false);
     setBankAccountName(MM_DEFAULTS.bank_account_name);
     setBankName(MM_DEFAULTS.bank_name);
     setBankAccountNumber(MM_DEFAULTS.bank_account_number);
@@ -795,6 +864,118 @@ export default function MmSettingsPage() {
                     placeholder="e.g. SRI MEENAKSHI Enterprises"
                   />
                 </div>
+              </CardContent>
+            </Card>
+
+            
+            {/* Invoice Layout & Section Toggles Card */}
+            <Card className="border-brand-200/80 bg-brand-50/20 shadow-xs">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm flex items-center gap-2">
+                  <Sliders className="h-4 w-4 text-brand-700" />
+                  Invoice Layout &amp; Section Toggles
+                </CardTitle>
+                <CardDescription className="text-xs text-muted-foreground">
+                  Control which blocks appear on printed A4 Tax Invoices. Live preview updates immediately.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-2.5">
+                {/* Toggle 1: Order & Dispatch Grid */}
+                <label className="flex items-center justify-between gap-3 text-xs cursor-pointer rounded-lg border border-slate-200 bg-white p-2.5 hover:bg-slate-50 transition-colors">
+                  <div>
+                    <span className="font-semibold text-slate-800 block">Show Order &amp; Dispatch Grid</span>
+                    <span className="text-muted-foreground block text-[11px]">
+                      {showDispatchGrid
+                        ? 'Active: Shows 7-row Tally dispatch box on the right side.'
+                        : 'Off: Gives full width to Buyer and Consignee (ideal for local/counter sales without transport).'
+                      }
+                    </span>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={showDispatchGrid}
+                    onChange={(e) => setShowDispatchGrid(e.target.checked)}
+                    className="h-4 w-4 rounded border-slate-300 text-brand-600 accent-brand-600 shrink-0 cursor-pointer"
+                  />
+                </label>
+
+                {/* Toggle 2: Bank Details */}
+                <label className="flex items-center justify-between gap-3 text-xs cursor-pointer rounded-lg border border-slate-200 bg-white p-2.5 hover:bg-slate-50 transition-colors">
+                  <div>
+                    <span className="font-semibold text-slate-800 block">Show Bank Details on Invoice</span>
+                    <span className="text-muted-foreground block text-[11px]">
+                      Displays Bank Name, Account Number, and IFSC in the bottom footer.
+                    </span>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={showBankDetails}
+                    onChange={(e) => setShowBankDetails(e.target.checked)}
+                    className="h-4 w-4 rounded border-slate-300 text-brand-600 accent-brand-600 shrink-0 cursor-pointer"
+                  />
+                </label>
+
+                {/* Toggle 3: Declaration & Signatory */}
+                <label className="flex items-center justify-between gap-3 text-xs cursor-pointer rounded-lg border border-slate-200 bg-white p-2.5 hover:bg-slate-50 transition-colors">
+                  <div>
+                    <span className="font-semibold text-slate-800 block">Show Declaration &amp; Signatory Line</span>
+                    <span className="text-muted-foreground block text-[11px]">
+                      Includes official declaration ("We declare that this invoice...") and signature block.
+                    </span>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={showDeclaration}
+                    onChange={(e) => setShowDeclaration(e.target.checked)}
+                    className="h-4 w-4 rounded border-slate-300 text-brand-600 accent-brand-600 shrink-0 cursor-pointer"
+                  />
+                </label>
+
+                {/* Toggle 4: Logo Placement */}
+                <div className="flex items-center justify-between rounded-lg border border-slate-200 bg-white p-2.5 text-xs">
+                  <div>
+                    <span className="font-semibold text-slate-800 block">Header Logo Alignment</span>
+                    <span className="text-muted-foreground block text-[11px]">
+                      Position your brand logo on the invoice header.
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1 bg-slate-100 p-0.5 rounded-md border border-slate-200">
+                    <button
+                      type="button"
+                      onClick={() => setLogoPosition('left')}
+                      className={`px-2.5 py-1 text-[11px] font-semibold rounded transition-colors ${
+                        logoPosition === 'left' ? 'bg-white text-brand-700 shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      Left
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setLogoPosition('center')}
+                      className={`px-2.5 py-1 text-[11px] font-semibold rounded transition-colors ${
+                        logoPosition === 'center' ? 'bg-white text-brand-700 shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      Centered
+                    </button>
+                  </div>
+                </div>
+
+                {/* Toggle 5: Direct Print */}
+                <label className="flex items-center justify-between gap-3 text-xs cursor-pointer rounded-lg border border-slate-200 bg-white p-2.5 hover:bg-slate-50 transition-colors">
+                  <div>
+                    <span className="font-semibold text-slate-800 block">Direct Print on Counter (Skip Preview)</span>
+                    <span className="text-muted-foreground block text-[11px]">
+                      When enabled, saving a bill sends it straight to the printer without waiting for the preview modal.
+                    </span>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={directPrintEnabled}
+                    onChange={(e) => setDirectPrintEnabled(e.target.checked)}
+                    className="h-4 w-4 rounded border-slate-300 text-brand-600 accent-brand-600 shrink-0 cursor-pointer"
+                  />
+                </label>
               </CardContent>
             </Card>
 
@@ -1127,6 +1308,91 @@ export default function MmSettingsPage() {
 
       {/* ── MODALS ──────────────────────────────────────────────────── */}
       {/* Modal: Change Security PIN */}
+      {showRestoreModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-md rounded-xl bg-white p-5 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+              <h3 className="text-sm font-semibold flex items-center gap-2 text-slate-900">
+                <RotateCcw className="h-4 w-4 text-brand-700" />
+                Restore Database from Backup
+              </h3>
+              <button
+                type="button"
+                className="text-slate-400 hover:text-slate-600"
+                onClick={() => setShowRestoreModal(false)}
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="text-xs text-slate-600 space-y-2 bg-amber-50 p-3 rounded-lg border border-amber-200">
+              <p className="font-semibold text-amber-900">⚠️ Warning: Complete Database Replacement</p>
+              <p>
+                Restoring will replace the live database with the selected backup snapshot.
+                A safety copy of today's database will be saved next to it first.
+              </p>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <Label className="text-xs font-medium">Select Backup File to Restore</Label>
+                <select
+                  value={restoreSelectedFile}
+                  onChange={(e) => setRestoreSelectedFile(e.target.value)}
+                  className="w-full mt-1 text-xs font-mono p-2 rounded-md border border-slate-200 bg-white"
+                >
+                  <option value="MM_Billing_Backup.db">MM_Billing_Backup.db (Latest Snapshot)</option>
+                  {backupData?.backups?.filter(b => b.name !== 'MM_Billing_Backup.db').map((b) => (
+                    <option key={b.name} value={b.name}>
+                      {b.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {protectionEnabled && (
+                <div>
+                  <Label className="text-xs font-medium">Security PIN Required</Label>
+                  <Input
+                    type="password"
+                    value={restorePin}
+                    onChange={(e) => setRestorePin(e.target.value)}
+                    placeholder="Enter Security PIN"
+                    className="text-xs mt-1"
+                  />
+                </div>
+              )}
+
+              {restoreError && (
+                <p className="text-xs text-destructive font-medium">{restoreError}</p>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="text-xs"
+                onClick={() => setShowRestoreModal(false)}
+                disabled={isRestoring}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                onClick={handlePerformRestore}
+                disabled={isRestoring || !restoreSelectedFile}
+                className="bg-brand-700 hover:bg-brand-800 text-white text-xs font-medium"
+              >
+                {isRestoring ? 'Restoring…' : 'Confirm & Restore'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showChangePinModal && (
         <div className="fixed inset-0 z-50 bg-slate-950/50 backdrop-blur-[2px] flex items-center justify-center p-4">
           <form

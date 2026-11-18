@@ -155,13 +155,53 @@ export async function backupRoutes(fastify: FastifyInstance) {
     }
   });
 
-  // NOTE: there is deliberately no restore route. Restoring is a destructive,
-  // one-click way for the operator to wipe every bill created since a backup,
-  // so it is kept out of the billing UI entirely — and out of the HTTP API,
-  // which two-PC mode now exposes to the whole studio LAN.
-  //
-  // Recovery instead lives in the desktop shell: Alt → Setup → Restore from
-  // Backup… (desktop/main.js), which does the swap at restart, before the
-  // database is opened. `backend/scripts/restore.ts` is the equivalent for a
-  // dev checkout. Both take a safety snapshot of the current database first.
+    // POST /api/v1/backups/restore — restore database from a named backup file
+  fastify.post<{ Body: { filename: string } }>('/restore', { preHandler: requireAppHeader }, async (request, reply) => {
+    // PIN security check: if PIN is enabled, require valid x-current-security-pin header
+    const pinSetting = await fastify.prisma.setting.findUnique({ where: { key: 'bill_edit_password' } });
+    const protSetting = await fastify.prisma.setting.findUnique({ where: { key: 'bill_edit_protection_enabled' } });
+    if (protSetting?.value !== 'false' && pinSetting?.value) {
+      const pinHeader = request.headers['x-current-security-pin'];
+      if (!pinHeader || pinHeader !== pinSetting.value) {
+        return reply.status(403).send({ success: false, error: 'Valid Security PIN is required to restore database' });
+      }
+    }
+
+    const filename = (request.body?.filename ?? '').trim();
+    if (!filename) {
+      return reply.status(400).send({ success: false, error: 'Backup filename is required' });
+    }
+
+    try {
+      const customDir = await getConfiguredBackupDir(fastify.prisma);
+      const svc = new BackupService(customDir);
+
+      // 1. Take safety snapshot of current DB first
+      await svc.backup();
+
+      // 2. Disconnect Prisma to release file handles before swap
+      await fastify.prisma.$disconnect();
+
+      // 3. Perform atomic restore
+      await svc.restore(filename);
+
+      // 4. Reconnect Prisma
+      await fastify.prisma.$connect();
+
+      return reply.send({
+        success: true,
+        message: 'Database restored successfully',
+      });
+    } catch (err) {
+      try {
+        await fastify.prisma.$connect();
+      } catch {
+        // ignore reconnect error in catch block
+      }
+      if (err instanceof BackupError) {
+        return reply.status(400).send({ success: false, error: err.message });
+      }
+      throw err;
+    }
+  });
 }

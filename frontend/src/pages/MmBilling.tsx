@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useRef } from 'react';
 import { Plus, Printer, FileText, ScanEye, Save, RotateCcw, Zap, FileSpreadsheet } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
@@ -65,6 +65,7 @@ export default function MmBillingPage() {
   const [sendOnWhatsApp, setSendOnWhatsApp] = useState(false);
   const navigate = useNavigate();
   const [sendingWhatsApp, setSendingWhatsApp] = useState(false);
+  const autoPrintRequestedRef = useRef(false);
   const [previousDueRupees, setPreviousDueRupees] = useState('');
   // How the bill was paid — shown in the form and history/detail views only,
   // never on the printed invoice. See components/billing/PaymentModeSelect.
@@ -359,6 +360,17 @@ export default function MmBillingPage() {
       qc.invalidateQueries({ queryKey: ['bills'] });
       toast({ title: 'MM Bill saved!', description: `${bill.billNumber} created.`, variant: 'success' });
 
+      const shouldPrint = autoPrintRequestedRef.current || settings?.mm?.mm_direct_print_enabled === 'true';
+      if (shouldPrint) {
+        try {
+          const { printMmA4InvoicePDF } = await loadMmA4Lib();
+          const prevDue = Number(previousDueRupees) > 0 ? rupeeToPaisa(Number(previousDueRupees)) : undefined;
+          await printMmA4InvoicePDF(bill, settings ?? {}, { previousDueP: prevDue });
+        } catch (err) {
+          console.error('Direct print failed:', err);
+        }
+      }
+
       if (sendOnWhatsApp && customer.phone.trim()) {
         if (!isValidIndianPhone(customer.phone.trim())) {
           toast({
@@ -376,7 +388,8 @@ export default function MmBillingPage() {
     },
   });
 
-  const handleSave = async () => {
+  const handleSave = async (options: { autoPrint?: boolean } = {}) => {
+    autoPrintRequestedRef.current = !!options.autoPrint;
     const validItems = countedItems;
     if (validItems.length === 0) {
       toast({ title: 'No items', description: 'Add at least one item to the bill.', variant: 'destructive' });
@@ -455,6 +468,50 @@ export default function MmBillingPage() {
       series: 'MM',
     });
   };
+
+  // ── Keyboard Shortcuts for Counter Speed ──────────────
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't trigger if typing inside a textarea
+      const targetTag = (e.target as HTMLElement)?.tagName?.toLowerCase();
+      if (targetTag === 'textarea') return;
+
+      // Alt + P -> Save & Print
+      if (e.altKey && (e.key === 'p' || e.key === 'P')) {
+        e.preventDefault();
+        if (!createBillMutation.isPending && countedItems.length > 0) {
+          void handleSave({ autoPrint: true });
+        }
+      }
+      // Alt + S or Ctrl + S -> Save MM Bill
+      if ((e.altKey && (e.key === 's' || e.key === 'S')) || (e.ctrlKey && (e.key === 's' || e.key === 'S'))) {
+        e.preventDefault();
+        if (!createBillMutation.isPending && countedItems.length > 0) {
+          void handleSave({ autoPrint: false });
+        }
+      }
+      // Alt + N -> Append new item row and focus product input
+      if (e.altKey && (e.key === 'n' || e.key === 'N')) {
+        e.preventDefault();
+        setItems((prev) => [...prev, newEmptyItem(defaultGstRate)]);
+        setTimeout(() => {
+          const inputs = document.querySelectorAll<HTMLInputElement>('input[placeholder*="Product"]');
+          if (inputs.length > 0) {
+            inputs[inputs.length - 1]?.focus();
+          }
+        }, 50);
+      }
+      // Alt + C -> Focus customer search input
+      if (e.altKey && (e.key === 'c' || e.key === 'C')) {
+        e.preventDefault();
+        const custInput = document.querySelector<HTMLInputElement>('input[placeholder*="Customer name"]');
+        custInput?.focus();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [countedItems, createBillMutation.isPending, defaultGstRate]);
 
   const handlePrint = async () => {
     if (!savedBill) return;
@@ -579,13 +636,32 @@ export default function MmBillingPage() {
                 <ScanEye className="w-3.5 h-3.5 mr-1.5" />
                 Preview
               </Button>
-              <Button onClick={handleSave} disabled={createBillMutation.isPending} className="px-6">
+              <Button onClick={() => handleSave()} disabled={createBillMutation.isPending} className="px-6">
                 <Save className="w-3.5 h-3.5 mr-1.5" />
                 {createBillMutation.isPending ? 'Saving…' : 'Save MM Bill'}
               </Button>
             </>
           )}
         </div>
+      </div>
+
+      {/* ── Counter Hotkeys Bar ─────────────────────────────────── */}
+      <div className="flex items-center justify-between text-[11px] text-slate-500 bg-slate-50 border border-slate-200/80 px-3 py-1.5 rounded-lg shadow-2xs">
+        <div className="flex items-center gap-3">
+          <span className="font-semibold text-slate-700">⚡ Counter Hotkeys:</span>
+          <span><kbd className="px-1.5 py-0.5 bg-white border border-slate-300 rounded text-[10px] font-mono text-slate-800">Alt+P</kbd> Save &amp; Print</span>
+          <span>•</span>
+          <span><kbd className="px-1.5 py-0.5 bg-white border border-slate-300 rounded text-[10px] font-mono text-slate-800">Alt+S</kbd> Save</span>
+          <span>•</span>
+          <span><kbd className="px-1.5 py-0.5 bg-white border border-slate-300 rounded text-[10px] font-mono text-slate-800">Alt+N</kbd> New Item</span>
+          <span>•</span>
+          <span><kbd className="px-1.5 py-0.5 bg-white border border-slate-300 rounded text-[10px] font-mono text-slate-800">Alt+C</kbd> Customer</span>
+        </div>
+        {settings?.mm?.mm_direct_print_enabled === 'true' && (
+          <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+            ✓ Direct Print Active
+          </span>
+        )}
       </div>
 
       {/* ── Customer + Payment Mode bar ─────────────────────────────── */}
@@ -1122,7 +1198,7 @@ export default function MmBillingPage() {
                 <ScanEye className="w-4 h-4 mr-2" />
                 Preview
               </Button>
-              <Button className="w-full" onClick={handleSave} disabled={createBillMutation.isPending}>
+              <Button className="w-full" onClick={() => handleSave()} disabled={createBillMutation.isPending}>
                 <Save className="w-4 h-4 mr-2" />
                 {createBillMutation.isPending ? 'Saving…' : 'Save MM Bill'}
               </Button>
