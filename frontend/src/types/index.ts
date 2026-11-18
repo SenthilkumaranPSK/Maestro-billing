@@ -337,6 +337,27 @@ export interface Settings {
     mm_footer_computer_generated_text?: string;
     // Custom Logo Data URL
     mm_logo_data?: string;
+    // Geometry, Line Dividers & Alignment (Full Manual Control)
+    mm_margin?: string;
+    mm_mid_x?: string;
+    mm_col2_x?: string;
+    mm_header_height?: string;
+    mm_company_band_height?: string;
+    mm_middle_grid_height?: string;
+    mm_buyer_height?: string;
+    mm_table_header_height?: string;
+    mm_col_width_sno?: string;
+    mm_col_width_desc?: string;
+    mm_col_width_unit?: string;
+    mm_col_width_hsn?: string;
+    mm_col_width_qty?: string;
+    mm_col_width_rate?: string;
+    mm_col_width_amt?: string;
+    mm_logo_x_offset?: string;
+    mm_logo_y_offset?: string;
+    mm_logo_align?: string;
+    mm_title_align?: string;
+    mm_brand_align?: string;
   };
   // Gate on editing a saved bill (both MAIN and MM) — see PasswordGateModal.
   security: {
@@ -424,6 +445,28 @@ export const MM_DEFAULTS = {
   show_legal_footnote: 'true',
   jurisdiction: 'SALEM',
   footer_computer_generated_text: 'This is a Computer Generated Invoice',
+
+  // Geometry, Dividers & Position (Full Control)
+  margin: 30,
+  mid_x: 310,
+  col2_x: 440,
+  header_height: 75,
+  company_band_height: 85,
+  middle_grid_height: 182,
+  buyer_height: 76,
+  table_header_height: 24,
+  col_width_sno: 38,
+  col_width_desc: 182,
+  col_width_unit: 45,
+  col_width_hsn: 55,
+  col_width_qty: 65,
+  col_width_rate: 70,
+  col_width_amt: 80,
+  logo_x_offset: 0,
+  logo_y_offset: 0,
+  logo_align: 'left' as 'left' | 'center' | 'right',
+  title_align: 'right' as 'left' | 'center' | 'right',
+  brand_align: 'center' as 'left' | 'center' | 'right',
 };
 
 // Single source of truth for the show_whatsapp_on_billing convention — only
