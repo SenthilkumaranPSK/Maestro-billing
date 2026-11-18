@@ -7,12 +7,6 @@ import { wrapText } from '@/lib/a4invoice';
 import { computeHsnSummary } from '@/lib/hsnSummary';
 import { splitTaxP } from '@/lib/billMath';
 
-/**
- * MM/A4 Wholesale Tax Invoice layout with full customization.
- * Matches official Tally GST Tax Invoice format combined with Moru Moru Snacks branding.
- * Every section, title, label, column, and visibility toggle is fully configurable via MM Settings.
- */
-
 const STATE_CODES: Record<string, string> = {
   '33': 'Tamil Nadu',
   '37': 'Andhra Pradesh',
@@ -66,7 +60,6 @@ function formatTallyDate(date: Date | string | undefined | null): string {
 
 const PAGE_W = 595.28; // A4 pt
 const PAGE_H = 841.89;
-const MARGIN = 30;
 
 const BLACK = rgb(0.08, 0.08, 0.08);
 const THIN = 0.5;
@@ -135,7 +128,24 @@ export async function generateMmA4InvoicePDF(
 ): Promise<Uint8Array> {
   const mmSettings = settings.mm || {};
 
-  // ── 1. Document & Header Settings ──
+  // ── Geometry & Layout Dividers (Full Manual Control) ───────────────────────
+  const MARGIN = parseFloat(mmSettings.mm_margin || '') || MM_DEFAULTS.margin;
+  const midX = parseFloat(mmSettings.mm_mid_x || '') || MM_DEFAULTS.mid_x;
+  const col2X = parseFloat(mmSettings.mm_col2_x || '') || MM_DEFAULTS.col2_x;
+  const HEADER_H = parseFloat(mmSettings.mm_header_height || '') || MM_DEFAULTS.header_height;
+  const COMPANY_BAND_H = parseFloat(mmSettings.mm_company_band_height || '') || MM_DEFAULTS.company_band_height;
+  const MIDDLE_GRID_H = parseFloat(mmSettings.mm_middle_grid_height || '') || MM_DEFAULTS.middle_grid_height;
+  const buyerH = parseFloat(mmSettings.mm_buyer_height || '') || MM_DEFAULTS.buyer_height;
+  const TABLE_HEADER_H = parseFloat(mmSettings.mm_table_header_height || '') || MM_DEFAULTS.table_header_height;
+
+  // Alignment & Placement Offsets
+  const logoXOffset = parseFloat(mmSettings.mm_logo_x_offset || '') || 0;
+  const logoYOffset = parseFloat(mmSettings.mm_logo_y_offset || '') || 0;
+  const logoAlign = (mmSettings.mm_logo_align as 'left' | 'center' | 'right') || MM_DEFAULTS.logo_align;
+  const titleAlign = (mmSettings.mm_title_align as 'left' | 'center' | 'right') || MM_DEFAULTS.title_align;
+  const brandAlign = (mmSettings.mm_brand_align as 'left' | 'center' | 'right') || MM_DEFAULTS.brand_align;
+
+  // ── Document & Header Settings ─────────────────────────────────────────────
   const invoiceTitle = mmSettings.mm_invoice_title || MM_DEFAULTS.invoice_title;
   const brandName = mmSettings.mm_brand_name || MM_DEFAULTS.brand_name;
   const tagline = mmSettings.mm_tagline ?? MM_DEFAULTS.tagline;
@@ -144,7 +154,7 @@ export async function generateMmA4InvoicePDF(
   const logoSize = mmSettings.mm_logo_size || MM_DEFAULTS.logo_size;
   const showHeaderFssai = mmSettings.mm_show_header_fssai !== 'false';
 
-  // ── 2. Seller Identity (Marketed By) ──
+  // ── Seller Identity (Marketed By) ──────────────────────────────────────────
   const sellerBoxLabel = mmSettings.mm_seller_box_label || MM_DEFAULTS.seller_box_label;
   const companyName = mmSettings.mm_company_name || MM_DEFAULTS.company_name;
   const companyAddress = mmSettings.mm_address || MM_DEFAULTS.address;
@@ -156,13 +166,13 @@ export async function generateMmA4InvoicePDF(
     mmSettings.mm_state_code || MM_DEFAULTS.state_code
   );
 
-  // ── 3. Branch Office & Sales Point ──
+  // ── Branch Office & Sales Point ────────────────────────────────────────────
   const showBranchOffice = mmSettings.mm_show_branch_office !== 'false';
   const branchBoxLabel = mmSettings.mm_branch_box_label || MM_DEFAULTS.branch_box_label;
   const branchOffice = mmSettings.mm_branch_office || MM_DEFAULTS.branch_office;
   const branchFssai = mmSettings.mm_branch_fssai || MM_DEFAULTS.branch_fssai;
 
-  // ── 4. Parties & Dispatch ──
+  // ── Parties & Dispatch ─────────────────────────────────────────────────────
   const buyerBoxLabel = mmSettings.mm_buyer_box_label || MM_DEFAULTS.buyer_box_label;
   const consigneeBoxLabel = mmSettings.mm_consignee_box_label || MM_DEFAULTS.consignee_box_label;
   const showPartiesContact = mmSettings.mm_show_parties_contact !== 'false';
@@ -180,7 +190,7 @@ export async function generateMmA4InvoicePDF(
   const labelDestination = mmSettings.mm_label_destination || MM_DEFAULTS.label_destination;
   const labelTermsDelivery = mmSettings.mm_label_terms_delivery || MM_DEFAULTS.label_terms_delivery;
 
-  // ── 5. Items Table & Columns ──
+  // ── Items Table & Columns ──────────────────────────────────────────────────
   const colLabelSno = mmSettings.mm_col_label_sno || MM_DEFAULTS.col_label_sno;
   const colLabelDesc = mmSettings.mm_col_label_desc || MM_DEFAULTS.col_label_desc;
   const colLabelUnit = mmSettings.mm_col_label_unit || MM_DEFAULTS.col_label_unit;
@@ -192,12 +202,21 @@ export async function generateMmA4InvoicePDF(
   const showColHsn = mmSettings.mm_show_col_hsn !== 'false';
   const showInlineTax = mmSettings.mm_show_inline_tax !== 'false';
 
-  // ── 6. Summary Block ──
+  // Configured Column Widths
+  const colWSno = parseFloat(mmSettings.mm_col_width_sno || '') || MM_DEFAULTS.col_width_sno;
+  const colWDesc = parseFloat(mmSettings.mm_col_width_desc || '') || MM_DEFAULTS.col_width_desc;
+  const colWUnit = parseFloat(mmSettings.mm_col_width_unit || '') || MM_DEFAULTS.col_width_unit;
+  const colWHsn = parseFloat(mmSettings.mm_col_width_hsn || '') || MM_DEFAULTS.col_width_hsn;
+  const colWQty = parseFloat(mmSettings.mm_col_width_qty || '') || MM_DEFAULTS.col_width_qty;
+  const colWRate = parseFloat(mmSettings.mm_col_width_rate || '') || MM_DEFAULTS.col_width_rate;
+  const colWAmt = parseFloat(mmSettings.mm_col_width_amt || '') || MM_DEFAULTS.col_width_amt;
+
+  // ── Summary Block ──────────────────────────────────────────────────────────
   const showTaxSummaryTable = mmSettings.mm_show_tax_summary_table !== 'false';
   const showAmountInWords = mmSettings.mm_show_amount_in_words !== 'false';
   const showEoe = mmSettings.mm_show_eoe !== 'false';
 
-  // ── 7. Bank Details ──
+  // ── Bank Details ───────────────────────────────────────────────────────────
   const showBankDetails = mmSettings.mm_show_bank_details !== 'false';
   const bankAccountName = mmSettings.mm_bank_account_name || MM_DEFAULTS.bank_account_name;
   const bankName = mmSettings.mm_bank_name || MM_DEFAULTS.bank_name;
@@ -205,7 +224,7 @@ export async function generateMmA4InvoicePDF(
   const bankBranch = mmSettings.mm_bank_branch || MM_DEFAULTS.bank_branch;
   const bankIfsc = mmSettings.mm_bank_ifsc || MM_DEFAULTS.bank_ifsc;
 
-  // ── 8. Declaration & Signatory ──
+  // ── Declaration & Signatory ────────────────────────────────────────────────
   const declarationTitle = mmSettings.mm_declaration_title || MM_DEFAULTS.declaration_title;
   const declarationText = mmSettings.mm_declaration_text || MM_DEFAULTS.declaration_text;
   const signatoryPrefix = mmSettings.mm_signatory_prefix || `for ${companyName}`;
@@ -214,7 +233,7 @@ export async function generateMmA4InvoicePDF(
   const jurisdiction = mmSettings.mm_jurisdiction || MM_DEFAULTS.jurisdiction;
   const footerComputerGeneratedText = mmSettings.mm_footer_computer_generated_text || MM_DEFAULTS.footer_computer_generated_text;
 
-  // Resolve Buyer & Consignee details
+  // Parties resolution
   const buyerName = bill.buyerName || bill.mmCustomer?.name || bill.customer?.name || '';
   const buyerAddress = bill.buyerAddress || bill.mmCustomer?.address || bill.customer?.address || '';
   const buyerGstin = bill.buyerGstin || bill.mmCustomer?.gstin || bill.customer?.gstin || '';
@@ -275,12 +294,10 @@ export async function generateMmA4InvoicePDF(
   const left = MARGIN;
   const right = PAGE_W - MARGIN;
   const contentW = right - left;
-  const midX = 310;
   const leftW = midX - left;
   const rightW = right - midX;
-  const col2X = 440;
 
-  // Dynamic Column widths calculation
+  // Dynamic Column Layout
   interface ColDef {
     key: string;
     label: string;
@@ -289,34 +306,30 @@ export async function generateMmA4InvoicePDF(
   }
 
   const rawCols: ColDef[] = [
-    { key: 'sno', label: colLabelSno, w: 38, align: 'center' },
-    { key: 'desc', label: colLabelDesc, w: 182.28, align: 'left' },
+    { key: 'sno', label: colLabelSno, w: colWSno, align: 'center' },
+    { key: 'desc', label: colLabelDesc, w: colWDesc, align: 'left' },
   ];
 
   if (showColUnit) {
-    rawCols.push({ key: 'unit', label: colLabelUnit, w: 45, align: 'center' });
+    rawCols.push({ key: 'unit', label: colLabelUnit, w: colWUnit, align: 'center' });
   }
   if (showColHsn) {
-    rawCols.push({ key: 'hsn', label: colLabelHsn, w: 55, align: 'center' });
+    rawCols.push({ key: 'hsn', label: colLabelHsn, w: colWHsn, align: 'center' });
   }
   rawCols.push(
-    { key: 'qty', label: colLabelQty, w: 65, align: 'right' },
-    { key: 'rate', label: colLabelRate, w: 70, align: 'right' },
-    { key: 'amt', label: colLabelAmount, w: 80, align: 'right' }
+    { key: 'qty', label: colLabelQty, w: colWQty, align: 'right' },
+    { key: 'rate', label: colLabelRate, w: colWRate, align: 'right' },
+    { key: 'amt', label: colLabelAmount, w: colWAmt, align: 'right' }
   );
 
-  // If unit or hsn are hidden, give their width back to description
-  let extraW = 0;
-  if (!showColUnit) extraW += 45;
-  if (!showColHsn) extraW += 55;
-  const descCol = rawCols.find((c) => c.key === 'desc');
-  if (descCol) descCol.w += extraW;
-
-  // Compute absolute x coordinate for each column
+  // Normalize column widths to fit contentW exactly
+  const sumW = rawCols.reduce((acc, c) => acc + c.w, 0);
+  const scale = contentW / sumW;
   let curX = left;
   const cols = rawCols.map((c) => {
-    const colObj = { ...c, x: curX };
-    curX += c.w;
+    const colW = c.w * scale;
+    const colObj = { ...c, w: colW, x: curX };
+    curX += colW;
     return colObj;
   });
 
@@ -372,11 +385,7 @@ export async function generateMmA4InvoicePDF(
   const inlineTaxCount = showInlineTax && bill.gstAmount > 0 ? (bill.isInterState ? 1 : 2) : 0;
   const INLINE_TAX_H = inlineTaxCount * 14;
 
-  const COMPANY_BAND_H = 85;
-  const MIDDLE_GRID_H = 182;
-  const TABLE_HEADER_H = 24;
-
-  const availableItemsH = PAGE_H - MARGIN - 75 - COMPANY_BAND_H - MIDDLE_GRID_H - TABLE_HEADER_H - reservedBottomY;
+  const availableItemsH = PAGE_H - MARGIN - HEADER_H - COMPANY_BAND_H - MIDDLE_GRID_H - TABLE_HEADER_H - reservedBottomY;
   const itemPages: ItemLayout[][] = [];
   let current: ItemLayout[] = [];
   let currentH = 0;
@@ -392,7 +401,6 @@ export async function generateMmA4InvoicePDF(
   }
   itemPages.push(current);
 
-  // Render for each requested invoice copy (Original, Duplicate, Triplicate)
   for (const copyInfo of copiesToRender) {
     itemPages.forEach((pageItems, pageIdx) => {
       const isLast = pageIdx === itemPages.length - 1;
@@ -420,7 +428,7 @@ export async function generateMmA4InvoicePDF(
       // ── 1. Brand Header ──────────────────────────────────────────────
       const hy = PAGE_H - MARGIN;
 
-      // Draw custom logo if enabled
+      // Draw custom logo with alignment & offsets
       if (showHeaderLogo && logoImage) {
         let maxLogoW = 95;
         let maxLogoH = 50;
@@ -438,31 +446,54 @@ export async function generateMmA4InvoicePDF(
           drawH = maxLogoH;
           drawW = drawH * aspect;
         }
-        const logoY = hy - 64 + (maxLogoH - drawH) / 2;
+
+        let logoX = left + 6;
+        if (logoAlign === 'center') {
+          logoX = left + (contentW - drawW) / 2;
+        } else if (logoAlign === 'right') {
+          logoX = right - drawW - 6;
+        }
+        logoX += logoXOffset;
+
+        const logoY = hy - 64 + (maxLogoH - drawH) / 2 + logoYOffset;
         page.drawImage(logoImage, {
-          x: left + 6,
+          x: logoX,
           y: logoY,
           width: drawW,
           height: drawH,
         });
       }
 
-      // Title & Copy type at top right
-      text(invoiceTitle, right - 5, hy - 14, { size: 10, font: bold, align: 'right' });
+      // Title & Copy type with configurable alignment
+      let titleX = right - 5;
+      let tAlign: 'left' | 'center' | 'right' = titleAlign;
+      if (titleAlign === 'center') {
+        titleX = left;
+      } else if (titleAlign === 'left') {
+        titleX = left + 5;
+      }
+      text(invoiceTitle, titleX, hy - 14, { size: 10, font: bold, align: tAlign, maxWidth: contentW });
       if (copyInfo.title) {
-        text(`(${copyInfo.title})`, right - 5, hy - 26, { size: 7, font: bold, align: 'right' });
+        text(`(${copyInfo.title})`, titleX, hy - 26, { size: 7, font: bold, align: tAlign, maxWidth: contentW });
       }
 
       // Center Brand Identity
-      text(brandName, left, hy - 18, { size: 20, font: bold, align: 'center', maxWidth: contentW });
+      let brandX = left;
+      let bAlign: 'left' | 'center' | 'right' = brandAlign;
+      if (brandAlign === 'left') {
+        brandX = left + 5;
+      } else if (brandAlign === 'right') {
+        brandX = right - 5;
+      }
+      text(brandName, brandX, hy - 18, { size: 20, font: bold, align: bAlign, maxWidth: contentW });
       if (tagline) {
-        text(tagline, left, hy - 36, { size: 9.5, font: regular, align: 'center', maxWidth: contentW });
+        text(tagline, brandX, hy - 36, { size: 9.5, font: regular, align: bAlign, maxWidth: contentW });
       }
       if (showHeaderFssai && fssaiNo) {
-        text(`(FSSAI: ${fssaiNo})`, left, hy - 52, { size: 9.5, font: regular, align: 'center', maxWidth: contentW });
+        text(`(FSSAI: ${fssaiNo})`, brandX, hy - 52, { size: 9.5, font: regular, align: bAlign, maxWidth: contentW });
       }
 
-      const headerBottomY = hy - 75;
+      const headerBottomY = hy - HEADER_H;
       hline(headerBottomY, left, right);
 
       // ── 2. Top Address Band ──────────────────────────────────────────
@@ -473,22 +504,21 @@ export async function generateMmA4InvoicePDF(
 
         // Left: Marketed By / Seller
         text(sellerBoxLabel, left + 5, headerBottomY - 16, { size: 9.5, font: bold });
-        text(companyName, left + 5, headerBottomY - 31, { size: 9.5, font: regular });
+        text(companyName, left + 5, headerBottomY - 31, { size: 9.5, font: regular, maxWidth: leftW - 10 });
         const rawAddrLines = companyAddress.split('\n').map((s) => s.trim()).filter(Boolean);
-        text(rawAddrLines[0] || '', left + 5, headerBottomY - 45, { size: 9.5, font: regular });
-        text(rawAddrLines[1] || '', left + 5, headerBottomY - 59, { size: 9.5, font: regular });
+        text(rawAddrLines[0] || '', left + 5, headerBottomY - 45, { size: 9.5, font: regular, maxWidth: leftW - 10 });
+        text(rawAddrLines[1] || '', left + 5, headerBottomY - 59, { size: 9.5, font: regular, maxWidth: leftW - 10 });
         text(`GST NO: ${companyGstin}`, left + 5, headerBottomY - 73, { size: 9.5, font: regular });
 
         // Right: Branch Office & Sales Point
         text(branchBoxLabel, midX + 5, headerBottomY - 16, { size: 9.5, font: bold });
         const rawBranchLines = branchOffice.split('\n').map((s) => s.trim()).filter(Boolean);
-        text(rawBranchLines[0] || '', midX + 5, headerBottomY - 31, { size: 9.5, font: regular });
-        text(rawBranchLines[1] || '', midX + 5, headerBottomY - 45, { size: 9.5, font: regular });
+        text(rawBranchLines[0] || '', midX + 5, headerBottomY - 31, { size: 9.5, font: regular, maxWidth: rightW - 10 });
+        text(rawBranchLines[1] || '', midX + 5, headerBottomY - 45, { size: 9.5, font: regular, maxWidth: rightW - 10 });
         if (branchFssai) {
           text(`FSSAI No: ${branchFssai}`, midX + 5, headerBottomY - 59, { size: 9.5, font: regular });
         }
       } else {
-        // Full width Seller Details
         text(sellerBoxLabel, left + 5, headerBottomY - 16, { size: 10, font: bold });
         text(companyName, left + 5, headerBottomY - 31, { size: 9.5, font: regular });
         const rawAddrLines = companyAddress.split('\n').map((s) => s.trim()).filter(Boolean);
@@ -503,7 +533,6 @@ export async function generateMmA4InvoicePDF(
       vline(midX, middleGridBottomY, companyBandBottomY);
 
       // Left: Buyer & Consignee
-      const buyerH = 76;
       const buyerBottom = companyBandBottomY - buyerH;
       hline(buyerBottom, left, midX);
 
@@ -548,27 +577,27 @@ export async function generateMmA4InvoicePDF(
       }
 
       // Right: 7-Row Dispatch Grid
-      const ROW_H = 26;
+      const ROW_H = MIDDLE_GRID_H / 7;
       let ry = companyBandBottomY;
       vline(col2X, middleGridBottomY, companyBandBottomY);
 
       // Row 1: Bill No. | Date:
       text(labelBillNo, midX + 4, ry - 11, { size: 8, font: regular });
-      text(bill.billNumber, midX + 4, ry - 21, { size: 8, font: bold, maxWidth: 120 });
+      text(bill.billNumber, midX + 4, ry - 21, { size: 8, font: bold, maxWidth: col2X - midX - 8 });
       text(labelDate, col2X + 4, ry - 11, { size: 8, font: regular });
-      text(formatTallyDate(bill.billDate), col2X + 4, ry - 21, { size: 8, font: bold, maxWidth: 110 });
+      text(formatTallyDate(bill.billDate), col2X + 4, ry - 21, { size: 8, font: bold, maxWidth: right - col2X - 8 });
       ry -= ROW_H;
       hline(ry, midX, right);
 
       // Row 2: Delivery Note | Terms of Payment
       text(labelDeliveryNote, midX + 4, ry - 11, { size: 8, font: regular });
       if (bill.deliveryNote) {
-        text(bill.deliveryNote, midX + 4, ry - 21, { size: 7.5, font: regular, maxWidth: 120 });
+        text(bill.deliveryNote, midX + 4, ry - 21, { size: 7.5, font: regular, maxWidth: col2X - midX - 8 });
       }
       text(labelPaymentTerms, col2X + 4, ry - 11, { size: 8, font: regular });
       const paymentDisplay = bill.termsOfPayment || bill.paymentMode || '';
       if (paymentDisplay) {
-        text(paymentDisplay, col2X + 4, ry - 21, { size: 8, font: bold, maxWidth: 110 });
+        text(paymentDisplay, col2X + 4, ry - 21, { size: 8, font: bold, maxWidth: right - col2X - 8 });
       }
       ry -= ROW_H;
       hline(ry, midX, right);
@@ -576,11 +605,11 @@ export async function generateMmA4InvoicePDF(
       // Row 3: Buyer's Order No. | Date:
       text(labelBuyerOrderNo, midX + 4, ry - 11, { size: 8, font: regular });
       if (bill.buyersOrderNo) {
-        text(bill.buyersOrderNo, midX + 4, ry - 21, { size: 7.5, font: regular, maxWidth: 120 });
+        text(bill.buyersOrderNo, midX + 4, ry - 21, { size: 7.5, font: regular, maxWidth: col2X - midX - 8 });
       }
       text(labelDate, col2X + 4, ry - 11, { size: 8, font: regular });
       if (bill.buyersOrderDate) {
-        text(formatTallyDate(bill.buyersOrderDate), col2X + 4, ry - 21, { size: 7.5, font: regular, maxWidth: 110 });
+        text(formatTallyDate(bill.buyersOrderDate), col2X + 4, ry - 21, { size: 7.5, font: regular, maxWidth: right - col2X - 8 });
       }
       ry -= ROW_H;
       hline(ry, midX, right);
@@ -589,11 +618,11 @@ export async function generateMmA4InvoicePDF(
       text(labelDispatchDoc, midX + 4, ry - 11, { size: 8, font: regular });
       const dispatchDocDisplay = bill.dispatchDocNo || (bill.ewayBillNo ? `EWAY: ${bill.ewayBillNo}` : '');
       if (dispatchDocDisplay) {
-        text(dispatchDocDisplay, midX + 4, ry - 21, { size: 7.5, font: regular, maxWidth: 120 });
+        text(dispatchDocDisplay, midX + 4, ry - 21, { size: 7.5, font: regular, maxWidth: col2X - midX - 8 });
       }
       text(labelDate, col2X + 4, ry - 11, { size: 8, font: regular });
       if (bill.deliveryNoteDate) {
-        text(formatTallyDate(bill.deliveryNoteDate), col2X + 4, ry - 21, { size: 7.5, font: regular, maxWidth: 110 });
+        text(formatTallyDate(bill.deliveryNoteDate), col2X + 4, ry - 21, { size: 7.5, font: regular, maxWidth: right - col2X - 8 });
       }
       ry -= ROW_H;
       hline(ry, midX, right);
@@ -602,7 +631,7 @@ export async function generateMmA4InvoicePDF(
       text(labelDespatchedThrough, midX + 4, ry - 11, { size: 8, font: regular });
       const dispatchDetails = [bill.despatchedThrough, bill.vehicleNo].filter(Boolean).join(' / ');
       if (dispatchDetails) {
-        text(dispatchDetails, midX + 4, ry - 21, { size: 7.5, font: regular, maxWidth: 120 });
+        text(dispatchDetails, midX + 4, ry - 21, { size: 7.5, font: regular, maxWidth: right - midX - 8 });
       }
       ry -= ROW_H;
       hline(ry, midX, right);
@@ -610,7 +639,7 @@ export async function generateMmA4InvoicePDF(
       // Row 6: Destination
       text(labelDestination, midX + 4, ry - 11, { size: 8, font: regular });
       if (bill.destination) {
-        text(bill.destination, midX + 4, ry - 21, { size: 7.5, font: regular, maxWidth: 120 });
+        text(bill.destination, midX + 4, ry - 21, { size: 7.5, font: regular, maxWidth: right - midX - 8 });
       }
       ry -= ROW_H;
       hline(ry, midX, right);
@@ -619,7 +648,7 @@ export async function generateMmA4InvoicePDF(
       text(labelTermsDelivery, midX + 4, ry - 11, { size: 8, font: regular });
       const termsDisplay = bill.termsOfDelivery || bill.notes || '';
       if (termsDisplay) {
-        text(termsDisplay, midX + 4, ry - 21, { size: 7.5, font: regular, maxWidth: 120 });
+        text(termsDisplay, midX + 4, ry - 21, { size: 7.5, font: regular, maxWidth: right - midX - 8 });
       }
       hline(middleGridBottomY, left, right);
 
@@ -890,7 +919,6 @@ export async function generateMmA4InvoicePDF(
         const bankTopY = sy;
         vline(midX, bottomLimit, bankTopY);
 
-        // Left Half: Bank Details & Declaration
         if (showBankDetails) {
           let bky = bankTopY - 10;
           text(`Bank: ${bankName}`, left + 6, bky, { size: 8, font: regular });
@@ -910,7 +938,6 @@ export async function generateMmA4InvoicePDF(
           dly -= 8;
         }
 
-        // Right Half: for Company Name & Authorised Signatory
         text(signatoryPrefix, right - 10, bankTopY - 11, { size: 8, font: bold, align: 'right' });
         text(signatoryLabel, right - 10, bottomLimit + 8, { size: 7.5, font: regular, align: 'right' });
       }

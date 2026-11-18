@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Save,
   Moon,
@@ -30,6 +30,15 @@ import {
   AlertCircle,
   FileDown,
   FileUp,
+  Move,
+  AlignLeft,
+  AlignCenter,
+  AlignRight,
+  SplitSquareVertical,
+  SplitSquareHorizontal,
+  MousePointer,
+  ArrowLeftRight,
+  ArrowUpDown,
 } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
@@ -102,7 +111,7 @@ const samplePreviewBill: Bill = {
   createdAt: new Date().toISOString(),
 };
 
-type LayoutSubSection = 'header' | 'seller' | 'parties' | 'table' | 'bank' | 'presets';
+type LayoutSubSection = 'geometry' | 'header' | 'seller' | 'parties' | 'table' | 'bank' | 'presets';
 
 export default function MmSettingsPage() {
   const { toast } = useToast();
@@ -110,7 +119,8 @@ export default function MmSettingsPage() {
   const { theme, setTheme } = useTheme();
 
   const [mainTab, setMainTab] = useState<'layout' | 'security'>('layout');
-  const [layoutSubSection, setLayoutSubSection] = useState<LayoutSubSection>('header');
+  const [layoutSubSection, setLayoutSubSection] = useState<LayoutSubSection>('geometry');
+  const [previewViewMode, setPreviewViewMode] = useState<'canvas' | 'pdf'>('canvas');
 
   const { data: settings } = useQuery({
     queryKey: ['settings'],
@@ -122,7 +132,33 @@ export default function MmSettingsPage() {
     queryFn: () => billsApi.getNextNumber('MM'),
   });
 
-  // ── 1. Document & Header Settings ──────────────────────────────────────────
+  // ── Geometry & Layout Dividers (Full Manual Control) ───────────────────────
+  const [margin, setMargin] = useState(MM_DEFAULTS.margin);
+  const [midX, setMidX] = useState(MM_DEFAULTS.mid_x);
+  const [col2X, setCol2X] = useState(MM_DEFAULTS.col2_x);
+  const [headerHeight, setHeaderHeight] = useState(MM_DEFAULTS.header_height);
+  const [companyBandHeight, setCompanyBandHeight] = useState(MM_DEFAULTS.company_band_height);
+  const [middleGridHeight, setMiddleGridHeight] = useState(MM_DEFAULTS.middle_grid_height);
+  const [buyerHeight, setBuyerHeight] = useState(MM_DEFAULTS.buyer_height);
+  const [tableHeaderHeight, setTableHeaderHeight] = useState(MM_DEFAULTS.table_header_height);
+
+  // Column Widths
+  const [colWSno, setColWSno] = useState(MM_DEFAULTS.col_width_sno);
+  const [colWDesc, setColWDesc] = useState(MM_DEFAULTS.col_width_desc);
+  const [colWUnit, setColWUnit] = useState(MM_DEFAULTS.col_width_unit);
+  const [colWHsn, setColWHsn] = useState(MM_DEFAULTS.col_width_hsn);
+  const [colWQty, setColWQty] = useState(MM_DEFAULTS.col_width_qty);
+  const [colWRate, setColWRate] = useState(MM_DEFAULTS.col_width_rate);
+  const [colWAmt, setColWAmt] = useState(MM_DEFAULTS.col_width_amt);
+
+  // Alignments & Offsets
+  const [logoXOffset, setLogoXOffset] = useState(0);
+  const [logoYOffset, setLogoYOffset] = useState(0);
+  const [logoAlign, setLogoAlign] = useState<'left' | 'center' | 'right'>('left');
+  const [titleAlign, setTitleAlign] = useState<'left' | 'center' | 'right'>('right');
+  const [brandAlign, setBrandAlign] = useState<'left' | 'center' | 'right'>('center');
+
+  // ── Document & Header Content ──────────────────────────────────────────────
   const [invoiceTitle, setInvoiceTitle] = useState(MM_DEFAULTS.invoice_title);
   const [brandName, setBrandName] = useState(MM_DEFAULTS.brand_name);
   const [tagline, setTagline] = useState(MM_DEFAULTS.tagline);
@@ -134,7 +170,7 @@ export default function MmSettingsPage() {
   const logoInputRef = useRef<HTMLInputElement>(null);
   const jsonImportRef = useRef<HTMLInputElement>(null);
 
-  // ── 2. Seller Identity (Marketed By) ───────────────────────────────────────
+  // ── Seller Identity (Marketed By) ──────────────────────────────────────────
   const [sellerBoxLabel, setSellerBoxLabel] = useState(MM_DEFAULTS.seller_box_label);
   const [companyName, setCompanyName] = useState(MM_DEFAULTS.company_name);
   const [companyAddress, setCompanyAddress] = useState(MM_DEFAULTS.address);
@@ -143,13 +179,13 @@ export default function MmSettingsPage() {
   const [stateName, setStateName] = useState(MM_DEFAULTS.state_name);
   const [stateCode, setStateCode] = useState(MM_DEFAULTS.state_code);
 
-  // ── 3. Branch Office & Sales Point ─────────────────────────────────────────
+  // ── Branch Office & Sales Point ────────────────────────────────────────────
   const [showBranchOffice, setShowBranchOffice] = useState(true);
   const [branchBoxLabel, setBranchBoxLabel] = useState(MM_DEFAULTS.branch_box_label);
   const [branchOffice, setBranchOffice] = useState(MM_DEFAULTS.branch_office);
   const [branchFssai, setBranchFssai] = useState(MM_DEFAULTS.branch_fssai);
 
-  // ── 4. Parties & Dispatch ──────────────────────────────────────────────────
+  // ── Parties & Dispatch ─────────────────────────────────────────────────────
   const [buyerBoxLabel, setBuyerBoxLabel] = useState(MM_DEFAULTS.buyer_box_label);
   const [consigneeBoxLabel, setConsigneeBoxLabel] = useState(MM_DEFAULTS.consignee_box_label);
   const [showPartiesContact, setShowPartiesContact] = useState(true);
@@ -167,7 +203,7 @@ export default function MmSettingsPage() {
   const [labelDestination, setLabelDestination] = useState(MM_DEFAULTS.label_destination);
   const [labelTermsDelivery, setLabelTermsDelivery] = useState(MM_DEFAULTS.label_terms_delivery);
 
-  // ── 5. Items Table & Columns ───────────────────────────────────────────────
+  // ── Items Table & Columns ──────────────────────────────────────────────────
   const [colLabelSno, setColLabelSno] = useState(MM_DEFAULTS.col_label_sno);
   const [colLabelDesc, setColLabelDesc] = useState(MM_DEFAULTS.col_label_desc);
   const [colLabelUnit, setColLabelUnit] = useState(MM_DEFAULTS.col_label_unit);
@@ -179,12 +215,12 @@ export default function MmSettingsPage() {
   const [showColHsn, setShowColHsn] = useState(true);
   const [showInlineTax, setShowInlineTax] = useState(true);
 
-  // ── 6. Summary & Notes ─────────────────────────────────────────────────────
+  // ── Summary & Notes ────────────────────────────────────────────────────────
   const [showTaxSummaryTable, setShowTaxSummaryTable] = useState(true);
   const [showAmountInWords, setShowAmountInWords] = useState(true);
   const [showEoe, setShowEoe] = useState(true);
 
-  // ── 7. Bank Details ────────────────────────────────────────────────────────
+  // ── Bank Details ───────────────────────────────────────────────────────────
   const [showBankDetails, setShowBankDetails] = useState(true);
   const [bankAccountName, setBankAccountName] = useState(MM_DEFAULTS.bank_account_name);
   const [bankName, setBankName] = useState(MM_DEFAULTS.bank_name);
@@ -192,7 +228,7 @@ export default function MmSettingsPage() {
   const [bankBranch, setBankBranch] = useState(MM_DEFAULTS.bank_branch);
   const [bankIfsc, setBankIfsc] = useState(MM_DEFAULTS.bank_ifsc);
 
-  // ── 8. Declaration & Signatory ─────────────────────────────────────────────
+  // ── Declaration & Signatory ────────────────────────────────────────────────
   const [declarationTitle, setDeclarationTitle] = useState(MM_DEFAULTS.declaration_title);
   const [declarationText, setDeclarationText] = useState(MM_DEFAULTS.declaration_text);
   const [signatoryPrefix, setSignatoryPrefix] = useState(MM_DEFAULTS.signatory_prefix);
@@ -210,6 +246,29 @@ export default function MmSettingsPage() {
   useEffect(() => {
     const mm = settings?.mm;
     if (!mm) return;
+
+    if (mm.mm_margin !== undefined) setMargin(parseFloat(mm.mm_margin) || MM_DEFAULTS.margin);
+    if (mm.mm_mid_x !== undefined) setMidX(parseFloat(mm.mm_mid_x) || MM_DEFAULTS.mid_x);
+    if (mm.mm_col2_x !== undefined) setCol2X(parseFloat(mm.mm_col2_x) || MM_DEFAULTS.col2_x);
+    if (mm.mm_header_height !== undefined) setHeaderHeight(parseFloat(mm.mm_header_height) || MM_DEFAULTS.header_height);
+    if (mm.mm_company_band_height !== undefined) setCompanyBandHeight(parseFloat(mm.mm_company_band_height) || MM_DEFAULTS.company_band_height);
+    if (mm.mm_middle_grid_height !== undefined) setMiddleGridHeight(parseFloat(mm.mm_middle_grid_height) || MM_DEFAULTS.middle_grid_height);
+    if (mm.mm_buyer_height !== undefined) setBuyerHeight(parseFloat(mm.mm_buyer_height) || MM_DEFAULTS.buyer_height);
+    if (mm.mm_table_header_height !== undefined) setTableHeaderHeight(parseFloat(mm.mm_table_header_height) || MM_DEFAULTS.table_header_height);
+
+    if (mm.mm_col_width_sno !== undefined) setColWSno(parseFloat(mm.mm_col_width_sno) || MM_DEFAULTS.col_width_sno);
+    if (mm.mm_col_width_desc !== undefined) setColWDesc(parseFloat(mm.mm_col_width_desc) || MM_DEFAULTS.col_width_desc);
+    if (mm.mm_col_width_unit !== undefined) setColWUnit(parseFloat(mm.mm_col_width_unit) || MM_DEFAULTS.col_width_unit);
+    if (mm.mm_col_width_hsn !== undefined) setColWHsn(parseFloat(mm.mm_col_width_hsn) || MM_DEFAULTS.col_width_hsn);
+    if (mm.mm_col_width_qty !== undefined) setColWQty(parseFloat(mm.mm_col_width_qty) || MM_DEFAULTS.col_width_qty);
+    if (mm.mm_col_width_rate !== undefined) setColWRate(parseFloat(mm.mm_col_width_rate) || MM_DEFAULTS.col_width_rate);
+    if (mm.mm_col_width_amt !== undefined) setColWAmt(parseFloat(mm.mm_col_width_amt) || MM_DEFAULTS.col_width_amt);
+
+    if (mm.mm_logo_x_offset !== undefined) setLogoXOffset(parseFloat(mm.mm_logo_x_offset) || 0);
+    if (mm.mm_logo_y_offset !== undefined) setLogoYOffset(parseFloat(mm.mm_logo_y_offset) || 0);
+    if (mm.mm_logo_align !== undefined) setLogoAlign((mm.mm_logo_align as any) || 'left');
+    if (mm.mm_title_align !== undefined) setTitleAlign((mm.mm_title_align as any) || 'right');
+    if (mm.mm_brand_align !== undefined) setBrandAlign((mm.mm_brand_align as any) || 'center');
 
     if (mm.mm_invoice_title !== undefined) setInvoiceTitle(mm.mm_invoice_title);
     if (mm.mm_brand_name !== undefined) setBrandName(mm.mm_brand_name);
@@ -285,6 +344,29 @@ export default function MmSettingsPage() {
     ...settings,
     mm: {
       ...settings?.mm,
+      mm_margin: String(margin),
+      mm_mid_x: String(midX),
+      mm_col2_x: String(col2X),
+      mm_header_height: String(headerHeight),
+      mm_company_band_height: String(companyBandHeight),
+      mm_middle_grid_height: String(middleGridHeight),
+      mm_buyer_height: String(buyerHeight),
+      mm_table_header_height: String(tableHeaderHeight),
+
+      mm_col_width_sno: String(colWSno),
+      mm_col_width_desc: String(colWDesc),
+      mm_col_width_unit: String(colWUnit),
+      mm_col_width_hsn: String(colWHsn),
+      mm_col_width_qty: String(colWQty),
+      mm_col_width_rate: String(colWRate),
+      mm_col_width_amt: String(colWAmt),
+
+      mm_logo_x_offset: String(logoXOffset),
+      mm_logo_y_offset: String(logoYOffset),
+      mm_logo_align: logoAlign,
+      mm_title_align: titleAlign,
+      mm_brand_align: brandAlign,
+
       mm_invoice_title: invoiceTitle,
       mm_brand_name: brandName,
       mm_tagline: tagline,
@@ -355,7 +437,7 @@ export default function MmSettingsPage() {
     },
   };
 
-  // Real-time live invoice preview generation (debounced)
+  // Real-time live invoice preview generation
   useEffect(() => {
     let active = true;
     const timer = setTimeout(async () => {
@@ -392,6 +474,26 @@ export default function MmSettingsPage() {
       clearTimeout(timer);
     };
   }, [
+    margin,
+    midX,
+    col2X,
+    headerHeight,
+    companyBandHeight,
+    middleGridHeight,
+    buyerHeight,
+    tableHeaderHeight,
+    colWSno,
+    colWDesc,
+    colWUnit,
+    colWHsn,
+    colWQty,
+    colWRate,
+    colWAmt,
+    logoXOffset,
+    logoYOffset,
+    logoAlign,
+    titleAlign,
+    brandAlign,
     invoiceTitle,
     brandName,
     tagline,
@@ -455,6 +557,82 @@ export default function MmSettingsPage() {
     nextMmNumber,
   ]);
 
+  // ── Manual Mouse Drag & Movement Engine ────────────────────────────────────
+  const canvasRef = useRef<HTMLDivElement>(null);
+  const [activeDrag, setActiveDrag] = useState<{
+    type: 'midX' | 'col2X' | 'headerH' | 'bandH' | 'buyerH' | 'logo' | 'col_desc';
+    startX: number;
+    startY: number;
+    origVal: number;
+    origVal2?: number;
+  } | null>(null);
+
+  const handleMouseDownOnHandle = (
+    e: React.MouseEvent,
+    type: 'midX' | 'col2X' | 'headerH' | 'bandH' | 'buyerH' | 'logo' | 'col_desc',
+    origVal: number,
+    origVal2?: number
+  ) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setActiveDrag({
+      type,
+      startX: e.clientX,
+      startY: e.clientY,
+      origVal,
+      origVal2,
+    });
+  };
+
+  useEffect(() => {
+    if (!activeDrag) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const deltaX = e.clientX - activeDrag.startX;
+      const deltaY = e.clientY - activeDrag.startY;
+
+      const canvasEl = canvasRef.current;
+      const canvasWidth = canvasEl ? canvasEl.clientWidth : 500;
+      const ptScale = 595.28 / canvasWidth;
+
+      if (activeDrag.type === 'midX') {
+        const next = Math.max(180, Math.min(480, Math.round(activeDrag.origVal + deltaX * ptScale)));
+        setMidX(next);
+      } else if (activeDrag.type === 'col2X') {
+        const next = Math.max(midX + 40, Math.min(540, Math.round(activeDrag.origVal + deltaX * ptScale)));
+        setCol2X(next);
+      } else if (activeDrag.type === 'headerH') {
+        const next = Math.max(45, Math.min(130, Math.round(activeDrag.origVal + deltaY * ptScale)));
+        setHeaderHeight(next);
+      } else if (activeDrag.type === 'bandH') {
+        const next = Math.max(50, Math.min(150, Math.round(activeDrag.origVal + deltaY * ptScale)));
+        setCompanyBandHeight(next);
+      } else if (activeDrag.type === 'buyerH') {
+        const next = Math.max(40, Math.min(120, Math.round(activeDrag.origVal + deltaY * ptScale)));
+        setBuyerHeight(next);
+      } else if (activeDrag.type === 'logo') {
+        const nextX = Math.round((activeDrag.origVal || 0) + deltaX * ptScale);
+        const nextY = Math.round((activeDrag.origVal2 || 0) - deltaY * ptScale);
+        setLogoXOffset(nextX);
+        setLogoYOffset(nextY);
+      } else if (activeDrag.type === 'col_desc') {
+        const next = Math.max(100, Math.min(280, Math.round(activeDrag.origVal + deltaX * ptScale)));
+        setColWDesc(next);
+      }
+    };
+
+    const handleMouseUp = () => {
+      setActiveDrag(null);
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [activeDrag, midX]);
+
   // Logo upload handler
   const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -482,6 +660,29 @@ export default function MmSettingsPage() {
   const updateLayoutMutation = useMutation({
     mutationFn: () => {
       const payload: Array<{ key: string; value: string; group?: string }> = [
+        { key: 'mm_margin', value: String(margin), group: 'mm' },
+        { key: 'mm_mid_x', value: String(midX), group: 'mm' },
+        { key: 'mm_col2_x', value: String(col2X), group: 'mm' },
+        { key: 'mm_header_height', value: String(headerHeight), group: 'mm' },
+        { key: 'mm_company_band_height', value: String(companyBandHeight), group: 'mm' },
+        { key: 'mm_middle_grid_height', value: String(middleGridHeight), group: 'mm' },
+        { key: 'mm_buyer_height', value: String(buyerHeight), group: 'mm' },
+        { key: 'mm_table_header_height', value: String(tableHeaderHeight), group: 'mm' },
+
+        { key: 'mm_col_width_sno', value: String(colWSno), group: 'mm' },
+        { key: 'mm_col_width_desc', value: String(colWDesc), group: 'mm' },
+        { key: 'mm_col_width_unit', value: String(colWUnit), group: 'mm' },
+        { key: 'mm_col_width_hsn', value: String(colWHsn), group: 'mm' },
+        { key: 'mm_col_width_qty', value: String(colWQty), group: 'mm' },
+        { key: 'mm_col_width_rate', value: String(colWRate), group: 'mm' },
+        { key: 'mm_col_width_amt', value: String(colWAmt), group: 'mm' },
+
+        { key: 'mm_logo_x_offset', value: String(logoXOffset), group: 'mm' },
+        { key: 'mm_logo_y_offset', value: String(logoYOffset), group: 'mm' },
+        { key: 'mm_logo_align', value: logoAlign, group: 'mm' },
+        { key: 'mm_title_align', value: titleAlign, group: 'mm' },
+        { key: 'mm_brand_align', value: brandAlign, group: 'mm' },
+
         { key: 'mm_invoice_title', value: invoiceTitle.trim(), group: 'mm' },
         { key: 'mm_brand_name', value: brandName.trim(), group: 'mm' },
         { key: 'mm_tagline', value: tagline.trim(), group: 'mm' },
@@ -555,8 +756,8 @@ export default function MmSettingsPage() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['settings'] });
       toast({
-        title: 'Layout Saved in Database!',
-        description: 'All settings are stored in SQLite and will be included automatically in any database backup.',
+        title: 'Full Layout Saved in Database!',
+        description: 'All geometry, line positions, alignments, and text labels are saved and backed up.',
         variant: 'success',
       });
     },
@@ -568,9 +769,31 @@ export default function MmSettingsPage() {
   // Export Layout Configuration as JSON
   const handleExportLayoutJson = () => {
     const layoutConfig = {
-      version: '1.0',
+      version: '2.0',
       exportedAt: new Date().toISOString(),
-      layout: {
+      geometry: {
+        margin,
+        midX,
+        col2X,
+        headerHeight,
+        companyBandHeight,
+        middleGridHeight,
+        buyerHeight,
+        tableHeaderHeight,
+        colWSno,
+        colWDesc,
+        colWUnit,
+        colWHsn,
+        colWQty,
+        colWRate,
+        colWAmt,
+        logoXOffset,
+        logoYOffset,
+        logoAlign,
+        titleAlign,
+        brandAlign,
+      },
+      content: {
         invoiceTitle,
         brandName,
         tagline,
@@ -637,7 +860,7 @@ export default function MmSettingsPage() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `mm-invoice-layout-${new Date().toISOString().slice(0, 10)}.json`;
+    a.download = `mm-layout-config-${new Date().toISOString().slice(0, 10)}.json`;
     a.click();
     URL.revokeObjectURL(url);
     toast({ title: 'Layout exported as JSON', description: 'Standalone layout file downloaded safely.', variant: 'success' });
@@ -651,67 +874,91 @@ export default function MmSettingsPage() {
     reader.onload = () => {
       try {
         const parsed = JSON.parse(reader.result as string);
-        const l = parsed.layout || parsed;
+        const g = parsed.geometry || {};
+        const c = parsed.content || parsed.layout || parsed;
 
-        if (l.invoiceTitle !== undefined) setInvoiceTitle(l.invoiceTitle);
-        if (l.brandName !== undefined) setBrandName(l.brandName);
-        if (l.tagline !== undefined) setTagline(l.tagline);
-        if (l.fssaiNo !== undefined) setFssaiNo(l.fssaiNo);
-        if (l.showHeaderLogo !== undefined) setShowHeaderLogo(Boolean(l.showHeaderLogo));
-        if (l.logoSize !== undefined) setLogoSize(l.logoSize);
-        if (l.showHeaderFssai !== undefined) setShowHeaderFssai(Boolean(l.showHeaderFssai));
-        if (l.logoData !== undefined) setLogoData(l.logoData || null);
+        if (g.margin !== undefined) setMargin(g.margin);
+        if (g.midX !== undefined) setMidX(g.midX);
+        if (g.col2X !== undefined) setCol2X(g.col2X);
+        if (g.headerHeight !== undefined) setHeaderHeight(g.headerHeight);
+        if (g.companyBandHeight !== undefined) setCompanyBandHeight(g.companyBandHeight);
+        if (g.middleGridHeight !== undefined) setMiddleGridHeight(g.middleGridHeight);
+        if (g.buyerHeight !== undefined) setBuyerHeight(g.buyerHeight);
+        if (g.tableHeaderHeight !== undefined) setTableHeaderHeight(g.tableHeaderHeight);
 
-        if (l.sellerBoxLabel !== undefined) setSellerBoxLabel(l.sellerBoxLabel);
-        if (l.companyName !== undefined) setCompanyName(l.companyName);
-        if (l.companyAddress !== undefined) setCompanyAddress(l.companyAddress);
-        if (l.companyGstin !== undefined) setCompanyGstin(l.companyGstin);
-        if (l.contactPhone !== undefined) setContactPhone(l.contactPhone);
-        if (l.stateName !== undefined) setStateName(l.stateName);
-        if (l.stateCode !== undefined) setStateCode(l.stateCode);
+        if (g.colWSno !== undefined) setColWSno(g.colWSno);
+        if (g.colWDesc !== undefined) setColWDesc(g.colWDesc);
+        if (g.colWUnit !== undefined) setColWUnit(g.colWUnit);
+        if (g.colWHsn !== undefined) setColWHsn(g.colWHsn);
+        if (g.colWQty !== undefined) setColWQty(g.colWQty);
+        if (g.colWRate !== undefined) setColWRate(g.colWRate);
+        if (g.colWAmt !== undefined) setColWAmt(g.colWAmt);
 
-        if (l.showBranchOffice !== undefined) setShowBranchOffice(Boolean(l.showBranchOffice));
-        if (l.branchBoxLabel !== undefined) setBranchBoxLabel(l.branchBoxLabel);
-        if (l.branchOffice !== undefined) setBranchOffice(l.branchOffice);
-        if (l.branchFssai !== undefined) setBranchFssai(l.branchFssai);
+        if (g.logoXOffset !== undefined) setLogoXOffset(g.logoXOffset);
+        if (g.logoYOffset !== undefined) setLogoYOffset(g.logoYOffset);
+        if (g.logoAlign !== undefined) setLogoAlign(g.logoAlign);
+        if (g.titleAlign !== undefined) setTitleAlign(g.titleAlign);
+        if (g.brandAlign !== undefined) setBrandAlign(g.brandAlign);
 
-        if (l.buyerBoxLabel !== undefined) setBuyerBoxLabel(l.buyerBoxLabel);
-        if (l.consigneeBoxLabel !== undefined) setConsigneeBoxLabel(l.consigneeBoxLabel);
-        if (l.showPartiesContact !== undefined) setShowPartiesContact(Boolean(l.showPartiesContact));
-        if (l.showPlaceOfSupply !== undefined) setShowPlaceOfSupply(Boolean(l.showPlaceOfSupply));
-        if (l.showDispatchGrid !== undefined) setShowDispatchGrid(Boolean(l.showDispatchGrid));
+        if (c.invoiceTitle !== undefined) setInvoiceTitle(c.invoiceTitle);
+        if (c.brandName !== undefined) setBrandName(c.brandName);
+        if (c.tagline !== undefined) setTagline(c.tagline);
+        if (c.fssaiNo !== undefined) setFssaiNo(c.fssaiNo);
+        if (c.showHeaderLogo !== undefined) setShowHeaderLogo(Boolean(c.showHeaderLogo));
+        if (c.logoSize !== undefined) setLogoSize(c.logoSize);
+        if (c.showHeaderFssai !== undefined) setShowHeaderFssai(Boolean(c.showHeaderFssai));
+        if (c.logoData !== undefined) setLogoData(c.logoData || null);
 
-        if (l.colLabelSno !== undefined) setColLabelSno(l.colLabelSno);
-        if (l.colLabelDesc !== undefined) setColLabelDesc(l.colLabelDesc);
-        if (l.colLabelUnit !== undefined) setColLabelUnit(l.colLabelUnit);
-        if (l.colLabelHsn !== undefined) setColLabelHsn(l.colLabelHsn);
-        if (l.colLabelQty !== undefined) setColLabelQty(l.colLabelQty);
-        if (l.colLabelRate !== undefined) setColLabelRate(l.colLabelRate);
-        if (l.colLabelAmount !== undefined) setColLabelAmount(l.colLabelAmount);
-        if (l.showColUnit !== undefined) setShowColUnit(Boolean(l.showColUnit));
-        if (l.showColHsn !== undefined) setShowColHsn(Boolean(l.showColHsn));
-        if (l.showInlineTax !== undefined) setShowInlineTax(Boolean(l.showInlineTax));
+        if (c.sellerBoxLabel !== undefined) setSellerBoxLabel(c.sellerBoxLabel);
+        if (c.companyName !== undefined) setCompanyName(c.companyName);
+        if (c.companyAddress !== undefined) setCompanyAddress(c.companyAddress);
+        if (c.companyGstin !== undefined) setCompanyGstin(c.companyGstin);
+        if (c.contactPhone !== undefined) setContactPhone(c.contactPhone);
+        if (c.stateName !== undefined) setStateName(c.stateName);
+        if (c.stateCode !== undefined) setStateCode(c.stateCode);
 
-        if (l.showTaxSummaryTable !== undefined) setShowTaxSummaryTable(Boolean(l.showTaxSummaryTable));
-        if (l.showAmountInWords !== undefined) setShowAmountInWords(Boolean(l.showAmountInWords));
-        if (l.showEoe !== undefined) setShowEoe(Boolean(l.showEoe));
+        if (c.showBranchOffice !== undefined) setShowBranchOffice(Boolean(c.showBranchOffice));
+        if (c.branchBoxLabel !== undefined) setBranchBoxLabel(c.branchBoxLabel);
+        if (c.branchOffice !== undefined) setBranchOffice(c.branchOffice);
+        if (c.branchFssai !== undefined) setBranchFssai(c.branchFssai);
 
-        if (l.showBankDetails !== undefined) setShowBankDetails(Boolean(l.showBankDetails));
-        if (l.bankAccountName !== undefined) setBankAccountName(l.bankAccountName);
-        if (l.bankName !== undefined) setBankName(l.bankName);
-        if (l.bankAccountNumber !== undefined) setBankAccountNumber(l.bankAccountNumber);
-        if (l.bankBranch !== undefined) setBankBranch(l.bankBranch);
-        if (l.bankIfsc !== undefined) setBankIfsc(l.bankIfsc);
+        if (c.buyerBoxLabel !== undefined) setBuyerBoxLabel(c.buyerBoxLabel);
+        if (c.consigneeBoxLabel !== undefined) setConsigneeBoxLabel(c.consigneeBoxLabel);
+        if (c.showPartiesContact !== undefined) setShowPartiesContact(Boolean(c.showPartiesContact));
+        if (c.showPlaceOfSupply !== undefined) setShowPlaceOfSupply(Boolean(c.showPlaceOfSupply));
+        if (c.showDispatchGrid !== undefined) setShowDispatchGrid(Boolean(c.showDispatchGrid));
 
-        if (l.declarationTitle !== undefined) setDeclarationTitle(l.declarationTitle);
-        if (l.declarationText !== undefined) setDeclarationText(l.declarationText);
-        if (l.signatoryPrefix !== undefined) setSignatoryPrefix(l.signatoryPrefix);
-        if (l.signatoryLabel !== undefined) setSignatoryLabel(l.signatoryLabel);
-        if (l.showLegalFootnote !== undefined) setShowLegalFootnote(Boolean(l.showLegalFootnote));
-        if (l.jurisdiction !== undefined) setJurisdiction(l.jurisdiction);
-        if (l.footerComputerGeneratedText !== undefined) setFooterComputerGeneratedText(l.footerComputerGeneratedText);
+        if (c.colLabelSno !== undefined) setColLabelSno(c.colLabelSno);
+        if (c.colLabelDesc !== undefined) setColLabelDesc(c.colLabelDesc);
+        if (c.colLabelUnit !== undefined) setColLabelUnit(c.colLabelUnit);
+        if (c.colLabelHsn !== undefined) setColLabelHsn(c.colLabelHsn);
+        if (c.colLabelQty !== undefined) setColLabelQty(c.colLabelQty);
+        if (c.colLabelRate !== undefined) setColLabelRate(c.colLabelRate);
+        if (c.colLabelAmount !== undefined) setColLabelAmount(c.colLabelAmount);
+        if (c.showColUnit !== undefined) setShowColUnit(Boolean(c.showColUnit));
+        if (c.showColHsn !== undefined) setShowColHsn(Boolean(c.showColHsn));
+        if (c.showInlineTax !== undefined) setShowInlineTax(Boolean(c.showInlineTax));
 
-        toast({ title: 'Layout configuration loaded!', description: 'Review preview and click "Save Layout Changes" to persist.', variant: 'success' });
+        if (c.showTaxSummaryTable !== undefined) setShowTaxSummaryTable(Boolean(c.showTaxSummaryTable));
+        if (c.showAmountInWords !== undefined) setShowAmountInWords(Boolean(c.showAmountInWords));
+        if (c.showEoe !== undefined) setShowEoe(Boolean(c.showEoe));
+
+        if (c.showBankDetails !== undefined) setShowBankDetails(Boolean(c.showBankDetails));
+        if (c.bankAccountName !== undefined) setBankAccountName(c.bankAccountName);
+        if (c.bankName !== undefined) setBankName(c.bankName);
+        if (c.bankAccountNumber !== undefined) setBankAccountNumber(c.bankAccountNumber);
+        if (c.bankBranch !== undefined) setBankBranch(c.bankBranch);
+        if (c.bankIfsc !== undefined) setBankIfsc(c.bankIfsc);
+
+        if (c.declarationTitle !== undefined) setDeclarationTitle(c.declarationTitle);
+        if (c.declarationText !== undefined) setDeclarationText(c.declarationText);
+        if (c.signatoryPrefix !== undefined) setSignatoryPrefix(c.signatoryPrefix);
+        if (c.signatoryLabel !== undefined) setSignatoryLabel(c.signatoryLabel);
+        if (c.showLegalFootnote !== undefined) setShowLegalFootnote(Boolean(c.showLegalFootnote));
+        if (c.jurisdiction !== undefined) setJurisdiction(c.jurisdiction);
+        if (c.footerComputerGeneratedText !== undefined) setFooterComputerGeneratedText(c.footerComputerGeneratedText);
+
+        toast({ title: 'Full layout imported!', description: 'Review the interactive canvas and save.', variant: 'success' });
       } catch (err: any) {
         toast({ title: 'Failed to import JSON', description: err.message, variant: 'destructive' });
       }
@@ -720,7 +967,30 @@ export default function MmSettingsPage() {
   };
 
   const handleResetDefaults = () => {
-    if (!confirm('Reset all invoice layout and formatting settings to original defaults?')) return;
+    if (!confirm('Reset all geometry, lines, and layout settings to original defaults?')) return;
+    setMargin(MM_DEFAULTS.margin);
+    setMidX(MM_DEFAULTS.mid_x);
+    setCol2X(MM_DEFAULTS.col2_x);
+    setHeaderHeight(MM_DEFAULTS.header_height);
+    setCompanyBandHeight(MM_DEFAULTS.company_band_height);
+    setMiddleGridHeight(MM_DEFAULTS.middle_grid_height);
+    setBuyerHeight(MM_DEFAULTS.buyer_height);
+    setTableHeaderHeight(MM_DEFAULTS.table_header_height);
+
+    setColWSno(MM_DEFAULTS.col_width_sno);
+    setColWDesc(MM_DEFAULTS.col_width_desc);
+    setColWUnit(MM_DEFAULTS.col_width_unit);
+    setColWHsn(MM_DEFAULTS.col_width_hsn);
+    setColWQty(MM_DEFAULTS.col_width_qty);
+    setColWRate(MM_DEFAULTS.col_width_rate);
+    setColWAmt(MM_DEFAULTS.col_width_amt);
+
+    setLogoXOffset(0);
+    setLogoYOffset(0);
+    setLogoAlign('left');
+    setTitleAlign('right');
+    setBrandAlign('center');
+
     setInvoiceTitle(MM_DEFAULTS.invoice_title);
     setBrandName(MM_DEFAULTS.brand_name);
     setTagline(MM_DEFAULTS.tagline);
@@ -748,46 +1018,6 @@ export default function MmSettingsPage() {
     setShowPartiesContact(true);
     setShowPlaceOfSupply(true);
     setShowDispatchGrid(true);
-
-    setLabelBillNo(MM_DEFAULTS.label_bill_no);
-    setLabelDate(MM_DEFAULTS.label_date);
-    setLabelDeliveryNote(MM_DEFAULTS.label_delivery_note);
-    setLabelPaymentTerms(MM_DEFAULTS.label_payment_terms);
-    setLabelBuyerOrderNo(MM_DEFAULTS.label_buyer_order_no);
-    setLabelDispatchDoc(MM_DEFAULTS.label_dispatch_doc);
-    setLabelDespatchedThrough(MM_DEFAULTS.label_despatched_through);
-    setLabelDestination(MM_DEFAULTS.label_destination);
-    setLabelTermsDelivery(MM_DEFAULTS.label_terms_delivery);
-
-    setColLabelSno(MM_DEFAULTS.col_label_sno);
-    setColLabelDesc(MM_DEFAULTS.col_label_desc);
-    setColLabelUnit(MM_DEFAULTS.col_label_unit);
-    setColLabelHsn(MM_DEFAULTS.col_label_hsn);
-    setColLabelQty(MM_DEFAULTS.col_label_qty);
-    setColLabelRate(MM_DEFAULTS.col_label_rate);
-    setColLabelAmount(MM_DEFAULTS.col_label_amount);
-    setShowColUnit(true);
-    setShowColHsn(true);
-    setShowInlineTax(true);
-
-    setShowTaxSummaryTable(true);
-    setShowAmountInWords(true);
-    setShowEoe(true);
-
-    setShowBankDetails(true);
-    setBankAccountName(MM_DEFAULTS.bank_account_name);
-    setBankName(MM_DEFAULTS.bank_name);
-    setBankAccountNumber(MM_DEFAULTS.bank_account_number);
-    setBankBranch(MM_DEFAULTS.bank_branch);
-    setBankIfsc(MM_DEFAULTS.bank_ifsc);
-
-    setDeclarationTitle(MM_DEFAULTS.declaration_title);
-    setDeclarationText(MM_DEFAULTS.declaration_text);
-    setSignatoryPrefix(MM_DEFAULTS.signatory_prefix);
-    setSignatoryLabel(MM_DEFAULTS.signatory_label);
-    setShowLegalFootnote(true);
-    setJurisdiction(MM_DEFAULTS.jurisdiction);
-    setFooterComputerGeneratedText(MM_DEFAULTS.footer_computer_generated_text);
 
     toast({ title: 'Defaults restored', description: 'Click "Save Layout Changes" to apply.', variant: 'default' });
   };
@@ -926,7 +1156,7 @@ export default function MmSettingsPage() {
       refetchBackupData();
       toast({
         title: 'Database backup created!',
-        description: `Snapshot ${data?.name || 'MM_Billing_Backup.db'} saved with full layout.`,
+        description: `Snapshot ${data?.name || 'MM_Billing_Backup.db'} saved with complete layout.`,
         variant: 'success',
       });
     },
@@ -949,7 +1179,7 @@ export default function MmSettingsPage() {
   });
 
   return (
-    <div className="space-y-6 pb-20 max-w-[1700px] mx-auto px-2 sm:px-4">
+    <div className="space-y-6 pb-24 max-w-[1700px] mx-auto px-2 sm:px-4">
       {/* ── Top Header & Tab Controls ───────────────────────────────────────── */}
       <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 border-b pb-4 bg-white/70 backdrop-blur-xs p-4 rounded-xl border border-slate-200 shadow-xs">
         <div>
@@ -961,7 +1191,7 @@ export default function MmSettingsPage() {
             </span>
           </div>
           <p className="text-xs text-muted-foreground mt-0.5">
-            Full layout customization, branding, company identity, bank details, and database backups.
+            Full layout alignment, mouse drag line management, company branding, and database backups.
           </p>
         </div>
 
@@ -977,7 +1207,7 @@ export default function MmSettingsPage() {
             }`}
           >
             <LayoutTemplate className="h-4 w-4" />
-            Invoice Layout Studio
+            Visual Layout Studio
           </button>
           <button
             type="button"
@@ -994,14 +1224,15 @@ export default function MmSettingsPage() {
         </div>
       </div>
 
-      {/* ── TAB 1: INVOICE LAYOUT STUDIO ────────────────────────────────────── */}
+      {/* ── TAB 1: VISUAL LAYOUT STUDIO ─────────────────────────────────────── */}
       {mainTab === 'layout' && (
         <div className="grid grid-cols-12 gap-6 items-start">
-          {/* Left Column: Categorized Controls (Scrollable / Tabbed) */}
+          {/* Left Column: Categorized Controls (Scrollable) */}
           <div className="col-span-12 xl:col-span-6 space-y-4">
             {/* Category Navigation Pills */}
             <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none border-b border-slate-200 pb-2.5">
               {[
+                { id: 'geometry', label: 'Manual Lines & Alignment', icon: MousePointer },
                 { id: 'header', label: 'Header & Logo', icon: ImageIcon },
                 { id: 'seller', label: 'Seller & Branch', icon: Building2 },
                 { id: 'parties', label: 'Parties & Grid', icon: Users },
@@ -1029,7 +1260,222 @@ export default function MmSettingsPage() {
               })}
             </div>
 
-            {/* ── Sub-Section 1: Header & Logo ── */}
+            {/* ── Sub-Section: Manual Lines & Alignment ── */}
+            {layoutSubSection === 'geometry' && (
+              <div className="space-y-4">
+                <Card className="border-brand-200 bg-brand-50/15 shadow-xs">
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-sm flex items-center justify-between text-brand-950">
+                      <span className="flex items-center gap-2">
+                        <MousePointer className="h-4 w-4 text-brand-600" />
+                        Manual Line Management &amp; Positioning
+                      </span>
+                      <span className="text-[11px] font-semibold bg-brand-100/80 text-brand-800 px-2.5 py-0.5 rounded-full">
+                        Interactive Mouse Controls
+                      </span>
+                    </CardTitle>
+                    <CardDescription className="text-xs">
+                      Adjust exact dividing coordinates or drag the handles with your mouse on the visual canvas.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    {/* Vertical Dividing Lines */}
+                    <div className="space-y-3 p-3 bg-white rounded-lg border border-slate-200">
+                      <div className="flex items-center justify-between">
+                        <Label className="text-xs font-semibold text-slate-800 flex items-center gap-1.5">
+                          <ArrowLeftRight className="h-3.5 w-3.5 text-brand-600" />
+                          Marketed By / Branch Office Divider (midX)
+                        </Label>
+                        <span className="text-xs font-mono font-bold text-brand-700">{midX} pt</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={180}
+                        max={450}
+                        value={midX}
+                        onChange={(e) => setMidX(parseInt(e.target.value, 10))}
+                        className="w-full accent-brand-600 cursor-pointer"
+                      />
+                      <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                        <span>Left Wider (180 pt)</span>
+                        <span>Equal (310 pt)</span>
+                        <span>Right Wider (450 pt)</span>
+                      </div>
+                    </div>
+
+                    {/* Dispatch Grid Divider */}
+                    <div className="space-y-3 p-3 bg-white rounded-lg border border-slate-200">
+                      <div className="flex items-center justify-between">
+                        <Label className="text-xs font-semibold text-slate-800 flex items-center gap-1.5">
+                          <ArrowLeftRight className="h-3.5 w-3.5 text-brand-600" />
+                          Dispatch Col 1 &amp; Col 2 Divider (col2X)
+                        </Label>
+                        <span className="text-xs font-mono font-bold text-brand-700">{col2X} pt</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={350}
+                        max={520}
+                        value={col2X}
+                        onChange={(e) => setCol2X(parseInt(e.target.value, 10))}
+                        className="w-full accent-brand-600 cursor-pointer"
+                      />
+                      <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                        <span>Narrow Col 1 (350 pt)</span>
+                        <span>Standard (440 pt)</span>
+                        <span>Wide Col 1 (520 pt)</span>
+                      </div>
+                    </div>
+
+                    {/* Horizontal Section Heights */}
+                    <div className="grid grid-cols-12 gap-3">
+                      <div className="col-span-6 space-y-1.5 p-3 bg-white rounded-lg border border-slate-200">
+                        <div className="flex items-center justify-between">
+                          <Label className="text-xs font-semibold text-slate-800">Header Height</Label>
+                          <span className="text-xs font-mono font-bold text-brand-700">{headerHeight} pt</span>
+                        </div>
+                        <input
+                          type="range"
+                          min={50}
+                          max={120}
+                          value={headerHeight}
+                          onChange={(e) => setHeaderHeight(parseInt(e.target.value, 10))}
+                          className="w-full accent-brand-600 cursor-pointer"
+                        />
+                      </div>
+
+                      <div className="col-span-6 space-y-1.5 p-3 bg-white rounded-lg border border-slate-200">
+                        <div className="flex items-center justify-between">
+                          <Label className="text-xs font-semibold text-slate-800">Address Band Height</Label>
+                          <span className="text-xs font-mono font-bold text-brand-700">{companyBandHeight} pt</span>
+                        </div>
+                        <input
+                          type="range"
+                          min={60}
+                          max={130}
+                          value={companyBandHeight}
+                          onChange={(e) => setCompanyBandHeight(parseInt(e.target.value, 10))}
+                          className="w-full accent-brand-600 cursor-pointer"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-12 gap-3">
+                      <div className="col-span-6 space-y-1.5 p-3 bg-white rounded-lg border border-slate-200">
+                        <div className="flex items-center justify-between">
+                          <Label className="text-xs font-semibold text-slate-800">Buyer Box Height</Label>
+                          <span className="text-xs font-mono font-bold text-brand-700">{buyerHeight} pt</span>
+                        </div>
+                        <input
+                          type="range"
+                          min={40}
+                          max={110}
+                          value={buyerHeight}
+                          onChange={(e) => setBuyerHeight(parseInt(e.target.value, 10))}
+                          className="w-full accent-brand-600 cursor-pointer"
+                        />
+                      </div>
+
+                      <div className="col-span-6 space-y-1.5 p-3 bg-white rounded-lg border border-slate-200">
+                        <div className="flex items-center justify-between">
+                          <Label className="text-xs font-semibold text-slate-800">Page Margins</Label>
+                          <span className="text-xs font-mono font-bold text-brand-700">{margin} pt</span>
+                        </div>
+                        <input
+                          type="range"
+                          min={15}
+                          max={50}
+                          value={margin}
+                          onChange={(e) => setMargin(parseInt(e.target.value, 10))}
+                          className="w-full accent-brand-600 cursor-pointer"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Element Alignment Controls */}
+                    <div className="p-3 bg-white rounded-lg border border-slate-200 space-y-3">
+                      <Label className="text-xs font-semibold text-slate-900 block">Element Alignment Controls</Label>
+                      <div className="grid grid-cols-12 gap-3 items-center">
+                        <div className="col-span-4 text-xs font-medium text-slate-700">Document Title:</div>
+                        <div className="col-span-8 flex items-center gap-1">
+                          {(['left', 'center', 'right'] as const).map((al) => (
+                            <button
+                              key={al}
+                              type="button"
+                              onClick={() => setTitleAlign(al)}
+                              className={`flex-1 text-xs py-1 px-2 rounded-md font-medium capitalize border transition-colors ${
+                                titleAlign === al ? 'bg-brand-700 text-white border-brand-700' : 'bg-white text-slate-700 border-slate-200'
+                              }`}
+                            >
+                              {al}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-12 gap-3 items-center">
+                        <div className="col-span-4 text-xs font-medium text-slate-700">Brand Banner:</div>
+                        <div className="col-span-8 flex items-center gap-1">
+                          {(['left', 'center', 'right'] as const).map((al) => (
+                            <button
+                              key={al}
+                              type="button"
+                              onClick={() => setBrandAlign(al)}
+                              className={`flex-1 text-xs py-1 px-2 rounded-md font-medium capitalize border transition-colors ${
+                                brandAlign === al ? 'bg-brand-700 text-white border-brand-700' : 'bg-white text-slate-700 border-slate-200'
+                              }`}
+                            >
+                              {al}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-12 gap-3 items-center">
+                        <div className="col-span-4 text-xs font-medium text-slate-700">Logo Alignment:</div>
+                        <div className="col-span-8 flex items-center gap-1">
+                          {(['left', 'center', 'right'] as const).map((al) => (
+                            <button
+                              key={al}
+                              type="button"
+                              onClick={() => setLogoAlign(al)}
+                              className={`flex-1 text-xs py-1 px-2 rounded-md font-medium capitalize border transition-colors ${
+                                logoAlign === al ? 'bg-brand-700 text-white border-brand-700' : 'bg-white text-slate-700 border-slate-200'
+                              }`}
+                            >
+                              {al}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Manual Logo Nudge */}
+                      <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-xs">
+                        <span className="font-medium text-slate-700">Logo Manual Offsets:</span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[11px] text-muted-foreground">X:</span>
+                          <Input
+                            type="number"
+                            value={logoXOffset}
+                            onChange={(e) => setLogoXOffset(parseInt(e.target.value, 10) || 0)}
+                            className="w-16 h-7 text-xs font-mono"
+                          />
+                          <span className="text-[11px] text-muted-foreground">Y:</span>
+                          <Input
+                            type="number"
+                            value={logoYOffset}
+                            onChange={(e) => setLogoYOffset(parseInt(e.target.value, 10) || 0)}
+                            className="w-16 h-7 text-xs font-mono"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+            )}
+
+            {/* ── Sub-Section: Header & Logo ── */}
             {layoutSubSection === 'header' && (
               <div className="space-y-4">
                 <Card className="border-slate-200 shadow-xs">
@@ -1041,7 +1487,7 @@ export default function MmSettingsPage() {
                       </span>
                     </CardTitle>
                     <CardDescription className="text-xs">
-                      Printed prominently in the top right corner of the invoice header.
+                      Printed prominently in the top header.
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-3">
@@ -1055,7 +1501,7 @@ export default function MmSettingsPage() {
                       />
                     </div>
                     <div className="flex items-center gap-1.5 pt-1">
-                      <span className="text-[11px] text-muted-foreground mr-1">Quick Presets:</span>
+                      <span className="text-[11px] text-muted-foreground mr-1">Presets:</span>
                       {['TAX INVOICE', 'COMMERCIAL INVOICE', 'BILL OF SUPPLY', 'INVOICE'].map((preset) => (
                         <button
                           key={preset}
@@ -1212,7 +1658,7 @@ export default function MmSettingsPage() {
               </div>
             )}
 
-            {/* ── Sub-Section 2: Seller & Branch ── */}
+            {/* ── Sub-Section: Seller & Branch ── */}
             {layoutSubSection === 'seller' && (
               <div className="space-y-4">
                 <Card className="border-slate-200 shadow-xs">
@@ -1363,7 +1809,7 @@ export default function MmSettingsPage() {
               </div>
             )}
 
-            {/* ── Sub-Section 3: Parties & Dispatch ── */}
+            {/* ── Sub-Section: Parties & Dispatch ── */}
             {layoutSubSection === 'parties' && (
               <div className="space-y-4">
                 <Card className="border-slate-200 shadow-xs">
@@ -1439,9 +1885,6 @@ export default function MmSettingsPage() {
                         />
                       </label>
                     </div>
-                    <CardDescription className="text-xs">
-                      Customize label headers for the 7 official Tally dispatch rows on the right.
-                    </CardDescription>
                   </CardHeader>
                   {showDispatchGrid && (
                     <CardContent className="space-y-3">
@@ -1498,7 +1941,7 @@ export default function MmSettingsPage() {
               </div>
             )}
 
-            {/* ── Sub-Section 4: Table & Columns ── */}
+            {/* ── Sub-Section: Table & Columns ── */}
             {layoutSubSection === 'table' && (
               <div className="space-y-4">
                 <Card className="border-slate-200 shadow-xs">
@@ -1625,7 +2068,7 @@ export default function MmSettingsPage() {
               </div>
             )}
 
-            {/* ── Sub-Section 5: Bank & Footers ── */}
+            {/* ── Sub-Section: Bank & Footers ── */}
             {layoutSubSection === 'bank' && (
               <div className="space-y-4">
                 <Card className="border-brand-300 bg-brand-50/10 shadow-xs">
@@ -1704,9 +2147,6 @@ export default function MmSettingsPage() {
                       <FileCheck className="h-4 w-4 text-brand-600" />
                       Declaration &amp; Authorised Signatory
                     </CardTitle>
-                    <CardDescription className="text-xs">
-                      Official legal declaration and company sign-off block.
-                    </CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-3">
                     <div className="grid grid-cols-12 gap-3">
@@ -1778,28 +2218,25 @@ export default function MmSettingsPage() {
               </div>
             )}
 
-            {/* ── Sub-Section 6: Backup & Presets ── */}
+            {/* ── Sub-Section: Backup & Presets ── */}
             {layoutSubSection === 'presets' && (
               <div className="space-y-4">
                 <Card className="border-emerald-200 bg-emerald-50/20 shadow-xs">
                   <CardHeader className="pb-3">
                     <CardTitle className="text-sm flex items-center gap-2 text-emerald-950">
                       <CheckCircle2 className="h-4 w-4 text-emerald-600" />
-                      Automatic Layout Preservation in Database Backups
+                      Layout Saved in Database Backups
                     </CardTitle>
                     <CardDescription className="text-xs text-emerald-800">
-                      How your layout survives app reinstallation and computer transfers.
+                      Automatic recovery across uninstalls, re-installs, and PC changes.
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-3 text-xs text-slate-700 leading-relaxed">
                     <p>
-                      Every single customization on this page is stored inside the local SQLite database (<code className="bg-white px-1.5 py-0.5 rounded border border-emerald-200 font-mono">settings</code> table).
+                      Every position, manual line coordinate, divider width, and text label is saved in the SQLite database (<code className="bg-white px-1.5 py-0.5 rounded border border-emerald-200 font-mono">settings</code> table).
                     </p>
                     <p>
-                      Whenever an automatic or manual database backup is performed (<code className="bg-white px-1.5 py-0.5 rounded border border-emerald-200 font-mono">MM_Billing_Backup.db</code>), <strong>all your layout customizations, labels, toggles, and logo are saved inside it</strong>.
-                    </p>
-                    <p>
-                      If you ever delete and reinstall the app, simply restoring your database backup completely recovers your entire custom invoice layout!
+                      Your database backup (<code className="bg-white px-1.5 py-0.5 rounded border border-emerald-200 font-mono">MM_Billing_Backup.db</code>) inherently carries all these exact settings. Restoring your backup restores this entire layout automatically.
                     </p>
                   </CardContent>
                 </Card>
@@ -1809,10 +2246,10 @@ export default function MmSettingsPage() {
                   <CardHeader className="pb-3">
                     <CardTitle className="text-sm flex items-center gap-2">
                       <Sliders className="h-4 w-4 text-brand-600" />
-                      Standalone Layout File Backup (JSON)
+                      Standalone Layout File (JSON)
                     </CardTitle>
                     <CardDescription className="text-xs">
-                      Export just your invoice design as a separate file to share or restore in 1 second.
+                      Export just your layout configuration as a portable JSON file.
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-3">
@@ -1888,32 +2325,42 @@ export default function MmSettingsPage() {
             </div>
           </div>
 
-          {/* Right Column: Real-Time Live Preview Pane (Sticky) */}
+          {/* Right Column: Interactive Visual Canvas & Real-Time PDF */}
           <div className="col-span-12 xl:col-span-6 sticky top-4 space-y-2">
             <Card className="border-slate-300 shadow-md flex flex-col h-[calc(100vh-130px)] min-h-[640px] overflow-hidden">
               <CardHeader className="py-2.5 px-4 bg-slate-900 text-white flex flex-row items-center justify-between shrink-0">
                 <div className="flex items-center gap-2.5">
                   <div className={`h-2.5 w-2.5 rounded-full ${isGeneratingPreview ? 'bg-amber-400 animate-ping' : 'bg-emerald-400'}`} />
                   <CardTitle className="text-xs font-semibold tracking-wide text-white uppercase">
-                    Live Invoice Layout Preview
+                    {previewViewMode === 'canvas' ? 'Interactive Mouse Movement Canvas' : 'Live Rendered PDF'}
                   </CardTitle>
                 </div>
 
-                {/* Copy Selector & Actions */}
+                {/* View Mode Toggle & Copy Actions */}
                 <div className="flex items-center gap-2">
                   <div className="flex items-center bg-slate-800 rounded-lg p-0.5 border border-slate-700">
-                    {(['ORIGINAL', 'DUPLICATE', 'TRIPLICATE', 'ALL'] as const).map((cp) => (
-                      <button
-                        key={cp}
-                        type="button"
-                        onClick={() => setPreviewCopyType(cp)}
-                        className={`text-[10px] font-semibold px-2 py-0.5 rounded transition-colors ${
-                          previewCopyType === cp ? 'bg-brand-600 text-white' : 'text-slate-300 hover:text-white'
-                        }`}
-                      >
-                        {cp === 'ALL' ? '3 Copies' : cp.slice(0, 4)}
-                      </button>
-                    ))}
+                    <button
+                      type="button"
+                      onClick={() => setPreviewViewMode('canvas')}
+                      className={`text-[11px] font-semibold px-2.5 py-1 rounded transition-colors flex items-center gap-1 ${
+                        previewViewMode === 'canvas' ? 'bg-brand-600 text-white' : 'text-slate-300 hover:text-white'
+                      }`}
+                      title="Interactive visual canvas with mouse dragging for all divider lines"
+                    >
+                      <MousePointer className="h-3 w-3" />
+                      Visual Canvas
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPreviewViewMode('pdf')}
+                      className={`text-[11px] font-semibold px-2.5 py-1 rounded transition-colors flex items-center gap-1 ${
+                        previewViewMode === 'pdf' ? 'bg-brand-600 text-white' : 'text-slate-300 hover:text-white'
+                      }`}
+                      title="Real-time compiled A4 PDF view"
+                    >
+                      <FileText className="h-3 w-3" />
+                      PDF Preview
+                    </button>
                   </div>
 
                   <Button
@@ -1934,18 +2381,282 @@ export default function MmSettingsPage() {
                   </Button>
                 </div>
               </CardHeader>
-              <CardContent className="p-0 flex-1 bg-slate-200/60 relative overflow-hidden">
-                {previewUrl ? (
-                  <iframe
-                    src={`${previewUrl}#toolbar=0&navpanes=0`}
-                    className="w-full h-full border-0"
-                    title="Real-Time Invoice Live Preview"
-                  />
-                ) : (
-                  <div className="w-full h-full flex flex-col items-center justify-center gap-3 text-muted-foreground p-6">
-                    <Loader2 className="h-8 w-8 animate-spin text-brand-600" />
-                    <p className="text-xs font-medium">Rendering live layout changes…</p>
+              <CardContent className="p-0 flex-1 bg-slate-200/60 relative overflow-auto flex items-center justify-center p-3 select-none">
+                {previewViewMode === 'canvas' ? (
+                  /* ── INTERACTIVE VISUAL CANVAS WITH MOUSE DRAGGING ── */
+                  <div
+                    ref={canvasRef}
+                    className="w-full max-w-[500px] aspect-[1/1.414] bg-white border border-slate-300 shadow-lg rounded-sm relative text-[11px] font-sans flex flex-col p-[4%]"
+                    style={{
+                      padding: `${(margin / 595) * 100}%`,
+                    }}
+                  >
+                    {/* Outer Border */}
+                    <div className="w-full h-full border border-slate-900 flex flex-col relative">
+                      {/* Section 1: Header */}
+                      <div
+                        className="w-full border-b border-slate-900 relative flex flex-col items-center justify-center px-2 shrink-0 group"
+                        style={{ height: `${(headerHeight / 842) * 100 * 3.5}%` }}
+                      >
+                        {/* Draggable Logo */}
+                        {showHeaderLogo && (
+                          <div
+                            onMouseDown={(e) => handleMouseDownOnHandle(e, 'logo', logoXOffset, logoYOffset)}
+                            className={`absolute top-2 ${
+                              logoAlign === 'left' ? 'left-2' : logoAlign === 'center' ? 'left-1/2 -translate-x-1/2' : 'right-2'
+                            } flex items-center gap-1 cursor-move bg-brand-50/90 border border-dashed border-brand-500 rounded p-1 shadow-xs group/logo`}
+                            style={{
+                              transform: `translate(${logoXOffset}px, ${-logoYOffset}px)`,
+                            }}
+                            title="Click and drag with mouse to move logo anywhere in header!"
+                          >
+                            <img
+                              src={logoData || '/mm-logo.png'}
+                              alt="Logo"
+                              className="h-8 w-auto object-contain pointer-events-none"
+                              onError={(e) => {
+                                (e.currentTarget as HTMLImageElement).src = '/mm-logo.png';
+                              }}
+                            />
+                            <Move className="h-3 w-3 text-brand-600 opacity-70 group-hover/logo:opacity-100" />
+                          </div>
+                        )}
+
+                        {/* Title */}
+                        <div
+                          className={`w-full absolute top-1.5 px-2 ${
+                            titleAlign === 'left' ? 'text-left' : titleAlign === 'center' ? 'text-center' : 'text-right'
+                          }`}
+                        >
+                          <span className="font-bold text-[10px] tracking-wider text-slate-800">{invoiceTitle}</span>
+                        </div>
+
+                        {/* Center Brand */}
+                        <div className={`w-full text-center mt-2 ${brandAlign === 'left' ? 'text-left' : brandAlign === 'right' ? 'text-right' : 'text-center'}`}>
+                          <h2 className="font-extrabold text-sm sm:text-base tracking-wide text-slate-900">{brandName}</h2>
+                          {tagline && <p className="text-[9px] text-slate-600 -mt-0.5">{tagline}</p>}
+                          {showHeaderFssai && fssaiNo && <p className="text-[8px] text-slate-500">(FSSAI: {fssaiNo})</p>}
+                        </div>
+
+                        {/* Draggable Header Height Horizontal Line Handle */}
+                        <div
+                          onMouseDown={(e) => handleMouseDownOnHandle(e, 'headerH', headerHeight)}
+                          className="absolute -bottom-1 left-0 right-0 h-2 cursor-row-resize flex items-center justify-center hover:bg-brand-500/20 transition-colors z-20"
+                          title="Drag up/down to adjust Header Height"
+                        >
+                          <div className="w-8 h-1 bg-brand-600 rounded-full opacity-60 group-hover:opacity-100" />
+                        </div>
+                      </div>
+
+                      {/* Section 2: Address Band (Marketed By vs Branch Office) */}
+                      <div
+                        className="w-full border-b border-slate-900 relative flex shrink-0 group"
+                        style={{ height: `${(companyBandHeight / 842) * 100 * 3.5}%` }}
+                      >
+                        {/* Left: Marketed By */}
+                        <div
+                          className="h-full p-1.5 text-[8.5px] overflow-hidden"
+                          style={{ width: `${(midX / 595) * 100}%` }}
+                        >
+                          <p className="font-bold text-slate-900">{sellerBoxLabel}</p>
+                          <p className="font-semibold text-slate-800 truncate">{companyName}</p>
+                          <p className="text-[7.5px] text-slate-600 line-clamp-2 leading-tight">{companyAddress}</p>
+                          <p className="text-[7.5px] font-mono text-slate-700">GST: {companyGstin}</p>
+                        </div>
+
+                        {/* Draggable Vertical Divider (midX) */}
+                        {showBranchOffice && (
+                          <div
+                            onMouseDown={(e) => handleMouseDownOnHandle(e, 'midX', midX)}
+                            className="absolute top-0 bottom-0 w-2.5 -translate-x-1/2 cursor-col-resize hover:bg-brand-500/30 flex items-center justify-center z-30 transition-colors group/mid"
+                            style={{ left: `${(midX / 595) * 100}%` }}
+                            title="Click and drag with mouse left/right to adjust Marketed By vs Branch Office width!"
+                          >
+                            <div className="w-0.5 h-full bg-slate-900" />
+                            <div className="absolute w-3 h-5 bg-brand-600 rounded text-white flex items-center justify-center opacity-0 group-hover/mid:opacity-100 shadow-xs">
+                              <ArrowLeftRight className="h-2.5 w-2.5" />
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Right: Branch Office */}
+                        {showBranchOffice && (
+                          <div className="flex-1 h-full p-1.5 text-[8.5px] border-l border-slate-900 overflow-hidden">
+                            <p className="font-bold text-slate-900">{branchBoxLabel}</p>
+                            <p className="text-[7.5px] text-slate-600 line-clamp-2 leading-tight">{branchOffice}</p>
+                            {branchFssai && <p className="text-[7.5px] text-slate-700">FSSAI: {branchFssai}</p>}
+                          </div>
+                        )}
+
+                        {/* Draggable Band Height Line Handle */}
+                        <div
+                          onMouseDown={(e) => handleMouseDownOnHandle(e, 'bandH', companyBandHeight)}
+                          className="absolute -bottom-1 left-0 right-0 h-2 cursor-row-resize flex items-center justify-center hover:bg-brand-500/20 z-20"
+                          title="Drag up/down to adjust Address Band Height"
+                        >
+                          <div className="w-8 h-1 bg-brand-600 rounded-full opacity-60 group-hover:opacity-100" />
+                        </div>
+                      </div>
+
+                      {/* Section 3: Middle Section (Buyer/Consignee vs 7-Row Dispatch Grid) */}
+                      <div
+                        className="w-full border-b border-slate-900 relative flex shrink-0 group"
+                        style={{ height: `${(middleGridHeight / 842) * 100 * 3.5}%` }}
+                      >
+                        {/* Left: Buyer & Consignee */}
+                        <div
+                          className="h-full flex flex-col relative"
+                          style={{ width: `${(midX / 595) * 100}%` }}
+                        >
+                          {/* Buyer Box */}
+                          <div
+                            className="w-full p-1.5 text-[8px] border-b border-slate-900 overflow-hidden relative group/buyer"
+                            style={{ height: `${(buyerHeight / middleGridHeight) * 100}%` }}
+                          >
+                            <p className="font-bold text-slate-900">{buyerBoxLabel}</p>
+                            <p className="font-semibold text-slate-800 truncate">Sample Wholesale Buyer</p>
+                            <p className="text-[7px] text-slate-600 truncate">Salem, Tamil Nadu</p>
+                            <p className="text-[7px] font-mono text-slate-700">GST: 33AAAAA0000A1Z5</p>
+
+                            {/* Draggable Buyer Height Horizontal Line Handle */}
+                            <div
+                              onMouseDown={(e) => handleMouseDownOnHandle(e, 'buyerH', buyerHeight)}
+                              className="absolute -bottom-1 left-0 right-0 h-2 cursor-row-resize flex items-center justify-center hover:bg-brand-500/20 z-20"
+                              title="Drag up/down to adjust Buyer vs Consignee height"
+                            >
+                              <div className="w-6 h-1 bg-brand-600 rounded-full opacity-60 group-hover/buyer:opacity-100" />
+                            </div>
+                          </div>
+
+                          {/* Consignee Box */}
+                          <div className="flex-1 w-full p-1.5 text-[8px] overflow-hidden">
+                            <p className="font-bold text-slate-900">{consigneeBoxLabel}</p>
+                            <p className="font-semibold text-slate-800 truncate">Sample Wholesale Buyer</p>
+                            <p className="text-[7px] text-slate-600 truncate">Door Delivery, Salem</p>
+                          </div>
+                        </div>
+
+                        {/* Mid Divider Line */}
+                        <div
+                          className="absolute top-0 bottom-0 w-0.5 bg-slate-900"
+                          style={{ left: `${(midX / 595) * 100}%` }}
+                        />
+
+                        {/* Right: 7-Row Dispatch Grid */}
+                        <div className="flex-1 h-full flex flex-col relative border-l border-slate-900 text-[7px]">
+                          {/* Vertical Col 2 Divider in Dispatch Grid */}
+                          <div
+                            onMouseDown={(e) => handleMouseDownOnHandle(e, 'col2X', col2X)}
+                            className="absolute top-0 bottom-0 w-2.5 -translate-x-1/2 cursor-col-resize hover:bg-brand-500/30 flex items-center justify-center z-30 group/col2"
+                            style={{ left: `${((col2X - midX) / (595 - midX)) * 100}%` }}
+                            title="Click and drag with mouse to adjust Dispatch Grid Column 1 vs Column 2 divider!"
+                          >
+                            <div className="w-0.5 h-full bg-slate-900" />
+                            <div className="absolute w-2.5 h-4 bg-brand-600 rounded text-white flex items-center justify-center opacity-0 group-hover/col2:opacity-100 shadow-xs">
+                              <ArrowLeftRight className="h-2 w-2" />
+                            </div>
+                          </div>
+
+                          <div className="flex-1 border-b border-slate-900 flex items-center px-1">
+                            <span className="font-semibold">{labelBillNo}: MM/26-27/001</span>
+                          </div>
+                          <div className="flex-1 border-b border-slate-900 flex items-center px-1">
+                            <span>{labelDeliveryNote}: DN-1024</span>
+                          </div>
+                          <div className="flex-1 border-b border-slate-900 flex items-center px-1">
+                            <span>{labelBuyerOrderNo}: PO-8821</span>
+                          </div>
+                          <div className="flex-1 border-b border-slate-900 flex items-center px-1">
+                            <span>{labelDispatchDoc}: LR-55421</span>
+                          </div>
+                          <div className="flex-1 border-b border-slate-900 flex items-center px-1">
+                            <span>{labelDespatchedThrough}: TN 30 AB 1234</span>
+                          </div>
+                          <div className="flex-1 border-b border-slate-900 flex items-center px-1">
+                            <span>{labelDestination}: Salem</span>
+                          </div>
+                          <div className="flex-1 flex items-center px-1">
+                            <span>{labelTermsDelivery}: Door Delivery</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Section 4: Table Header & Line Items */}
+                      <div className="w-full flex-1 flex flex-col relative">
+                        {/* Table Header */}
+                        <div className="w-full h-5 border-b border-slate-900 flex items-center text-[7.5px] font-bold bg-slate-50 relative">
+                          <div style={{ width: '8%' }} className="text-center">{colLabelSno}</div>
+                          <div style={{ width: '38%' }} className="px-1">{colLabelDesc}</div>
+                          {showColUnit && <div style={{ width: '10%' }} className="text-center">{colLabelUnit}</div>}
+                          {showColHsn && <div style={{ width: '12%' }} className="text-center">{colLabelHsn}</div>}
+                          <div style={{ width: '12%' }} className="text-right px-1">{colLabelQty}</div>
+                          <div style={{ width: '10%' }} className="text-right px-1">{colLabelRate}</div>
+                          <div style={{ width: '10%' }} className="text-right px-1">{colLabelAmount}</div>
+                        </div>
+
+                        {/* Line Items */}
+                        <div className="flex-1 p-1 text-[7.5px] space-y-1">
+                          <div className="flex items-center">
+                            <div style={{ width: '8%' }} className="text-center">1</div>
+                            <div style={{ width: '38%' }} className="px-1 font-semibold">Murukku Spicy Regular</div>
+                            {showColUnit && <div style={{ width: '10%' }} className="text-center">10.000</div>}
+                            {showColHsn && <div style={{ width: '12%' }} className="text-center">210690</div>}
+                            <div style={{ width: '12%' }} className="text-right px-1">10.000</div>
+                            <div style={{ width: '10%' }} className="text-right px-1">150.00</div>
+                            <div style={{ width: '10%' }} className="text-right px-1 font-semibold">1,500.00</div>
+                          </div>
+                          {showInlineTax && (
+                            <div className="flex items-center text-slate-700 italic text-[7px] pl-[8%]">
+                              <span>OUTPUT CGST 2.5% (Rs. 37.50) &nbsp;|&nbsp; OUTPUT SGST 2.5% (Rs. 37.50)</span>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Total Row */}
+                        <div className="w-full h-5 border-t border-b border-slate-900 flex items-center justify-between px-2 text-[8px] font-bold bg-slate-50">
+                          <span>Total</span>
+                          <span>Rs. 3,150.00</span>
+                        </div>
+
+                        {/* Bank Details & Signatory Footer */}
+                        <div className="w-full h-14 flex text-[7px] border-t border-slate-900">
+                          <div className="w-1/2 p-1 border-r border-slate-900">
+                            {showBankDetails && (
+                              <p className="font-semibold text-slate-800">Bank: {bankName} | A/C: {bankAccountNumber}</p>
+                            )}
+                            <p className="font-bold text-slate-900 mt-1">{declarationTitle}</p>
+                            <p className="text-[6.5px] text-slate-600 line-clamp-1">{declarationText}</p>
+                          </div>
+                          <div className="w-1/2 p-1 flex flex-col justify-between text-right">
+                            <p className="font-bold text-slate-900">{signatoryPrefix}</p>
+                            <p className="text-slate-700">{signatoryLabel}</p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Bottom Footnote */}
+                    {showLegalFootnote && (
+                      <div className="w-full flex items-center justify-between text-[6px] text-slate-500 pt-1">
+                        <span>SUBJECT TO {jurisdiction} JURISDICTION</span>
+                        <span>{footerComputerGeneratedText}</span>
+                      </div>
+                    )}
                   </div>
+                ) : (
+                  /* ── REAL-TIME COMPILED PDF IFRAME ── */
+                  previewUrl ? (
+                    <iframe
+                      src={`${previewUrl}#toolbar=0&navpanes=0`}
+                      className="w-full h-full border-0"
+                      title="Real-Time Invoice Live Preview"
+                    />
+                  ) : (
+                    <div className="w-full h-full flex flex-col items-center justify-center gap-3 text-muted-foreground p-6">
+                      <Loader2 className="h-8 w-8 animate-spin text-brand-600" />
+                      <p className="text-xs font-medium">Generating real-time invoice preview…</p>
+                    </div>
+                  )
                 )}
               </CardContent>
             </Card>
@@ -2067,7 +2778,7 @@ export default function MmSettingsPage() {
                     <Input
                       value={customBackupDir}
                       onChange={(e) => setCustomBackupDir(e.target.value)}
-                      placeholder="e.g. D:\MM Backups or C:\Users\User\Documents"
+                      placeholder="e.g. D:\\MM Backups or C:\\Users\\User\\Documents"
                       className="text-xs h-8 font-mono bg-white"
                     />
                     <div className="flex items-center gap-2">
@@ -2096,7 +2807,7 @@ export default function MmSettingsPage() {
                   </div>
                 ) : (
                   <p className="font-mono text-slate-800 break-all text-[11px] bg-white p-2 rounded border border-slate-200">
-                    {backupData?.backupDir || 'C:\\Users\\Documents\\MM Billing Backups'}
+                    {backupData?.backupDir || 'C:\\\\Users\\\\Documents\\\\MM Billing Backups'}
                   </p>
                 )}
               </div>
