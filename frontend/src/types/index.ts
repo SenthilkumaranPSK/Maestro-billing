@@ -267,23 +267,75 @@ export interface Settings {
   // default GST rate and enterprise/bank details are independent of the studio's).
   mm?: {
     mm_default_gst_rate?: string;
+    // Document
+    mm_invoice_title?: string;
+    // Header & Brand
     mm_company_name?: string;
     mm_brand_name?: string;
     mm_tagline?: string;
     mm_fssai_no?: string;
+    mm_show_header_logo?: string;
+    mm_logo_size?: string; // 'compact' | 'standard' | 'large'
+    mm_show_header_fssai?: string;
+    // Seller / Marketed By
+    mm_seller_box_label?: string;
     mm_address?: string;
-    mm_branch_office?: string;
-    mm_branch_fssai?: string;
     mm_gstin?: string;
     mm_contact?: string;
     mm_state_name?: string;
     mm_state_code?: string;
+    // Branch Office
+    mm_show_branch_office?: string;
+    mm_branch_box_label?: string;
+    mm_branch_office?: string;
+    mm_branch_fssai?: string;
+    // Parties & Dispatch
+    mm_buyer_box_label?: string;
+    mm_consignee_box_label?: string;
+    mm_show_parties_contact?: string;
+    mm_show_place_of_supply?: string;
+    mm_show_dispatch_grid?: string;
+    // Dispatch Row Labels
+    mm_label_bill_no?: string;
+    mm_label_date?: string;
+    mm_label_delivery_note?: string;
+    mm_label_payment_terms?: string;
+    mm_label_buyer_order_no?: string;
+    mm_label_dispatch_doc?: string;
+    mm_label_despatched_through?: string;
+    mm_label_destination?: string;
+    mm_label_terms_delivery?: string;
+    // Items Table & Columns
+    mm_col_label_sno?: string;
+    mm_col_label_desc?: string;
+    mm_col_label_unit?: string;
+    mm_col_label_hsn?: string;
+    mm_col_label_qty?: string;
+    mm_col_label_rate?: string;
+    mm_col_label_amount?: string;
+    mm_show_col_unit?: string;
+    mm_show_col_hsn?: string;
+    mm_show_inline_tax?: string;
+    // Summary & Notes
+    mm_show_tax_summary_table?: string;
+    mm_show_amount_in_words?: string;
+    mm_show_eoe?: string;
+    // Bank Details
+    mm_show_bank_details?: string;
     mm_bank_account_name?: string;
     mm_bank_name?: string;
     mm_bank_account_number?: string;
     mm_bank_branch?: string;
     mm_bank_ifsc?: string;
+    // Declaration & Signatory
+    mm_declaration_title?: string;
+    mm_declaration_text?: string;
+    mm_signatory_prefix?: string;
+    mm_signatory_label?: string;
+    mm_show_legal_footnote?: string;
     mm_jurisdiction?: string;
+    mm_footer_computer_generated_text?: string;
+    // Custom Logo Data URL
     mm_logo_data?: string;
   };
   // Gate on editing a saved bill (both MAIN and MM) — see PasswordGateModal.
@@ -295,23 +347,83 @@ export interface Settings {
 
 // Default wholesale identity and bank details for MM module (Tally Tax Invoice layout)
 export const MM_DEFAULTS = {
-  company_name: 'SREE MEENAKSHI ENTERPRISES',
+  // Document
+  invoice_title: 'TAX INVOICE',
+
+  // Header & Brand
   brand_name: 'MORU MORU SNACKS',
-  tagline: '- Fully Automated 100% Hygiene Products. - The Mastero Food Products -',
+  tagline: '- The Mastero Food Products -',
   fssai_no: '22426581000542',
+  show_header_logo: 'true',
+  logo_size: 'standard' as 'compact' | 'standard' | 'large',
+  show_header_fssai: 'true',
+
+  // Seller (Marketed By)
+  seller_box_label: 'Marketed By:',
+  company_name: 'SREE MEENAKSHI ENTERPRISES',
   address: '# 21-PACHAPATTI\nKRISHNA NAGAR 8th CROSS\nAMMAPET\nSALEM-636 003.\nTAMILNADU',
-  branch_office: '35-A, Thiyagi Nataraj St No 1, Ammapet Salem.',
-  branch_fssai: '22426582000581',
   gstin: '33BAKPM3311D1Z9',
   contact: '9698676151',
   state_name: 'Tamil Nadu',
   state_code: '33',
-  bank_account_name: 'SREE MEENAKSHI ENTERPRISES',
+
+  // Branch Office & Sales Point
+  show_branch_office: 'true',
+  branch_box_label: 'B.Office & Sales Point',
+  branch_office: '35-A, Thiyagi Nataraj St No 1, Ammapet Salem.',
+  branch_fssai: '22426582000581',
+
+  // Parties & Dispatch
+  buyer_box_label: 'Buyer:',
+  consignee_box_label: 'Consignee:',
+  show_parties_contact: 'true',
+  show_place_of_supply: 'true',
+  show_dispatch_grid: 'true',
+
+  // Dispatch Row Labels
+  label_bill_no: 'Bill No.',
+  label_date: 'Date:',
+  label_delivery_note: 'Delivery Note',
+  label_payment_terms: 'Mode/Terms of Payment',
+  label_buyer_order_no: "Buyer's Order No.",
+  label_dispatch_doc: 'Dispatch Doc No.',
+  label_despatched_through: 'Despatched through',
+  label_destination: 'Destination',
+  label_terms_delivery: 'Terms of delivery',
+
+  // Items Table & Columns
+  col_label_sno: 'S.No.',
+  col_label_desc: 'Description of Goods',
+  col_label_unit: 'KGS',
+  col_label_hsn: 'HSN/SAC',
+  col_label_qty: 'Quantity',
+  col_label_rate: 'Rate per kg',
+  col_label_amount: 'Amount',
+  show_col_unit: 'true',
+  show_col_hsn: 'true',
+  show_inline_tax: 'true',
+
+  // Tax Summary Table & Notes
+  show_tax_summary_table: 'true',
+  show_amount_in_words: 'true',
+  show_eoe: 'true',
+
+  // Bank Details
+  show_bank_details: 'true',
   bank_name: 'IDBI BANK',
+  bank_account_name: 'SREE MEENAKSHI ENTERPRISES',
   bank_account_number: '1907102000007535',
   bank_branch: 'AMMAPET',
   bank_ifsc: 'IBKL0001907',
+
+  // Declaration & Signatory
+  declaration_title: 'Declaration',
+  declaration_text: 'We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct.',
+  signatory_prefix: 'for SREE MEENAKSHI ENTERPRISES',
+  signatory_label: 'Authorised Signatory',
+  show_legal_footnote: 'true',
   jurisdiction: 'SALEM',
+  footer_computer_generated_text: 'This is a Computer Generated Invoice',
 };
 
 // Single source of truth for the show_whatsapp_on_billing convention — only
