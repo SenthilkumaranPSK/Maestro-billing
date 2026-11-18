@@ -184,6 +184,10 @@ export async function generateMmA4InvoicePDF(
   const bankBranch = mmSettings.mm_bank_branch || 'Ammapet';
   const bankIfsc = mmSettings.mm_bank_ifsc || 'CIUB0000188';
   const jurisdiction = mmSettings.mm_jurisdiction || MM_DEFAULTS.jurisdiction;
+  const showDispatchGrid = mmSettings.mm_show_dispatch_grid !== 'false';
+  const showBankDetails = mmSettings.mm_show_bank_details !== 'false';
+  const showDeclaration = mmSettings.mm_show_declaration !== 'false';
+  const logoPosition = mmSettings.mm_logo_position || 'left';
 
   // Customer / Buyer details
   const isPlaceholderCustomer = bill.mmCustomer?.phone === '0000000000';
@@ -279,10 +283,10 @@ export async function generateMmA4InvoicePDF(
   function drawBrandHeader(copyTitleText?: string): number {
     const hy = PAGE_H - MARGIN; // ~811.89
 
-    // Draw Moru Moru master logo on the top left of the invoice
+    // Draw Moru Moru master logo on the top left of the invoice (enlarged & utilizing top space)
     if (logoImage) {
-      const maxLogoW = 95;
-      const maxLogoH = 50;
+      const maxLogoW = 135;
+      const maxLogoH = 68;
       const aspect = logoImage.width / logoImage.height;
       let drawW = maxLogoW;
       let drawH = drawW / aspect;
@@ -290,9 +294,12 @@ export async function generateMmA4InvoicePDF(
         drawH = maxLogoH;
         drawW = drawH * aspect;
       }
-      const logoY = hy - 64 + (maxLogoH - drawH) / 2;
+      // Minimal 3.5pt padding from the top border (hy) so it fully utilizes the top space
+      const slotH = 68;
+      const logoY = hy - 3.5 - drawH - (slotH - drawH) / 2;
+      const logoX = logoPosition === 'center' ? left + (contentW - drawW) / 2 : left + 6;
       page.drawImage(logoImage, {
-        x: left + 6,
+        x: logoX,
         y: logoY,
         width: drawW,
         height: drawH,
