@@ -1298,6 +1298,15 @@ ipcMain.handle('whatsapp:send-text', async (_event, payload) => {
   }
 });
 
+ipcMain.handle('app:restore-backup', async () => {
+  try {
+    await restoreFromBackup();
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+});
+
 ipcMain.handle('whatsapp:status', async () => {
   if (!whatsappGuest || whatsappGuest.isDestroyed()) {
     return { status: 'disconnected' };

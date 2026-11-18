@@ -285,6 +285,11 @@ export interface Settings {
     mm_bank_ifsc?: string;
     mm_jurisdiction?: string;
     mm_logo_data?: string;
+    mm_show_dispatch_grid?: string;
+    mm_show_bank_details?: string;
+    mm_show_declaration?: string;
+    mm_logo_position?: string;
+    mm_direct_print_enabled?: string;
   };
   // Gate on editing a saved bill (both MAIN and MM) — see PasswordGateModal.
   security: {

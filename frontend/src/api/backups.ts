@@ -56,6 +56,16 @@ export const backupsApi = {
   create: () =>
     api.post<ApiResponse<{ name: string }>>('/backups', {}).then((r) => r.data.data),
 
+  // Restore database from a named backup file
+  restore: (filename: string, pin?: string) =>
+    api
+      .post<ApiResponse<{ message: string }>>(
+        '/backups/restore',
+        { filename },
+        pin ? { headers: { 'x-current-security-pin': pin } } : undefined
+      )
+      .then((r) => r.data),
+
   // A plain navigation (not an axios/XHR request) so the browser/Electron
   // treats the response's Content-Disposition: attachment as a download —
   // in the desktop app this triggers the native Save As dialog (see
