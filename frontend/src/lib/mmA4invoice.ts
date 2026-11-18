@@ -462,28 +462,40 @@ export async function generateMmA4InvoicePDF(
     ry -= ROW_H;
     hline(ry, midX, right);
 
-    // Row 5: Despatched through
-    text('Despatched through', midX + 4, ry - 11, { size: 8, font: regular });
-    const dispatchDetails = [bill.despatchedThrough, bill.vehicleNo].filter(Boolean).join(' / ');
-    if (dispatchDetails) {
-      text(dispatchDetails, midX + 4, ry - 21, { size: 7.5, font: regular, maxWidth: 120 });
+    // Row 5: Despatched through (Label on Left, Value on Right)
+    text('Despatched through', midX + 4, ry - 15, { size: 8, font: regular });
+    const dispatchDetails = [bill.despatchedThrough, bill.vehicleNo].filter(Boolean);
+    if (dispatchDetails.length === 1) {
+      text(dispatchDetails[0]!, col2X + 4, ry - 15, { size: 8, font: bold, maxWidth: 120 });
+    } else if (dispatchDetails.length > 1) {
+      text(dispatchDetails[0]!, col2X + 4, ry - 11, { size: 8, font: bold, maxWidth: 120 });
+      text(dispatchDetails[1]!, col2X + 4, ry - 21, { size: 7.5, font: bold, maxWidth: 120 });
     }
     ry -= ROW_H;
     hline(ry, midX, right);
 
-    // Row 6: Destination
-    text('Destination', midX + 4, ry - 11, { size: 8, font: regular });
+    // Row 6: Destination (Label on Left, Value on Right)
+    text('Destination', midX + 4, ry - 15, { size: 8, font: regular });
     if (bill.destination) {
-      text(bill.destination, midX + 4, ry - 21, { size: 7.5, font: regular, maxWidth: 120 });
+      text(bill.destination, col2X + 4, ry - 15, { size: 8, font: bold, maxWidth: 120 });
     }
     ry -= ROW_H;
     hline(ry, midX, right);
 
-    // Row 7: Terms of delivery
-    text('Terms of delivery', midX + 4, ry - 11, { size: 8, font: regular });
+    // Row 7: Terms of delivery (Label on Left, Value on Right)
+    text('Terms of delivery', midX + 4, ry - 15, { size: 8, font: regular });
     const termsDisplay = bill.termsOfDelivery || bill.notes || '';
     if (termsDisplay) {
-      text(termsDisplay, midX + 4, ry - 21, { size: 7.5, font: regular, maxWidth: 120 });
+      const termsLines = wrapText(regular, termsDisplay, 7.5, 120);
+      if (termsLines.length <= 1) {
+        text(termsLines[0] || termsDisplay, col2X + 4, ry - 15, { size: 8, font: bold, maxWidth: 120 });
+      } else {
+        let ty = ry - 11;
+        for (const line of termsLines.slice(0, 2)) {
+          text(line, col2X + 4, ty, { size: 7.5, font: bold, maxWidth: 120 });
+          ty -= 10;
+        }
+      }
     }
     ry -= ROW_H;
     hline(bottomY, left, right); // Explicit line below Terms of delivery across the whole page!
