@@ -624,39 +624,38 @@ export async function generateMmA4InvoicePDF(
         ty -= il.height;
       }
 
-      // Render inline Output CGST / SGST rows under the items on the last page
+      const tableBottom = isLast ? reservedBottomY : Math.min(ty - 20, reservedBottomY);
+      const totalRowBottom = tableBottom - TOTAL_ROW_H;
+
+      // Render Output CGST / SGST rows pinned at the bottom area of the items table (immediately above Total)
       if (isLast && bill.gstAmount > 0) {
-        ty -= 4;
         if (bill.isInterState) {
           const rateStr = fullRate !== undefined ? `${fullRate}%` : `${hsnGroups[0]?.igstRate ?? 0}%`;
-          text(`OUTPUT IGST ${rateStr}`, cols[1].x + 20, ty - 10, { size: 8, font: bold });
-          text(fullRate !== undefined ? String(fullRate) : String(hsnGroups[0]?.igstRate ?? 0), cols[5].x, ty - 10, {
+          const igstY = tableBottom + 4;
+          text(`OUTPUT IGST ${rateStr}`, cols[1].x + 20, igstY, { size: 8, font: bold });
+          text(fullRate !== undefined ? String(fullRate) : String(hsnGroups[0]?.igstRate ?? 0), cols[5].x, igstY, {
             size: 8,
             font: regular,
             align: 'right',
             maxWidth: cols[5].w - 4,
           });
-          text(formatAmt2(bill.gstAmount), cols[6].x, ty - 10, { size: 8, font: regular, align: 'right', maxWidth: cols[6].w - 4 });
-          ty -= 14;
+          text(formatAmt2(bill.gstAmount), cols[6].x, igstY, { size: 8, font: regular, align: 'right', maxWidth: cols[6].w - 4 });
         } else {
           const { cgstP, sgstP } = splitTaxP(bill.gstAmount, false);
           const rateStr = halfRate !== undefined ? `${halfRate}%` : `${hsnGroups[0]?.cgstRate ?? 0}%`;
           const rateVal = halfRate !== undefined ? String(halfRate) : String(hsnGroups[0]?.cgstRate ?? 0);
 
-          text(`OUTPUT CGST ${rateStr}`, cols[1].x + 20, ty - 10, { size: 8, font: bold });
-          text(rateVal, cols[5].x, ty - 10, { size: 8, font: regular, align: 'right', maxWidth: cols[5].w - 4 });
-          text(formatAmt2(cgstP), cols[6].x, ty - 10, { size: 8, font: regular, align: 'right', maxWidth: cols[6].w - 4 });
-          ty -= 14;
+          const cgstY = tableBottom + 17;
+          text(`OUTPUT CGST ${rateStr}`, cols[1].x + 20, cgstY, { size: 8, font: bold });
+          text(rateVal, cols[5].x, cgstY, { size: 8, font: regular, align: 'right', maxWidth: cols[5].w - 4 });
+          text(formatAmt2(cgstP), cols[6].x, cgstY, { size: 8, font: regular, align: 'right', maxWidth: cols[6].w - 4 });
 
-          text(`OUTPUT SGST ${rateStr}`, cols[1].x + 20, ty - 10, { size: 8, font: bold });
-          text(rateVal, cols[5].x, ty - 10, { size: 8, font: regular, align: 'right', maxWidth: cols[5].w - 4 });
-          text(formatAmt2(sgstP), cols[6].x, ty - 10, { size: 8, font: regular, align: 'right', maxWidth: cols[6].w - 4 });
-          ty -= 14;
+          const sgstY = tableBottom + 4;
+          text(`OUTPUT SGST ${rateStr}`, cols[1].x + 20, sgstY, { size: 8, font: bold });
+          text(rateVal, cols[5].x, sgstY, { size: 8, font: regular, align: 'right', maxWidth: cols[5].w - 4 });
+          text(formatAmt2(sgstP), cols[6].x, sgstY, { size: 8, font: regular, align: 'right', maxWidth: cols[6].w - 4 });
         }
       }
-
-      const tableBottom = isLast ? reservedBottomY : Math.min(ty - 20, reservedBottomY);
-      const totalRowBottom = tableBottom - TOTAL_ROW_H;
 
       // Draw vertical column dividers down through the table body
       for (const c of cols.slice(1)) {
