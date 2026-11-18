@@ -340,8 +340,8 @@ export async function generateMmA4InvoicePDF(
     text(addr2, left + 5, topY - 59, { size: 9.5, font: regular });
     text(`GST NO: ${companyGstin}`, left + 5, topY - 73, { size: 9.5, font: regular });
 
-    // Right: B.Office & Sales Point
-    text('B.Office & Sales Point', midX + 5, topY - 16, { size: 9.5, font: bold });
+    // Right: Sales Point
+    text('Sales Point:', midX + 5, topY - 16, { size: 9.5, font: bold });
     const rawBranchLines = branchOffice
       .split('\n')
       .map((s) => s.trim())
