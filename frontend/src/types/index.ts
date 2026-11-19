@@ -302,7 +302,7 @@ export interface Settings {
 export const MM_DEFAULTS = {
   company_name: 'SREE MEENAKSHI ENTERPRISES',
   brand_name: 'MORU MORU SNACKS',
-  tagline: '- Fully Automated 100% Hygiene Products. - The Mastero Food Products -',
+  tagline: '- The Mastero Food Products',
   fssai_no: '22426581000542',
   address: '# 21-PACHAPATTI\nKRISHNA NAGAR 8th CROSS\nAMMAPET\nSALEM-636 003.\nTAMILNADU',
   branch_office: '35-A, Thiyagi Nataraj St No 1, Ammapet Salem.',
