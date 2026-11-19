@@ -280,25 +280,25 @@ export async function generateMmA4InvoicePDF(
   };
 
   // ── 1. Top Brand Header (MORU MORU SNACKS & TAX INVOICE) ───────────────────
-  const BRAND_HEADER_H = 78;
+  const BRAND_HEADER_H = 74;
 
   function drawBrandHeader(copyTitleText?: string): number {
-    const hy = PAGE_H - MARGIN; // ~811.89
-    const lineY = hy - BRAND_HEADER_H;
-
-    // Center: ONLY "TAX INVOICE"
-    text('TAX INVOICE', left, hy - 36, { size: 16, font: bold, align: 'center', maxWidth: contentW });
-    if (copyTitleText) {
-      text(`( ${copyTitleText} )`, left, hy - 50, { size: 8, font: bold, align: 'center', maxWidth: contentW });
-    }
-
-    // Full Right Side: Logo, and directly below it "- The Mastero Food Products" & "( FSSAI : ... )"
+    const headerTop = PAGE_H - 14; // Tight top margin (14pt) to eliminate excessive gap above the logo
     const subX = right - 4;
     const fssaiDisplay = fssaiNo || '22426581000542';
 
+    // Center: ONLY "TAX INVOICE"
+    text('TAX INVOICE', left, headerTop - 30, { size: 16, font: bold, align: 'center', maxWidth: contentW });
+    if (copyTitleText) {
+      text(`( ${copyTitleText} )`, left, headerTop - 45, { size: 8, font: bold, align: 'center', maxWidth: contentW });
+    }
+
+    let lineY: number;
+
+    // Full Right Side: Logo positioned directly at headerTop (no dead space above)
     if (logoImage) {
-      const maxLogoW = 120;
-      const maxLogoH = 46;
+      const maxLogoW = 125;
+      const maxLogoH = 50;
       const aspect = logoImage.width / logoImage.height;
       let drawW = maxLogoW;
       let drawH = drawW / aspect;
@@ -307,7 +307,7 @@ export async function generateMmA4InvoicePDF(
         drawW = drawH * aspect;
       }
       const logoX = right - drawW - 4;
-      const logoY = hy - 4 - drawH;
+      const logoY = headerTop - drawH; // Top of logo touches headerTop directly
       page.drawImage(logoImage, {
         x: logoX,
         y: logoY,
@@ -318,10 +318,14 @@ export async function generateMmA4InvoicePDF(
       // Text lines below the logo on the right side
       text('- The Mastero Food Products', subX, logoY - 10, { size: 7.5, font: bold, align: 'right' });
       text(`( FSSAI : ${fssaiDisplay} )`, subX, logoY - 20, { size: 7.5, font: bold, align: 'right' });
+
+      lineY = logoY - 24;
     } else {
-      text(brandName, subX, hy - 16, { size: 13, font: bold, align: 'right' });
-      text('- The Mastero Food Products', subX, hy - 29, { size: 7.5, font: bold, align: 'right' });
-      text(`( FSSAI : ${fssaiDisplay} )`, subX, hy - 40, { size: 7.5, font: bold, align: 'right' });
+      text(brandName, subX, headerTop - 14, { size: 14, font: bold, align: 'right' });
+      text('- The Mastero Food Products', subX, headerTop - 28, { size: 7.5, font: bold, align: 'right' });
+      text(`( FSSAI : ${fssaiDisplay} )`, subX, headerTop - 40, { size: 7.5, font: bold, align: 'right' });
+
+      lineY = headerTop - BRAND_HEADER_H;
     }
 
     // Divider line below header
