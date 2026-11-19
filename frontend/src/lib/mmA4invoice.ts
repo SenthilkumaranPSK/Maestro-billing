@@ -279,14 +279,26 @@ export async function generateMmA4InvoicePDF(
     page.drawText(str, { x: drawX, y: yPos, size, font, color });
   };
 
-  // ── 1. Top Brand Header (MORU MORU SNACKS) ──────────────────────────────────
+  // ── 1. Top Brand Header (MORU MORU SNACKS & TAX INVOICE) ───────────────────
+  const BRAND_HEADER_H = 78;
+
   function drawBrandHeader(copyTitleText?: string): number {
     const hy = PAGE_H - MARGIN; // ~811.89
+    const lineY = hy - BRAND_HEADER_H;
 
-    // Draw Moru Moru master logo on the top left of the invoice (enlarged & utilizing top space)
+    // Center: ONLY "TAX INVOICE"
+    text('TAX INVOICE', left, hy - 36, { size: 16, font: bold, align: 'center', maxWidth: contentW });
+    if (copyTitleText) {
+      text(`( ${copyTitleText} )`, left, hy - 50, { size: 8, font: bold, align: 'center', maxWidth: contentW });
+    }
+
+    // Full Right Side: Logo, and directly below it "- The Mastero Food Products" & "( FSSAI : ... )"
+    const subX = right - 4;
+    const fssaiDisplay = fssaiNo || '22426581000542';
+
     if (logoImage) {
-      const maxLogoW = 135;
-      const maxLogoH = 68;
+      const maxLogoW = 120;
+      const maxLogoH = 46;
       const aspect = logoImage.width / logoImage.height;
       let drawW = maxLogoW;
       let drawH = drawW / aspect;
@@ -294,32 +306,31 @@ export async function generateMmA4InvoicePDF(
         drawH = maxLogoH;
         drawW = drawH * aspect;
       }
-      // Minimal 3.5pt padding from the top border (hy) so it fully utilizes the top space
-      const slotH = 68;
-      const logoY = hy - 3.5 - drawH - (slotH - drawH) / 2;
-      const logoX = logoPosition === 'center' ? left + (contentW - drawW) / 2 : left + 6;
+      const logoX = right - drawW - 4;
+      const logoY = hy - 4 - drawH;
       page.drawImage(logoImage, {
         x: logoX,
         y: logoY,
         width: drawW,
         height: drawH,
       });
+
+      // Text lines below the logo on the right side
+      text('- The Mastero Food Products', subX, logoY - 10, { size: 7.5, font: bold, align: 'right' });
+      text(`( FSSAI : ${fssaiDisplay} )`, subX, logoY - 20, { size: 7.5, font: bold, align: 'right' });
+    } else {
+      text(brandName, subX, hy - 16, { size: 13, font: bold, align: 'right' });
+      text('- The Mastero Food Products', subX, hy - 29, { size: 7.5, font: bold, align: 'right' });
+      text(`( FSSAI : ${fssaiDisplay} )`, subX, hy - 40, { size: 7.5, font: bold, align: 'right' });
     }
 
-    text(brandName, left, hy - 18, { size: 20, font: bold, align: 'center', maxWidth: contentW });
-    text('- The Mastero Food Products', left, hy - 36, { size: 10, font: regular, align: 'center', maxWidth: contentW });
-    if (fssaiNo) {
-      text(`(FSSAI: ${fssaiNo})`, left, hy - 52, { size: 10, font: regular, align: 'center', maxWidth: contentW });
-    }
-
-    // Divider line below header at y ≈ 736.89
-    const lineY = hy - 75;
+    // Divider line below header
     hline(lineY, left, right);
     return lineY;
   }
 
-  // ── 2. Top Address Band: Marketed By (Left) & B.Office (Right) ──────────────
-  const COMPANY_BAND_H = 85;
+  // ── 2. Top Address Band: Marketed By (Left) & Sales Point (Right) ──────────
+  const COMPANY_BAND_H = 88;
 
   function drawCompanyBand(topY: number): number {
     const bottomY = topY - COMPANY_BAND_H;
@@ -327,32 +338,54 @@ export async function generateMmA4InvoicePDF(
     // Outer and vertical dividing lines
     vline(midX, bottomY, topY);
 
-    // Left: Marketed By
-    text('Marketed By:', left + 5, topY - 16, { size: 9.5, font: bold });
-    text(companyName, left + 5, topY - 31, { size: 9.5, font: bold });
-    const rawAddrLines = companyAddress
-      .split('\n')
-      .map((s) => s.trim())
-      .filter(Boolean);
-    const addr1 = rawAddrLines[0] || '21, Pachepatty Krishna Nagar 8th Cross';
-    const addr2 = rawAddrLines[1] || 'Ammapet, Salem - 636003';
-    text(addr1, left + 5, topY - 45, { size: 9.5, font: regular });
-    text(addr2, left + 5, topY - 59, { size: 9.5, font: regular });
-    text(`GST NO: ${companyGstin}`, left + 5, topY - 73, { size: 9.5, font: regular });
+    // Left: Marketed By (All details fully shown with wrap & spacing before ':')
+    let ay = topY - 12;
+    text('Marketed By :', left + 5, ay, { size: 8.5, font: bold });
+    ay -= 11;
+    text(companyName, left + 5, ay, { size: 8.5, font: bold, maxWidth: leftW - 10 });
+    ay -= 10.5;
 
-    // Right: Sales Point
-    text('Sales Point:', midX + 5, topY - 16, { size: 9.5, font: bold });
-    const rawBranchLines = branchOffice
-      .split('\n')
-      .map((s) => s.trim())
-      .filter(Boolean);
-    const branch1 = rawBranchLines[0] || '35-A, Thiyagi Natesan St No 1';
-    const branch2 = rawBranchLines[1] || 'Ammapet, Salem.';
-    text(branch1, midX + 5, topY - 31, { size: 9.5, font: regular });
-    text(branch2, midX + 5, topY - 45, { size: 9.5, font: regular });
-    text(`FSSAI No: ${branchFssai}`, midX + 5, topY - 59, { size: 9.5, font: regular });
+    // Wrap address lines so none are truncated or hidden
+    const rawAddr = companyAddress.replace(/\r/g, '').replace(/\n+/g, ', ').trim();
+    const addrLines = wrapText(regular, rawAddr, 7.5, leftW - 10);
+    if (addrLines.length === 0) {
+      addrLines.push('21, Pachepatty Krishna Nagar 8th Cross', 'Ammapet, Salem - 636003');
+    }
+    for (const line of addrLines.slice(0, 3)) {
+      text(line, left + 5, ay, { size: 7.5, font: regular, maxWidth: leftW - 10 });
+      ay -= 9.5;
+    }
 
-    // Horizontal line closing address band at y ≈ 651.89
+    text(`GST NO : ${companyGstin}`, left + 5, ay, { size: 7.5, font: regular });
+    ay -= 9.5;
+
+    text(`State Name : ${companyStateName}, Code : ${companyStateCode}`, left + 5, ay, { size: 7.5, font: regular });
+    ay -= 9.5;
+
+    if (contactPhone && contactPhone !== '9698676151') {
+      text(`Contact : ${contactPhone}`, left + 5, ay, { size: 7.5, font: regular });
+      ay -= 9.5;
+    }
+
+    // Right: Sales Point (With spacing before ':')
+    let say = topY - 12;
+    text('Sales Point :', midX + 5, say, { size: 8.5, font: bold });
+    say -= 11;
+
+    const rawBranch = branchOffice.replace(/\r/g, '').replace(/\n+/g, ', ').trim();
+    const branchLines = wrapText(regular, rawBranch, 7.5, rightW - 10);
+    if (branchLines.length === 0) {
+      branchLines.push('35-A, Thiyagi Natesan St No 1, Ammapet, Salem.');
+    }
+    for (const line of branchLines.slice(0, 3)) {
+      text(line, midX + 5, say, { size: 7.5, font: regular, maxWidth: rightW - 10 });
+      say -= 9.5;
+    }
+
+    text(`FSSAI NO : ${branchFssai}`, midX + 5, say, { size: 7.5, font: regular });
+    say -= 9.5;
+
+    // Horizontal line closing address band
     hline(bottomY, left, right);
     return bottomY;
   }
@@ -368,12 +401,12 @@ export async function generateMmA4InvoicePDF(
 
     // ── Left Side: Buyer (Top) & Consignee (Bottom) ──
     const buyerH = 76;
-    const buyerBottom = topY - buyerH; // y ≈ 575.89
+    const buyerBottom = topY - buyerH;
     hline(buyerBottom, left, midX);
 
-    // Top: Buyer:
+    // Top: Buyer :
     let ay = topY - 14;
-    text('Buyer:', left + 5, ay, { size: 9, font: bold });
+    text('Buyer :', left + 5, ay, { size: 9, font: bold });
     ay -= 11;
     text(buyerName, left + 5, ay, { size: 8.5, font: bold, maxWidth: leftW - 10 });
     ay -= 10.5;
@@ -388,13 +421,13 @@ export async function generateMmA4InvoicePDF(
       text(`Contact : ${customerPhone}`, left + 5, ay, { size: 7.5, font: regular });
       ay -= 10;
     }
-    text(`GST NO: ${buyerGstin || '—'}`, left + 5, ay, { size: 7.5, font: regular });
+    text(`GST NO : ${buyerGstin || '—'}`, left + 5, ay, { size: 7.5, font: regular });
     ay -= 10;
     text(`State Name : ${buyerState.name}, Code : ${buyerState.code}`, left + 5, ay, { size: 7.5, font: regular });
 
-    // Bottom: Consignee:
+    // Bottom: Consignee :
     let cay = buyerBottom - 14;
-    text('Consignee:', left + 5, cay, { size: 9, font: bold });
+    text('Consignee :', left + 5, cay, { size: 9, font: bold });
     cay -= 11;
     text(consigneeName, left + 5, cay, { size: 8.5, font: bold, maxWidth: leftW - 10 });
     cay -= 10.5;
@@ -403,7 +436,7 @@ export async function generateMmA4InvoicePDF(
       text(line, left + 5, cay, { size: 7.5, font: regular, maxWidth: leftW - 10 });
       cay -= 10;
     }
-    text(`GST NO: ${consigneeGstin || '—'}`, left + 5, cay, { size: 7.5, font: regular });
+    text(`GST NO : ${consigneeGstin || '—'}`, left + 5, cay, { size: 7.5, font: regular });
     cay -= 10;
     text(`State Name : ${consigneeState.name}, Code : ${consigneeState.code}`, left + 5, cay, { size: 7.5, font: regular });
     cay -= 10;
@@ -416,10 +449,10 @@ export async function generateMmA4InvoicePDF(
     // Vertical line between Col 1 & Col 2 across ALL 7 ROWS!
     vline(col2X, bottomY, topY);
 
-    // Row 1: Bill No. | Date:
+    // Row 1: Bill No. | Date :
     text('Bill No.', midX + 4, ry - 11, { size: 8, font: regular });
     text(bill.billNumber, midX + 4, ry - 21, { size: 8, font: bold, maxWidth: 120 });
-    text('Date:', col2X + 4, ry - 11, { size: 8, font: regular });
+    text('Date :', col2X + 4, ry - 11, { size: 8, font: regular });
     text(formatTallyDate(bill.billDate), col2X + 4, ry - 21, { size: 8, font: bold, maxWidth: 110 });
     ry -= ROW_H;
     hline(ry, midX, right);
@@ -437,25 +470,25 @@ export async function generateMmA4InvoicePDF(
     ry -= ROW_H;
     hline(ry, midX, right);
 
-    // Row 3: Buyer's Order No. | Date:
+    // Row 3: Buyer's Order No. | Date :
     text("Buyer's Order No.", midX + 4, ry - 11, { size: 8, font: regular });
     if (bill.buyersOrderNo) {
       text(bill.buyersOrderNo, midX + 4, ry - 21, { size: 7.5, font: regular, maxWidth: 120 });
     }
-    text('Date:', col2X + 4, ry - 11, { size: 8, font: regular });
+    text('Date :', col2X + 4, ry - 11, { size: 8, font: regular });
     if (bill.buyersOrderDate) {
       text(formatTallyDate(bill.buyersOrderDate), col2X + 4, ry - 21, { size: 7.5, font: regular, maxWidth: 110 });
     }
     ry -= ROW_H;
     hline(ry, midX, right);
 
-    // Row 4: Dispatch Doc No. | Date:
+    // Row 4: Dispatch Doc No. | Date :
     text('Dispatch Doc No.', midX + 4, ry - 11, { size: 8, font: regular });
-    const dispatchDocDisplay = bill.dispatchDocNo || (bill.ewayBillNo ? `EWAY: ${bill.ewayBillNo}` : '');
+    const dispatchDocDisplay = bill.dispatchDocNo || (bill.ewayBillNo ? `EWAY : ${bill.ewayBillNo}` : '');
     if (dispatchDocDisplay) {
       text(dispatchDocDisplay, midX + 4, ry - 21, { size: 7.5, font: regular, maxWidth: 120 });
     }
-    text('Date:', col2X + 4, ry - 11, { size: 8, font: regular });
+    text('Date :', col2X + 4, ry - 11, { size: 8, font: regular });
     if (bill.deliveryNoteDate) {
       text(formatTallyDate(bill.deliveryNoteDate), col2X + 4, ry - 21, { size: 7.5, font: regular, maxWidth: 110 });
     }
@@ -498,20 +531,19 @@ export async function generateMmA4InvoicePDF(
       }
     }
     ry -= ROW_H;
-    hline(bottomY, left, right); // Explicit line below Terms of delivery across the whole page!
+    hline(bottomY, left, right);
 
     return bottomY;
   }
 
-  // ── 4. Items Table Columns (Matching New sample.pdf exact coordinates) ──────
-  // x: 30, 68, 250, 295, 355, 420, 490, 565.28
+  // ── 4. Items Table Columns (6 Columns without separate KGS column) ─────────
+  // x: 30, 66, 290, 350, 422, 490, 565.28 (contentW = 535.28)
   const cols = [
-    { key: 'sno', label: 'S.No.', x: 30, w: 38, align: 'center' as const },
-    { key: 'desc', label: 'Description of Goods', x: 68, w: 182, align: 'left' as const },
-    { key: 'kgs', label: 'KGS', x: 250, w: 45, align: 'center' as const },
-    { key: 'hsn', label: 'HSN/SAC', x: 295, w: 60, align: 'center' as const },
-    { key: 'qty', label: 'Quantity', x: 355, w: 65, align: 'right' as const },
-    { key: 'rate', label: 'Rate per kg', x: 420, w: 70, align: 'right' as const },
+    { key: 'sno', label: 'S.No.', x: 30, w: 36, align: 'center' as const },
+    { key: 'desc', label: 'Description of Goods', x: 66, w: 224, align: 'left' as const },
+    { key: 'hsn', label: 'HSN/SAC', x: 290, w: 60, align: 'center' as const },
+    { key: 'qty', label: 'Quantity/Kgs', x: 350, w: 72, align: 'right' as const },
+    { key: 'rate', label: 'Rate per kg', x: 422, w: 68, align: 'right' as const },
     { key: 'amt', label: 'Amount', x: 490, w: right - 490, align: 'right' as const },
   ];
 
@@ -523,11 +555,10 @@ export async function generateMmA4InvoicePDF(
 
     text('S.No.', cols[0].x, baseline, { size: 8.5, font: bold, align: 'center', maxWidth: cols[0].w });
     text('Description of Goods', cols[1].x + 4, baseline, { size: 8.5, font: bold });
-    text('KGS', cols[2].x, baseline, { size: 8.5, font: bold, align: 'center', maxWidth: cols[2].w });
-    text('HSN/SAC', cols[3].x, baseline, { size: 8.5, font: bold, align: 'center', maxWidth: cols[3].w });
-    text('Quantity', cols[4].x, baseline, { size: 8.5, font: bold, align: 'center', maxWidth: cols[4].w });
-    text('Rate per kg', cols[5].x, baseline, { size: 8.5, font: bold, align: 'center', maxWidth: cols[5].w });
-    text('Amount', cols[6].x, baseline, { size: 8.5, font: bold, align: 'center', maxWidth: cols[6].w });
+    text('HSN/SAC', cols[2].x, baseline, { size: 8.5, font: bold, align: 'center', maxWidth: cols[2].w });
+    text('Quantity/Kgs', cols[3].x, baseline, { size: 8.5, font: bold, align: 'center', maxWidth: cols[3].w });
+    text('Rate per kg', cols[4].x, baseline, { size: 8.5, font: bold, align: 'center', maxWidth: cols[4].w });
+    text('Amount', cols[5].x, baseline, { size: 8.5, font: bold, align: 'center', maxWidth: cols[5].w });
 
     hline(headerBottom, left, right);
     return headerBottom;
@@ -571,7 +602,7 @@ export async function generateMmA4InvoicePDF(
   const INLINE_TAX_H = inlineTaxCount * 14;
 
   // Pagination calculation
-  const availableItemsH = PAGE_H - MARGIN - 75 - COMPANY_BAND_H - MIDDLE_GRID_H - TABLE_HEADER_H - reservedBottomY;
+  const availableItemsH = PAGE_H - MARGIN - BRAND_HEADER_H - COMPANY_BAND_H - MIDDLE_GRID_H - TABLE_HEADER_H - reservedBottomY;
   const pages: ItemLayout[][] = [];
   let current: ItemLayout[] = [];
   let currentH = 0;
@@ -588,18 +619,34 @@ export async function generateMmA4InvoicePDF(
   pages.push(current);
 
   // ── Render Pages ───────────────────────────────────────────────────────────
-  pages.forEach((pageItems, pageIdx) => {
-    const isLast = pageIdx === pages.length - 1;
-    page = doc.addPage([PAGE_W, PAGE_H]);
+  const copyTitles: Array<string | undefined> =
+    options.copyType === 'ALL'
+      ? ['ORIGINAL FOR RECIPIENT', 'DUPLICATE FOR TRANSPORTER', 'TRIPLICATE FOR SUPPLIER']
+      : options.copyType
+      ? [
+          options.copyType === 'ORIGINAL'
+            ? 'ORIGINAL FOR RECIPIENT'
+            : options.copyType === 'DUPLICATE'
+            ? 'DUPLICATE FOR TRANSPORTER'
+            : options.copyType === 'TRIPLICATE'
+            ? 'TRIPLICATE FOR SUPPLIER'
+            : undefined,
+        ]
+      : [undefined];
 
-    const headerBottomY = drawBrandHeader();
-    const companyBandBottomY = drawCompanyBand(headerBottomY);
-    const middleGridBottomY = drawPartiesAndDispatchGrid(companyBandBottomY);
-    const tableHeaderBottom = drawTableHeader(middleGridBottomY);
+  for (const copyTitle of copyTitles) {
+    pages.forEach((pageItems, pageIdx) => {
+      const isLast = pageIdx === pages.length - 1;
+      page = doc.addPage([PAGE_W, PAGE_H]);
+
+      const headerBottomY = drawBrandHeader(copyTitle);
+      const companyBandBottomY = drawCompanyBand(headerBottomY);
+      const middleGridBottomY = drawPartiesAndDispatchGrid(companyBandBottomY);
+      const tableHeaderBottom = drawTableHeader(middleGridBottomY);
 
       let ty = tableHeaderBottom;
 
-      // Render line items
+      // Render line items (6 Columns: S.No, Description, HSN/SAC, Quantity/Kgs, Rate per kg, Amount)
       for (const il of pageItems) {
         const item = bill.items[il.itemIndex]!;
         const rowTop = ty;
@@ -612,26 +659,22 @@ export async function generateMmA4InvoicePDF(
           ly -= 10;
         }
 
-        // KGS column
-        const kgsText = item.unit?.toUpperCase() === 'KGS' || !item.unit ? formatQty3(item.qty) : '—';
-        text(kgsText, cols[2].x, rowTop - 11, { size: 8, font: regular, align: 'center', maxWidth: cols[2].w });
-
         // HSN/SAC
-        text(item.hsnSac || '210690', cols[3].x, rowTop - 11, { size: 8, font: regular, align: 'center', maxWidth: cols[3].w });
+        text(item.hsnSac || '210690', cols[2].x, rowTop - 11, { size: 8, font: regular, align: 'center', maxWidth: cols[2].w });
 
-        // Quantity
-        text(`${formatQty3(item.qty)}`, cols[4].x, rowTop - 11, {
+        // Quantity/Kgs
+        text(`${formatQty3(item.qty)}`, cols[3].x, rowTop - 11, {
           size: 8,
           font: regular,
           align: 'right',
-          maxWidth: cols[4].w - 4,
+          maxWidth: cols[3].w - 4,
         });
 
         // Rate per kg
-        text(formatAmt2(il.baseUnitPrice), cols[5].x, rowTop - 11, { size: 8, font: regular, align: 'right', maxWidth: cols[5].w - 4 });
+        text(formatAmt2(il.baseUnitPrice), cols[4].x, rowTop - 11, { size: 8, font: regular, align: 'right', maxWidth: cols[4].w - 4 });
 
         // Amount
-        text(formatAmt2(il.baseAmt), cols[6].x, rowTop - 11, { size: 8, font: regular, align: 'right', maxWidth: cols[6].w - 4 });
+        text(formatAmt2(il.baseAmt), cols[5].x, rowTop - 11, { size: 8, font: regular, align: 'right', maxWidth: cols[5].w - 4 });
 
         ty -= il.height;
       }
@@ -640,38 +683,30 @@ export async function generateMmA4InvoicePDF(
       const totalRowBottom = tableBottom - TOTAL_ROW_H;
 
       // Render Output CGST / SGST rows pinned at the bottom area of the items table (immediately above Total)
+      // Note: Tax rate is explicitly in the description (e.g. OUTPUT CGST 2.5%) and no 2.5 is rendered below Rate per kg.
       if (isLast && bill.gstAmount > 0) {
         if (bill.isInterState) {
           const rateStr = fullRate !== undefined ? `${fullRate}%` : `${hsnGroups[0]?.igstRate ?? 0}%`;
           const igstY = tableBottom + 4;
           text(`OUTPUT IGST ${rateStr}`, cols[1].x + 20, igstY, { size: 8, font: regular });
-          text(fullRate !== undefined ? String(fullRate) : String(hsnGroups[0]?.igstRate ?? 0), cols[5].x, igstY, {
-            size: 8,
-            font: regular,
-            align: 'right',
-            maxWidth: cols[5].w - 4,
-          });
-          text(formatAmt2(bill.gstAmount), cols[6].x, igstY, { size: 8, font: regular, align: 'right', maxWidth: cols[6].w - 4 });
+          text(formatAmt2(bill.gstAmount), cols[5].x, igstY, { size: 8, font: regular, align: 'right', maxWidth: cols[5].w - 4 });
         } else {
           const { cgstP, sgstP } = splitTaxP(bill.gstAmount, false);
           const rateStr = halfRate !== undefined ? `${halfRate}%` : `${hsnGroups[0]?.cgstRate ?? 0}%`;
-          const rateVal = halfRate !== undefined ? String(halfRate) : String(hsnGroups[0]?.cgstRate ?? 0);
 
           const cgstY = tableBottom + 17;
           text(`OUTPUT CGST ${rateStr}`, cols[1].x + 20, cgstY, { size: 8, font: regular });
-          text(rateVal, cols[5].x, cgstY, { size: 8, font: regular, align: 'right', maxWidth: cols[5].w - 4 });
-          text(formatAmt2(cgstP), cols[6].x, cgstY, { size: 8, font: regular, align: 'right', maxWidth: cols[6].w - 4 });
+          text(formatAmt2(cgstP), cols[5].x, cgstY, { size: 8, font: regular, align: 'right', maxWidth: cols[5].w - 4 });
 
           const sgstY = tableBottom + 4;
           text(`OUTPUT SGST ${rateStr}`, cols[1].x + 20, sgstY, { size: 8, font: regular });
-          text(rateVal, cols[5].x, sgstY, { size: 8, font: regular, align: 'right', maxWidth: cols[5].w - 4 });
-          text(formatAmt2(sgstP), cols[6].x, sgstY, { size: 8, font: regular, align: 'right', maxWidth: cols[6].w - 4 });
+          text(formatAmt2(sgstP), cols[5].x, sgstY, { size: 8, font: regular, align: 'right', maxWidth: cols[5].w - 4 });
         }
       }
 
       // Draw vertical column dividers down through the table body
       for (const c of cols.slice(1)) {
-        const mergeIntoTotal = isLast && (c.key === 'desc' || c.key === 'kgs' || c.key === 'hsn');
+        const mergeIntoTotal = isLast && (c.key === 'desc' || c.key === 'hsn');
         const lowerY = isLast ? (mergeIntoTotal ? tableBottom : totalRowBottom) : tableBottom;
         vline(c.x, lowerY, middleGridBottomY);
       }
@@ -685,17 +720,17 @@ export async function generateMmA4InvoicePDF(
         let sy = tableBottom;
         const totalBaseline = sy - 12;
         text('Total', cols[1].x + 4, totalBaseline, { size: 8.5, font: bold });
-        text(`${formatQty3(totalQty)}`, cols[4].x, totalBaseline, {
+        text(`${formatQty3(totalQty)}`, cols[3].x, totalBaseline, {
           size: 8.5,
           font: bold,
           align: 'right',
-          maxWidth: cols[4].w - 4,
+          maxWidth: cols[3].w - 4,
         });
-        text(`Rs.  ${formatAmt2(bill.grandTotal)}`, cols[6].x, totalBaseline, {
+        text(`Rs.  ${formatAmt2(bill.grandTotal)}`, cols[5].x, totalBaseline, {
           size: 9,
           font: bold,
           align: 'right',
-          maxWidth: cols[6].w - 4,
+          maxWidth: cols[5].w - 4,
         });
 
         sy -= TOTAL_ROW_H;
@@ -814,7 +849,7 @@ export async function generateMmA4InvoicePDF(
         if (options.previousDueP && options.previousDueP > 0) {
           const netPayable = bill.grandTotal + options.previousDueP;
           text(
-            `Ledger Balance  ::  Previous Due: ${formatAmt2(options.previousDueP)}    |    Current Bill: ${formatAmt2(bill.grandTotal)}    |    Total Net Payable: ${formatAmt2(netPayable)}`,
+            `Ledger Balance  ::  Previous Due : ${formatAmt2(options.previousDueP)}    |    Current Bill : ${formatAmt2(bill.grandTotal)}    |    Total Net Payable : ${formatAmt2(netPayable)}`,
             left + 6,
             sy - 9.5,
             { size: 7, font: bold, color: rgb(0.1, 0.1, 0.1) }
@@ -827,13 +862,13 @@ export async function generateMmA4InvoicePDF(
         const bankTopY = sy;
         vline(midX, bottomLimit, bankTopY);
 
-        // Left Half: Bank Details (Matching New sample.pdf exact format)
+        // Left Half: Bank Details (Matching New sample.pdf exact format with spacing before ':')
         let bky = bankTopY - 10;
-        text(`Bank: ${bankName}`, left + 6, bky, { size: 8, font: regular });
+        text(`Bank : ${bankName}`, left + 6, bky, { size: 8, font: regular });
         bky -= 12;
-        text(`A/C No: ${bankAccountNumber || ''}`, left + 6, bky, { size: 8, font: regular });
+        text(`A/C No : ${bankAccountNumber || ''}`, left + 6, bky, { size: 8, font: regular });
         bky -= 12;
-        text(`IFSC No: ${bankIfsc}`, left + 6, bky, { size: 8, font: regular });
+        text(`IFSC No : ${bankIfsc}`, left + 6, bky, { size: 8, font: regular });
 
         const declTopY = bankTopY - 44;
         hline(declTopY, left, midX);
@@ -861,6 +896,7 @@ export async function generateMmA4InvoicePDF(
       text(`SUBJECT TO ${jurisdiction} JURISDICTION`, left, borderBottom - 8, { size: 5.5, font: regular });
       text('This is a Computer Generated Invoice', right, borderBottom - 8, { size: 5.5, font: regular, align: 'right' });
     });
+  }
 
   return await doc.save();
 }
