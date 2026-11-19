@@ -187,15 +187,31 @@ export function PdfPreviewModal({
 
 
           <div className="flex items-center space-x-2">
+            {layout === 'mm_a4' && (
+              <div className="flex items-center border rounded-md overflow-hidden text-xs mr-1 bg-slate-50">
+                {(['ORIGINAL', 'DUPLICATE', 'TRIPLICATE', 'ALL'] as const).map((copy) => (
+                  <button
+                    key={copy}
+                    type="button"
+                    onClick={() => setSelectedCopy(copy)}
+                    className={`px-2 py-1 text-[11px] font-medium transition-colors ${
+                      selectedCopy === copy
+                        ? 'bg-primary text-primary-foreground font-semibold shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                    }`}
+                  >
+                    {copy === 'ORIGINAL' ? 'Original' : copy === 'DUPLICATE' ? 'Duplicate' : copy === 'TRIPLICATE' ? 'Triplicate' : 'All 3'}
+                  </button>
+                ))}
+              </div>
+            )}
+            <Button variant="outline" size="sm" onClick={handleDownload} disabled={!url}>
+              <Download className="h-4 w-4 mr-1" /> Download
+            </Button>
             {!readOnly && (
-              <>
-                <Button variant="outline" size="sm" onClick={handleDownload}>
-                  <Download className="h-4 w-4 mr-1" /> Download
-                </Button>
-                <Button variant="default" size="sm" onClick={handlePrint}>
-                  <Printer className="h-4 w-4 mr-1" /> Print
-                </Button>
-              </>
+              <Button variant="default" size="sm" onClick={handlePrint} disabled={!url}>
+                <Printer className="h-4 w-4 mr-1" /> Print
+              </Button>
             )}
             <Button variant="ghost" size="icon" onClick={requestClose}>
               <X className="h-4 w-4" />

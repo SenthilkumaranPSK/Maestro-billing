@@ -1038,6 +1038,24 @@ export default function MmSettingsPage() {
                   </span>
                   <Button
                     type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-xs bg-slate-800 border-slate-700 text-slate-200 hover:bg-slate-700 hover:text-white gap-1.5"
+                    disabled={!previewUrl || isGeneratingPreview}
+                    onClick={() => {
+                      if (!previewUrl) return;
+                      const a = document.createElement('a');
+                      a.href = previewUrl;
+                      a.download = `${(nextMmNumber || 'sample-invoice').replace(/[\/\\]/g, '-')}-layout-preview.pdf`;
+                      a.click();
+                    }}
+                    title="Download Preview Invoice as PDF"
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                    Download PDF
+                  </Button>
+                  <Button
+                    type="button"
                     size="icon"
                     variant="ghost"
                     className="h-7 w-7 text-slate-300 hover:text-white hover:bg-slate-800"

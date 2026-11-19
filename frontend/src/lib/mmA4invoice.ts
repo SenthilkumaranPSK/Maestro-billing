@@ -889,7 +889,8 @@ export async function downloadMmA4InvoicePDF(
   const a = document.createElement('a');
   a.href = url;
   const copySuffix = options.copyType ? `-${options.copyType.toLowerCase()}` : '';
-  a.download = `${bill.billNumber}-tax-invoice${copySuffix}.pdf`;
+  const safeNumber = (bill.billNumber || 'invoice').replace(/[\/\\]/g, '-');
+  a.download = `${safeNumber}-tax-invoice${copySuffix}.pdf`;
   a.click();
   URL.revokeObjectURL(url);
 }
